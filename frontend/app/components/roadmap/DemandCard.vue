@@ -7,11 +7,11 @@ const props = defineProps<{
 }>()
 defineEmits<{ edit: [demand: RoadmapDemand], delete: [id: string], plan: [demand: RoadmapDemand, quarterValue: string] }>()
 
-const statusConfig: Record<DemandStatus, { color: string, label: string, icon: string }> = {
-  Backlog:      { color: 'text-muted', label: 'Backlog', icon: 'i-lucide-circle-dashed' },
-  InProgress:   { color: 'text-blue-500', label: 'Em andamento', icon: 'i-lucide-circle-dot' },
-  Done:         { color: 'text-green-500', label: 'Concluído', icon: 'i-lucide-circle-check' },
-  Deprioritized:{ color: 'text-amber-500', label: 'Despriorizado', icon: 'i-lucide-circle-arrow-down' }
+const statusConfig: Record<DemandStatus, { color: string, dot: string, label: string }> = {
+  Backlog:      { color: 'text-muted', dot: 'bg-neutral-400 dark:bg-neutral-500', label: 'Backlog' },
+  InProgress:   { color: 'text-blue-500', dot: 'bg-blue-500 dark:bg-blue-400', label: 'Em andamento' },
+  Done:         { color: 'text-green-500', dot: 'bg-green-500 dark:bg-green-400', label: 'Concluído' },
+  Deprioritized:{ color: 'text-amber-500', dot: 'bg-amber-500 dark:bg-amber-400', label: 'Despriorizado' }
 }
 
 const typeConfig: Record<DemandType, { color: string, label: string }> = {
@@ -49,6 +49,35 @@ const statusTooltip = computed(() => {
 function formatDependencySummary(dependency: RoadmapDemand['dependsOn'][number]) {
   return `${dependency.projectName} · ${dependency.title}`
 }
+
+function formatDependencyProjectLabel(dependency: RoadmapDemand['dependsOn'][number]) {
+  return dependency.projectName.toUpperCase()
+}
+
+function compareQuarterPosition(
+  demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber'>,
+  dependency: Pick<RoadmapDemand['dependsOn'][number], 'quarterYear' | 'quarterNumber'>
+) {
+  if (demand.quarterYear !== dependency.quarterYear)
+    return demand.quarterYear - dependency.quarterYear
+
+  return demand.quarterNumber - dependency.quarterNumber
+}
+
+function isDependencyInconsistent(dependency: RoadmapDemand['dependsOn'][number]) {
+  if (isBacklogQuarterDemand.value)
+    return false
+
+  const isDependencyBacklog = dependency.quarterYear === 0 && dependency.quarterNumber === 0
+  if (isDependencyBacklog)
+    return true
+
+  return compareQuarterPosition(props.demand, dependency) < 0
+}
+
+function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependency: RoadmapDemand['dependsOn'][number]) {
+  return `${prefix} ${dependency.projectName}: ${dependency.title}`
+}
 </script>
 
 <template>
@@ -72,11 +101,7 @@ function formatDependencySummary(dependency: RoadmapDemand['dependsOn'][number])
     <div class="flex items-start justify-between gap-2">
       <div class="flex items-start gap-2 min-w-0">
         <div class="flex items-center gap-1.5 min-w-0 flex-wrap" :title="statusTooltip || undefined">
-          <UIcon
-            :name="statusConfig[demand.status].icon"
-            class="w-3.5 h-3.5 shrink-0"
-            :class="statusConfig[demand.status].color"
-          />
+          <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" :class="statusConfig[demand.status].dot" />
           <span class="text-xs truncate" :class="statusConfig[demand.status].color">
             {{ statusConfig[demand.status].label }}
           </span>
@@ -142,39 +167,39 @@ function formatDependencySummary(dependency: RoadmapDemand['dependsOn'][number])
     </div>
 
     <!-- Title -->
-    <p class="text-sm font-medium text-highlighted leading-snug">
+    <p class="text-sm font-medium text-highlighted leading-snug" :title="demand.description || undefined">
       {{ demand.title }}
     </p>
 
-    <!-- Description -->
-    <p
-      v-if="demand.description"
-      class="text-xs text-muted leading-relaxed line-clamp-2"
-    >
-      {{ demand.description }}
-    </p>
-
-    <div v-if="demand.dependsOn.length || demand.dependedOnBy.length" class="space-y-1">
+    <div v-if="demand.dependsOn.length || demand.dependedOnBy.length" class="space-y-1.5">
       <div v-if="demand.dependsOn.length" class="flex flex-wrap gap-1">
-        <span
-          v-for="dependency in demand.dependsOn.slice(0, 2)"
-          :key="dependency.demandId"
-          class="inline-flex max-w-full items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-        >
-          Depende de {{ formatDependencySummary(dependency) }}
-        </span>
-        <span v-if="demand.dependsOn.length > 2" class="text-[11px] text-muted">+{{ demand.dependsOn.length - 2 }}</span>
+          <span
+            v-for="dependency in demand.dependsOn.slice(0, 2)"
+            :key="dependency.demandId"
+            class="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+            :class="isDependencyInconsistent(dependency)
+              ? 'border border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
+              : 'border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'"
+            :title="`${getDependencyTooltip('É bloqueado por', dependency)}${isDependencyInconsistent(dependency) ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`"
+          >
+            <UIcon name="i-lucide-link" class="h-3 w-3 shrink-0" />
+            <span class="min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]">{{ formatDependencyProjectLabel(dependency) }}</span>
+            <UIcon v-if="isDependencyInconsistent(dependency)" name="i-lucide-triangle-alert" class="h-3 w-3 shrink-0" />
+          </span>
+          <span v-if="demand.dependsOn.length > 2" class="text-[11px] text-muted">+{{ demand.dependsOn.length - 2 }}</span>
       </div>
 
       <div v-if="demand.dependedOnBy.length" class="flex flex-wrap gap-1">
-        <span
-          v-for="dependency in demand.dependedOnBy.slice(0, 2)"
-          :key="dependency.demandId"
-          class="inline-flex max-w-full items-center rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300"
-        >
-          Base para {{ formatDependencySummary(dependency) }}
-        </span>
-        <span v-if="demand.dependedOnBy.length > 2" class="text-[11px] text-muted">+{{ demand.dependedOnBy.length - 2 }}</span>
+          <span
+            v-for="dependency in demand.dependedOnBy.slice(0, 2)"
+            :key="dependency.demandId"
+            class="inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+            :title="getDependencyTooltip('Bloqueia', dependency)"
+          >
+            <UIcon name="i-lucide-link" class="h-3 w-3 shrink-0" />
+            <span class="min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]">{{ formatDependencyProjectLabel(dependency) }}</span>
+          </span>
+          <span v-if="demand.dependedOnBy.length > 2" class="text-[11px] text-muted">+{{ demand.dependedOnBy.length - 2 }}</span>
       </div>
     </div>
 

@@ -5,6 +5,7 @@ const props = defineProps<{
   open: boolean
   projects: RoadmapProject[]
   dependencyOptions: DemandDependencyOption[]
+  customerSuggestions: string[]
   demand?: RoadmapDemand | null
   defaultProjectId?: string
   defaultQuarterYear?: number
@@ -92,6 +93,18 @@ const productsForProject = computed(() =>
   props.projects.find(p => p.id === form.projectId)?.products ?? []
 )
 
+function syncSingleProductSelection() {
+  if (isEdit.value)
+    return
+
+  if (productsForProject.value.length === 1) {
+    form.productIds = [productsForProject.value[0]!.id]
+    return
+  }
+
+  form.productIds = []
+}
+
 watch(() => props.open, (open) => {
   if (!open) return
 
@@ -134,11 +147,12 @@ watch(() => props.open, (open) => {
     form.blockedReason = ''
     form.deliveryDate = ''
     customerInput.value = ''
+    syncSingleProductSelection()
   }
 })
 
 watch(() => form.projectId, () => {
-  form.productIds = []
+  syncSingleProductSelection()
 })
 
 watch(() => form.isBlocked, (val) => {
@@ -155,6 +169,24 @@ watch(() => form.status, (status) => {
 const customerTags = computed(() =>
   form.customers ?? []
 )
+
+const filteredCustomerSuggestions = computed(() => {
+  const query = customerInput.value.trim().toLowerCase()
+  const selected = new Set(customerTags.value.map(customer => customer.toLowerCase()))
+
+  return props.customerSuggestions
+    .filter(customer => !selected.has(customer.toLowerCase()))
+    .filter(customer => !query || customer.toLowerCase().includes(query))
+    .slice(0, 8)
+})
+
+const canCreateCustomerFromInput = computed(() => {
+  const normalized = customerInput.value.trim()
+  if (!normalized)
+    return false
+
+  return !customerTags.value.some(customer => customer.toLowerCase() === normalized.toLowerCase())
+})
 
 const filteredDependencyOptions = computed(() => {
   const query = dependencySearch.value.trim().toLowerCase()
@@ -184,6 +216,11 @@ function addCustomerTag(value: string) {
   if (!normalized) return
   setCustomerTags([...customerTags.value, normalized])
   customerInput.value = ''
+}
+
+function handleCustomerEnter() {
+  const firstSuggestion = filteredCustomerSuggestions.value[0]
+  addCustomerTag(firstSuggestion ?? customerInput.value)
 }
 
 function removeCustomerTag(tag: string) {
@@ -303,8 +340,8 @@ async function handleSubmit() {
           </UFormField>
         </div>
 
-        <!-- Issue Jira + Horas + Data entrega + Clientes: 4 cols -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <!-- Issue Jira + Horas -->
+        <div class="grid grid-cols-2 gap-3">
           <UFormField label="Issue (Jira)">
             <UInput
               v-model="form.jiraIssue"
@@ -323,25 +360,12 @@ async function handleSubmit() {
               class="w-full"
             />
           </UFormField>
+        </div>
 
-          <UFormField
-            v-if="isEdit"
-            :label="deliveryDateRequired ? 'Data de entrega *' : 'Data de entrega'"
-          >
-            <UInput
-              v-model="form.deliveryDate"
-              type="date"
-              class="w-full"
-              :class="deliveryDateRequired && !form.deliveryDate ? 'ring-2 ring-red-400' : ''"
-            />
-          </UFormField>
-
-          <UFormField label="Clientes envolvidos">
-            <div class="space-y-2">
-              <div
-                v-if="customerTags.length"
-                class="flex min-h-10 flex-wrap gap-2 rounded-lg border border-default bg-elevated p-2"
-              >
+        <UFormField label="Clientes envolvidos">
+          <div class="space-y-2">
+            <div class="rounded-lg border border-default bg-elevated p-2">
+              <div class="flex min-h-10 flex-wrap items-center gap-2">
                 <span
                   v-for="customer in customerTags"
                   :key="customer"
@@ -356,25 +380,46 @@ async function handleSubmit() {
                     <UIcon name="i-lucide-x" class="h-3 w-3" />
                   </button>
                 </span>
-              </div>
-              <div class="flex gap-2">
-                <UInput
+
+                <input
                   v-model="customerInput"
-                  placeholder="Digite um cliente e pressione Enter"
-                  class="w-full"
-                  @keydown.enter.prevent="addCustomerTag(customerInput)"
-                />
-                <UButton
-                  type="button"
-                  variant="soft"
-                  color="neutral"
-                  icon="i-lucide-plus"
-                  @click="addCustomerTag(customerInput)"
-                />
+                  type="text"
+                  class="min-w-[12rem] flex-1 bg-transparent px-1 py-1 text-sm text-highlighted outline-none placeholder:text-muted"
+                  placeholder="Digite para buscar ou criar um cliente"
+                  @keydown.enter.prevent="handleCustomerEnter"
+                >
               </div>
             </div>
-          </UFormField>
-        </div>
+
+            <div
+              v-if="filteredCustomerSuggestions.length || canCreateCustomerFromInput"
+              class="rounded-lg border border-default bg-default shadow-sm"
+            >
+              <p class="border-b border-default px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
+                Sugestões
+              </p>
+
+              <button
+                v-for="customer in filteredCustomerSuggestions"
+                :key="customer"
+                type="button"
+                class="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                @click="addCustomerTag(customer)"
+              >
+                <span class="truncate">{{ customer }}</span>
+              </button>
+
+              <button
+                v-if="canCreateCustomerFromInput"
+                type="button"
+                class="flex w-full items-center justify-between border-t border-default px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                @click="addCustomerTag(customerInput)"
+              >
+                <span class="truncate"><strong>{{ customerInput.trim() }}</strong> (Novo Cliente)</span>
+              </button>
+            </div>
+          </div>
+        </UFormField>
 
         <!-- Produtos (obrigatório, multi-select) -->
         <UFormField label="Produtos" required>
@@ -407,6 +452,97 @@ async function handleSubmit() {
             Selecione um projeto primeiro.
           </p>
         </UFormField>
+
+        <!-- Status + Marcação de Impedimento (somente edição) -->
+        <div
+          v-if="isEdit"
+          class="grid grid-cols-1 gap-3 items-start sm:grid-cols-3"
+        >
+          <UFormField label="Status">
+            <USelect
+              v-model="form.status as DemandStatus"
+              :items="statusOptions"
+              class="w-full"
+            />
+          </UFormField>
+
+          <!-- Impedimento toggle -->
+          <UFormField label="Impedimento">
+            <div class="flex items-center gap-3 h-9">
+              <label class="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  v-model="form.isBlocked"
+                  type="checkbox"
+                  class="accent-red-500 w-4 h-4"
+                >
+                <span class="text-sm" :class="form.isBlocked ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted'">
+                  {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
+                </span>
+              </label>
+            </div>
+          </UFormField>
+
+          <UFormField
+            v-if="deliveryDateRequired"
+            label="Data de entrega *"
+          >
+            <UInput
+              v-model="form.deliveryDate"
+              type="date"
+              class="w-full"
+              :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
+        </div>
+
+        <!-- Motivo do impedimento -->
+        <UFormField
+          v-if="form.isBlocked"
+          label="Motivo do impedimento *"
+        >
+          <UInput
+            v-model="form.blockedReason"
+            placeholder="Descreva o motivo do impedimento"
+            class="w-full"
+            :class="!form.blockedReason ? 'ring-2 ring-red-400' : ''"
+          />
+          <p
+            v-if="!form.blockedReason"
+            class="text-xs text-red-500 mt-1"
+          >
+            Obrigatório ao marcar impedimento.
+          </p>
+        </UFormField>
+
+        <!-- Observação (obrigatória para Despriorizado) -->
+        <UFormField
+          v-if="isEdit && (observationRequired || form.observation)"
+          :label="observationRequired ? 'Observação *' : 'Observação'"
+        >
+          <UTextarea
+            v-model="form.observation"
+            :placeholder="observationRequired
+              ? 'Justifique o motivo do status (obrigatório)'
+              : 'Observação opcional'"
+            :rows="2"
+            class="w-full"
+            :class="observationRequired && !form.observation ? 'ring-2 ring-red-400' : ''"
+          />
+          <p
+            v-if="observationRequired && !form.observation"
+            class="text-xs text-red-500 mt-1"
+          >
+            Obrigatório para status Despriorizado.
+          </p>
+        </UFormField>
+
+        <!-- Data de entrega obrigatória quando Done (alerta) -->
+        <p
+          v-if="isEdit && deliveryDateRequired && !form.deliveryDate"
+          class="text-xs text-red-500"
+        >
+          Informe a data de entrega para concluir a demanda.
+        </p>
 
         <UFormField label="Dependências entre demandas">
           <div class="space-y-2">
@@ -462,85 +598,6 @@ async function handleSubmit() {
             </div>
           </div>
         </UFormField>
-
-        <!-- Status + Marcação de Impedimento (somente edição) -->
-        <div
-          v-if="isEdit"
-          class="grid grid-cols-2 gap-3 items-start"
-        >
-          <UFormField label="Status">
-            <USelect
-              v-model="form.status as DemandStatus"
-              :items="statusOptions"
-              class="w-full"
-            />
-          </UFormField>
-
-          <!-- Impedimento toggle -->
-          <UFormField label="Impedimento">
-            <div class="flex items-center gap-3 h-9">
-              <label class="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  v-model="form.isBlocked"
-                  type="checkbox"
-                  class="accent-red-500 w-4 h-4"
-                >
-                <span class="text-sm" :class="form.isBlocked ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted'">
-                  {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
-                </span>
-              </label>
-            </div>
-          </UFormField>
-        </div>
-
-        <!-- Motivo do impedimento -->
-        <UFormField
-          v-if="form.isBlocked"
-          label="Motivo do impedimento *"
-        >
-          <UInput
-            v-model="form.blockedReason"
-            placeholder="Descreva o motivo do impedimento"
-            class="w-full"
-            :class="!form.blockedReason ? 'ring-2 ring-red-400' : ''"
-          />
-          <p
-            v-if="!form.blockedReason"
-            class="text-xs text-red-500 mt-1"
-          >
-            Obrigatório ao marcar impedimento.
-          </p>
-        </UFormField>
-
-        <!-- Observação (obrigatória para Despriorizado) -->
-        <UFormField
-          v-if="isEdit && (observationRequired || form.observation)"
-          :label="observationRequired ? 'Observação *' : 'Observação'"
-        >
-          <UTextarea
-            v-model="form.observation"
-            :placeholder="observationRequired
-              ? 'Justifique o motivo do status (obrigatório)'
-              : 'Observação opcional'"
-            :rows="2"
-            class="w-full"
-            :class="observationRequired && !form.observation ? 'ring-2 ring-red-400' : ''"
-          />
-          <p
-            v-if="observationRequired && !form.observation"
-            class="text-xs text-red-500 mt-1"
-          >
-            Obrigatório para status Despriorizado.
-          </p>
-        </UFormField>
-
-        <!-- Data de entrega obrigatória quando Done (alerta) -->
-        <p
-          v-if="isEdit && deliveryDateRequired && !form.deliveryDate"
-          class="text-xs text-red-500"
-        >
-          Informe a data de entrega para concluir a demanda.
-        </p>
       </form>
     </template>
 

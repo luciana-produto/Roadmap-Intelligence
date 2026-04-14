@@ -32,6 +32,8 @@ export interface DemandDependency {
   projectName: string
   title: string
   quarterLabel: string
+  quarterYear: number
+  quarterNumber: number
   status: DemandStatus
 }
 
@@ -41,6 +43,8 @@ export interface DemandDependencyOption {
   projectName: string
   title: string
   quarterLabel: string
+  quarterYear: number
+  quarterNumber: number
   status: DemandStatus
 }
 

@@ -8,6 +8,8 @@ public sealed record DemandDependencyDto(
     string ProjectName,
     string Title,
     string QuarterLabel,
+    int QuarterYear,
+    int QuarterNumber,
     string Status);
 
 public sealed record DemandDependencyOptionDto(
@@ -16,6 +18,8 @@ public sealed record DemandDependencyOptionDto(
     string ProjectName,
     string Title,
     string QuarterLabel,
+    int QuarterYear,
+    int QuarterNumber,
     string Status);
 
 public sealed record RoadmapProductDto(Guid Id, string Name, Guid ProjectId);

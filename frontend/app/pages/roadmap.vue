@@ -80,6 +80,20 @@ function formatDemandCustomers(customers?: string[]): string {
   return customers?.join(', ') ?? ''
 }
 
+const customerSuggestions = computed(() => {
+  const values = new Set<string>()
+
+  for (const demand of demands.value) {
+    for (const customer of demand.customers ?? []) {
+      const normalized = customer.trim()
+      if (normalized)
+        values.add(normalized)
+    }
+  }
+
+  return [...values].sort((left, right) => left.localeCompare(right, 'pt-BR'))
+})
+
 function getDemandNotesTooltip(demand: RoadmapDemand): string {
   const notes = []
   if (demand.isBlocked && demand.blockedReason)
@@ -93,6 +107,33 @@ function formatDependencySummaryLine(dependency: DemandDependency) {
   return `${dependency.projectName} · ${dependency.title}`
 }
 
+function formatDependencyProjectLabel(dependency: DemandDependency) {
+  return dependency.projectName.toUpperCase()
+}
+
+function compareQuarterPosition(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber'>, right: Pick<DemandDependency, 'quarterYear' | 'quarterNumber'>) {
+  if (left.quarterYear !== right.quarterYear)
+    return left.quarterYear - right.quarterYear
+
+  return left.quarterNumber - right.quarterNumber
+}
+
+function isDependencyInconsistent(demand: RoadmapDemand, dependency: DemandDependency) {
+  const isDependentDemandBacklog = demand.quarterYear === 0 && demand.quarterNumber === 0
+  if (isDependentDemandBacklog)
+    return false
+
+  const isDependencyBacklog = dependency.quarterYear === 0 && dependency.quarterNumber === 0
+  if (isDependencyBacklog)
+    return true
+
+  return compareQuarterPosition(demand, dependency) < 0
+}
+
+function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependency: DemandDependency) {
+  return `${prefix} ${dependency.projectName}: ${dependency.title}`
+}
+
 function toggleQuarterFilter(val: string) {
   const idx = filterQuarters.value.indexOf(val)
   if (idx >= 0) filterQuarters.value.splice(idx, 1)
@@ -101,6 +142,36 @@ function toggleQuarterFilter(val: string) {
 
 function isBacklogDemand(demand: RoadmapDemand): boolean {
   return demand.quarterYear === 0 && demand.quarterNumber === 0
+}
+
+function isAdditionalDemand(demand: Pick<RoadmapDemand, 'type'>): boolean {
+  return demand.type === 'Additional'
+}
+
+function getDemandGroupOrder(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>): number {
+  if (isBacklogDemand(demand as RoadmapDemand)) return 2
+  if (isAdditionalDemand(demand)) return 1
+  return 0
+}
+
+function getDemandGroupKey(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>): 'regular' | 'additional' | 'backlog' {
+  if (isBacklogDemand(demand as RoadmapDemand)) return 'backlog'
+  if (isAdditionalDemand(demand)) return 'additional'
+  return 'regular'
+}
+
+function compareListDemandGroups(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>, right: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>) {
+  return getDemandGroupOrder(left) - getDemandGroupOrder(right)
+}
+
+function withListGroupSorting(compareWithinGroup: (left: RoadmapDemand, right: RoadmapDemand) => number) {
+  return (rowA: { original: RoadmapDemand }, rowB: { original: RoadmapDemand }) => {
+    const groupComparison = compareListDemandGroups(rowA.original, rowB.original)
+    if (groupComparison !== 0)
+      return groupComparison
+
+    return compareWithinGroup(rowA.original, rowB.original)
+  }
 }
 
 // ─── Filters ──────────────────────────────────────────────────────────────────
@@ -338,8 +409,6 @@ const typeSummaryDot: Record<DemandType, string> = {
   Additional: 'bg-blue-500'
 }
 
-const additionalDemandHint = 'NÃO COMPROMETIDO'
-
 function toggleProductFilter(id: string) {
   const idx = filterProducts.value.indexOf(id)
   if (idx >= 0) filterProducts.value.splice(idx, 1)
@@ -386,11 +455,9 @@ watch(selectedProjectId, () => {
 
 const quarterFilteredDemands = computed(() => {
   const orderedDemands = [...demands.value].sort((left, right) => {
-    const leftIsBacklog = left.quarterYear === 0 && left.quarterNumber === 0
-    const rightIsBacklog = right.quarterYear === 0 && right.quarterNumber === 0
-
-    if (leftIsBacklog !== rightIsBacklog)
-      return leftIsBacklog ? 1 : -1
+    const groupComparison = compareListDemandGroups(left, right)
+    if (groupComparison !== 0)
+      return groupComparison
 
     if (left.quarterYear !== right.quarterYear)
       return left.quarterYear - right.quarterYear
@@ -482,15 +549,23 @@ function isSameDemandScope(left: Pick<RoadmapDemand, 'projectId' | 'quarterYear'
     && left.quarterNumber === right.quarterNumber
 }
 
+function isSameDemandGroup(
+  left: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>,
+  right: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>
+) {
+  return isSameDemandScope(left, right)
+    && getDemandGroupKey(left) === getDemandGroupKey(right)
+}
+
 function getScopedDemandIds(demand: RoadmapDemand) {
   return demands.value
-    .filter(item => isSameDemandScope(item, demand))
+    .filter(item => isSameDemandGroup(item, demand))
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .map(item => item.id)
 }
 
-function getDemandScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>) {
-  return `${demand.projectId}:${demand.quarterYear}:${demand.quarterNumber}`
+function getDemandScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
+  return `${demand.projectId}:${demand.quarterYear}:${demand.quarterNumber}:${getDemandGroupKey(demand)}`
 }
 
 function ensureDemandCanMoveToStatus(demand: RoadmapDemand, status: DemandStatus) {
@@ -614,8 +689,8 @@ async function handleListSortEnd(oldIndex: number, newIndex: number) {
   }
 
   const remainingRows = visibleRows.filter((_, index) => index !== oldIndex)
-  const nextScopedRow = remainingRows.slice(newIndex).find(item => isSameDemandScope(item, demand))
-  const previousScopedRow = [...remainingRows.slice(0, newIndex)].reverse().find(item => isSameDemandScope(item, demand))
+  const nextScopedRow = remainingRows.slice(newIndex).find(item => isSameDemandGroup(item, demand))
+  const previousScopedRow = [...remainingRows.slice(0, newIndex)].reverse().find(item => isSameDemandGroup(item, demand))
   const beforeId = nextScopedRow?.id ?? null
   const afterId = beforeId ? null : previousScopedRow?.id ?? null
 
@@ -664,7 +739,7 @@ function initListSortable() {
   const tbody = listTableRootRef.value?.querySelector('tbody')
   if (!tbody) return
 
-  syncListBacklogDivider()
+  syncListSectionDividers()
 
   listBodySortable = Sortable.create(tbody, {
     animation: 150,
@@ -704,11 +779,11 @@ function initListSortable() {
   })
 }
 
-function syncListBacklogDivider() {
+function syncListSectionDividers() {
   const tbody = listTableRootRef.value?.querySelector('tbody')
   if (!tbody) return
 
-  tbody.querySelector('.list-backlog-divider')?.remove()
+  tbody.querySelectorAll('.list-section-divider').forEach(node => node.remove())
 
   const rows = Array.from(tbody.querySelectorAll('tr')) as HTMLTableRowElement[]
   const visibleRows = listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? quarterFilteredDemands.value
@@ -727,26 +802,36 @@ function syncListBacklogDivider() {
     row.dataset.scopeKey = getDemandScopeKey(demand)
   })
 
-  const hasBacklog = visibleRows.some(demand => demand.quarterYear === 0 && demand.quarterNumber === 0)
-  const hasRealQuarter = visibleRows.some(demand => demand.quarterYear !== 0 || demand.quarterNumber !== 0)
-  if (!hasBacklog || !hasRealQuarter) return
+  const dividerConfigs = [
+    {
+      demand: visibleRows.find(demand => isAdditionalDemand(demand)),
+      shouldRender: visibleRows.some(demand => !isAdditionalDemand(demand) && !isBacklogDemand(demand)),
+      label: 'Adicionais - Não comprometidas'
+    },
+    {
+      demand: visibleRows.find(demand => isBacklogDemand(demand)),
+      shouldRender: visibleRows.some(demand => !isBacklogDemand(demand)),
+      label: 'Backlog'
+    }
+  ]
 
-  const firstBacklogDemand = visibleRows.find(demand => demand.quarterYear === 0 && demand.quarterNumber === 0)
-  if (!firstBacklogDemand) return
+  dividerConfigs.forEach(({ demand, shouldRender, label }) => {
+    if (!demand || !shouldRender) return
 
-  const targetRow = rows.find(row => row.dataset.demandId === firstBacklogDemand.id)
-  if (!targetRow) return
+    const targetRow = rows.find(row => row.dataset.demandId === demand.id)
+    if (!targetRow) return
 
-  const dividerRow = document.createElement('tr')
-  dividerRow.className = 'list-backlog-divider'
+    const dividerRow = document.createElement('tr')
+    dividerRow.className = 'list-section-divider'
 
-  const dividerCell = document.createElement('td')
-  dividerCell.colSpan = listOrderedCols.value.length
-  dividerCell.className = 'border-y border-default bg-gray-100 px-3 py-1.5 text-center text-[10px] font-semibold uppercase tracking-[0.16em] text-gray-700 dark:bg-gray-800/70 dark:text-gray-200'
-  dividerCell.textContent = 'Backlog'
+    const dividerCell = document.createElement('td')
+    dividerCell.colSpan = listOrderedCols.value.length
+    dividerCell.className = 'border-y-2 border-default bg-gray-200 px-3 py-2 text-center text-xs font-extrabold uppercase tracking-[0.2em] text-gray-900 dark:bg-gray-700/80 dark:text-gray-50'
+    dividerCell.textContent = label
 
-  dividerRow.appendChild(dividerCell)
-  tbody.insertBefore(dividerRow, targetRow)
+    dividerRow.appendChild(dividerCell)
+    tbody.insertBefore(dividerRow, targetRow)
+  })
 }
 
 watch(
@@ -754,7 +839,7 @@ watch(
   async () => {
     await nextTick()
     initKanbanSortables()
-    syncListBacklogDivider()
+    syncListSectionDividers()
     initListSortable()
   },
   { flush: 'post' }
@@ -902,11 +987,17 @@ async function confirmDelete() {
 const statusLabels: Record<DemandStatus, string> = {
   Backlog: 'Backlog', InProgress: 'Em andamento', Done: 'Concluído', Deprioritized: 'Despriorizado'
 }
-const statusIndicatorClass: Record<DemandStatus, string> = {
-  Backlog: 'border-default bg-elevated',
-  InProgress: 'border-blue-200 bg-blue-500/85 dark:border-blue-800 dark:bg-blue-400',
-  Done: 'border-green-200 bg-green-500/85 dark:border-green-800 dark:bg-green-400',
-  Deprioritized: 'border-amber-200 bg-amber-500/85 dark:border-amber-800 dark:bg-amber-400'
+const statusTextClass: Record<DemandStatus, string> = {
+  Backlog: 'text-muted',
+  InProgress: 'text-blue-600 dark:text-blue-400',
+  Done: 'text-green-600 dark:text-green-400',
+  Deprioritized: 'text-amber-600 dark:text-amber-400'
+}
+const statusDotClass: Record<DemandStatus, string> = {
+  Backlog: 'bg-neutral-400 dark:bg-neutral-500',
+  InProgress: 'bg-blue-500 dark:bg-blue-400',
+  Done: 'bg-green-500 dark:bg-green-400',
+  Deprioritized: 'bg-amber-500 dark:bg-amber-400'
 }
 const typeLabels: Record<DemandType, string> = {
   Planned: 'Planejado', Spillover: 'Transbordo', Unplanned: 'Não Planejado', Additional: 'Adicional'
@@ -1112,10 +1203,10 @@ function toggleDemandSelection(demandId: string, selected: boolean) {
 }
 async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: number | null) {
   await nextTick()
-  syncListBacklogDivider()
+  syncListSectionDividers()
   initListSortable()
   await nextTick()
-  syncListBacklogDivider()
+  syncListSectionDividers()
 
   if (listScrollContainerRef.value && scrollTop != null) {
     listScrollContainerRef.value.scrollTop = scrollTop
@@ -1197,6 +1288,31 @@ const UButtonComp = resolveComponent('UButton')
 const UIconComp   = resolveComponent('UIcon')
 const UPopoverComp = resolveComponent('UPopover')
 
+function renderDependencyBadge(dependency: DemandDependency) {
+  return h('span', {
+    class: 'inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+    title: formatDependencySummaryLine(dependency)
+  }, [
+    h(UIconComp, { name: 'i-lucide-link', class: 'h-3 w-3 shrink-0' }),
+    h('span', { class: 'min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]' }, formatDependencyProjectLabel(dependency))
+  ])
+}
+
+function renderDependsOnBadge(demand: RoadmapDemand, dependency: DemandDependency) {
+  const inconsistent = isDependencyInconsistent(demand, dependency)
+
+  return h('span', {
+    class: inconsistent
+      ? 'inline-flex max-w-full items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
+      : 'inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+    title: `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`
+  }, [
+    h(UIconComp, { name: 'i-lucide-link', class: 'h-3 w-3 shrink-0' }),
+    h('span', { class: 'min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]' }, formatDependencyProjectLabel(dependency)),
+    ...(inconsistent ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3 w-3 shrink-0' })] : [])
+  ])
+}
+
 const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
   {
     id: 'select',
@@ -1223,6 +1339,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     header: 'Prioridade',
     accessorFn: row => row.sortOrder,
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => left.sortOrder - right.sortOrder),
     enableColumnFilter: false,
     size: 92,
     meta: { style: { td: () => ({ width: listColWidth('priority', 92) }), th: () => ({ width: listColWidth('priority', 92) }) } },
@@ -1244,6 +1361,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     accessorKey: 'title',
     header: 'Demanda',
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => left.title.localeCompare(right.title, 'pt-BR')),
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string) => {
       const d = row.original
@@ -1256,44 +1374,28 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { style: { td: () => ({ width: listColWidth('title', 360) }), th: () => ({ width: listColWidth('title', 360) }) } },
     cell: ({ row }) => {
       const d = row.original
-      const textNodes = [h('p', { class: 'font-medium text-highlighted truncate' }, d.title)]
+      const textNodes = [h('p', { class: 'font-medium text-highlighted truncate', title: d.description || undefined }, d.title)]
       if (d.jiraIssue) textNodes.push(h('p', { class: 'text-xs text-blue-500 font-mono' }, d.jiraIssue))
-      if (d.description) textNodes.push(h('p', { class: 'text-xs text-muted truncate' }, d.description))
       if (d.dependsOn.length) {
         textNodes.push(
           h('div', { class: 'mt-1 flex flex-wrap gap-1' }, [
-            ...d.dependsOn.slice(0, 2).map(dependency =>
-              h('span', {
-                class: 'inline-flex max-w-full items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-              }, `Depende de ${formatDependencySummaryLine(dependency)}`)
-            ),
-            ...(d.dependsOn.length > 2
-              ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
-              : [])
+              ...d.dependsOn.slice(0, 2).map(dependency => renderDependsOnBadge(d, dependency)),
+              ...(d.dependsOn.length > 2
+                ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
+                : [])
           ])
         )
       }
       if (d.dependedOnBy.length) {
         textNodes.push(
           h('div', { class: 'mt-1 flex flex-wrap gap-1' }, [
-            ...d.dependedOnBy.slice(0, 2).map(dependency =>
-              h('span', {
-                class: 'inline-flex max-w-full items-center rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:border-sky-800 dark:bg-sky-900/30 dark:text-sky-300'
-              }, `Base para ${formatDependencySummaryLine(dependency)}`)
-            ),
-            ...(d.dependedOnBy.length > 2
-              ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
-              : [])
-          ])
-        )
-      }
-      if (d.type === 'Additional') {
-        textNodes.push(
-          h('span', {
-            class: 'mt-1 inline-flex w-fit items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
-          }, [
-            h(UIconComp, { name: 'i-lucide-info', class: 'h-3 w-3' }),
-            additionalDemandHint
+              ...d.dependedOnBy.slice(0, 2).map(dependency => h('span', {
+                ...renderDependencyBadge(dependency).props,
+                title: getDependencyTooltip('Bloqueia', dependency)
+              }, renderDependencyBadge(dependency).children)),
+              ...(d.dependedOnBy.length > 2
+                ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
+                : [])
           ])
         )
       }
@@ -1304,6 +1406,15 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     accessorKey: 'quarterLabel',
     header: 'Quarter / Tipo',
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => {
+      if (left.quarterYear !== right.quarterYear)
+        return left.quarterYear - right.quarterYear
+
+      if (left.quarterNumber !== right.quarterNumber)
+        return left.quarterNumber - right.quarterNumber
+
+      return left.type.localeCompare(right.type, 'pt-BR')
+    }),
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string[]) => {
       if (!Array.isArray(filterValue) || !filterValue.length) return true
@@ -1329,6 +1440,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     accessorKey: 'status',
     header: 'Status',
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => statusLabels[left.status].localeCompare(statusLabels[right.status], 'pt-BR')),
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string[]) => {
       if (!Array.isArray(filterValue) || !filterValue.length) return true
@@ -1341,6 +1453,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     accessorKey: 'classification',
     header: 'Classificação',
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => classificationLabels[left.classification].localeCompare(classificationLabels[right.classification], 'pt-BR')),
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string[]) => {
       if (!Array.isArray(filterValue) || !filterValue.length) return true
@@ -1373,6 +1486,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     accessorKey: 'customers',
     header: 'Clientes',
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => formatDemandCustomers(left.customers).localeCompare(formatDemandCustomers(right.customers), 'pt-BR')),
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string) => {
       const query = filterValue.toLowerCase()
@@ -1392,6 +1506,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     accessorKey: 'hours',
     header: 'Horas',
     enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => (left.hours ?? 0) - (right.hours ?? 0)),
     enableColumnFilter: false,
     size: 68,
     meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('hours', 68) }), th: () => ({ width: listColWidth('hours', 68) }) } },
@@ -2115,10 +2230,13 @@ await Promise.all([
                   :title="getDemandNotesTooltip(row.original) || statusLabels[row.original.status]"
                 >
                   <span
-                    class="inline-flex h-3.5 w-8 shrink-0 rounded-full border"
-                    :class="statusIndicatorClass[row.original.status]"
-                    :aria-label="statusLabels[row.original.status]"
+                    class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                    :class="statusDotClass[row.original.status]"
+                    aria-hidden="true"
                   />
+                  <span class="text-xs font-medium" :class="statusTextClass[row.original.status]">
+                    {{ statusLabels[row.original.status] }}
+                  </span>
                   <span
                     v-if="row.original.isBlocked"
                     class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
@@ -2283,6 +2401,7 @@ await Promise.all([
       v-model:open="modalOpen"
       :projects="projects"
       :dependency-options="dependencyOptions"
+      :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
       :default-project-id="selectedProjectId ?? undefined"
       :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? selectedQuarterYear ?? undefined"

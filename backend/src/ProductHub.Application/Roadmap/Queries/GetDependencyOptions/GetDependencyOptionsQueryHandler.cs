@@ -27,6 +27,8 @@ public sealed class GetDemandDependencyOptionsQueryHandler(
                 projectNamesById.TryGetValue(demand.ProjectId, out var projectName) ? projectName : string.Empty,
                 demand.Title,
                 demand.Quarter.Label,
+                demand.QuarterYear,
+                demand.QuarterNumber,
                 demand.Status.ToString()));
     }
 }

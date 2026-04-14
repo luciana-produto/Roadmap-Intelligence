@@ -72,6 +72,8 @@ internal static class RoadmapDemandDtoMapper
             projectNamesById.TryGetValue(relatedDemand.ProjectId, out var projectName) ? projectName : string.Empty,
             relatedDemand.Title,
             relatedDemand.Quarter.Label,
+            relatedDemand.QuarterYear,
+            relatedDemand.QuarterNumber,
             relatedDemand.Status.ToString());
     }
 }
