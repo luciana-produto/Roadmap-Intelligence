@@ -16,6 +16,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   const projects = ref<RoadmapProject[]>([])
   const demands = ref<RoadmapDemand[]>([])
   const dependencyOptions = ref<DemandDependencyOption[]>([])
+  const customerSuggestions = ref<string[]>([])
   const capacitySummary = ref<RoadmapCapacitySummary | null>(null)
   const isLoading = ref(false)
   const isCapacityLoading = ref(false)
@@ -151,6 +152,11 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     dependencyOptions.value = res.data ?? []
   }
 
+  async function fetchCustomerSuggestions() {
+    const res = await api.get<ApiResponse<string[]>>('/api/roadmap/demands/customer-suggestions')
+    customerSuggestions.value = res.data ?? []
+  }
+
   async function fetchCapacity(projectId: string, quarterYear: number, quarterNumber: number) {
     isCapacityLoading.value = true
     try {
@@ -214,6 +220,11 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     if (res.data)
       upsertDependencyOptionFromDemand(res.data)
 
+    customerSuggestions.value = [...new Set([
+      ...customerSuggestions.value,
+      ...normalizeCustomers(payload.customers)
+    ])].sort((left, right) => left.localeCompare(right, 'pt-BR'))
+
     return res.data
   }
 
@@ -244,6 +255,11 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     )
     if (res.data)
       applyUpdatedDemandState(res.data)
+
+    customerSuggestions.value = [...new Set([
+      ...customerSuggestions.value,
+      ...normalizeCustomers(payload.customers)
+    ])].sort((left, right) => left.localeCompare(right, 'pt-BR'))
 
     return res.data
   }
@@ -310,6 +326,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     projects,
     demands,
     dependencyOptions,
+    customerSuggestions,
     capacitySummary,
     isLoading,
     isCapacityLoading,
@@ -320,6 +337,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     fetchProjects,
     fetchDemands,
     fetchDependencyOptions,
+    fetchCustomerSuggestions,
     fetchCapacity,
     upsertCapacity,
     clearCapacity,

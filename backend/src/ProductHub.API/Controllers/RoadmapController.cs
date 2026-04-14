@@ -7,6 +7,7 @@ using ProductHub.Application.Roadmap.Commands.UpsertCapacity;
 using ProductHub.Application.Roadmap.Commands.UpdateDemand;
 using ProductHub.Application.Roadmap.DTOs;
 using ProductHub.Application.Roadmap.Queries.GetCapacity;
+using ProductHub.Application.Roadmap.Queries.GetCustomerSuggestions;
 using ProductHub.Application.Roadmap.Queries.GetDependencyOptions;
 using ProductHub.Application.Roadmap.Queries.GetRoadmap;
 using ProductHub.Shared.Models;
@@ -34,6 +35,13 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     {
         var result = await sender.Send(new GetDemandDependencyOptionsQuery(), cancellationToken);
         return Ok(ApiResponse<IEnumerable<DemandDependencyOptionDto>>.Ok(result, CorrelationId));
+    }
+
+    [HttpGet("demands/customer-suggestions")]
+    public async Task<IActionResult> GetCustomerSuggestions(CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new GetRoadmapCustomerSuggestionsQuery(), cancellationToken);
+        return Ok(ApiResponse<IEnumerable<string>>.Ok(result, CorrelationId));
     }
 
     [HttpGet("capacity")]

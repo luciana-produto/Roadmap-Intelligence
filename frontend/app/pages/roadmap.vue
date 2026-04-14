@@ -11,7 +11,7 @@ useSeoMeta({ title: 'Roadmap · ProductHub' })
 const roadmapStore = useRoadmapStore()
 const toast = useToast()
 
-const { projects, demands, dependencyOptions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
+const { projects, demands, dependencyOptions, customerSuggestions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
 
 // ─── View mode ───────────────────────────────────────────────────────────────
 const viewMode = ref<'kanban' | 'list'>('list')
@@ -79,20 +79,6 @@ const quarterFilterLabel = computed(() => {
 function formatDemandCustomers(customers?: string[]): string {
   return customers?.join(', ') ?? ''
 }
-
-const customerSuggestions = computed(() => {
-  const values = new Set<string>()
-
-  for (const demand of demands.value) {
-    for (const customer of demand.customers ?? []) {
-      const normalized = customer.trim()
-      if (normalized)
-        values.add(normalized)
-    }
-  }
-
-  return [...values].sort((left, right) => left.localeCompare(right, 'pt-BR'))
-})
 
 function getDemandNotesTooltip(demand: RoadmapDemand): string {
   const notes = []
@@ -1616,7 +1602,8 @@ filterQuarters.value = [`${currentQuarterNumber}-${currentYear}`]
 await Promise.all([
   roadmapStore.fetchProjects(),
   roadmapStore.fetchDemands(),
-  roadmapStore.fetchDependencyOptions()
+  roadmapStore.fetchDependencyOptions(),
+  roadmapStore.fetchCustomerSuggestions()
 ])
 </script>
 

@@ -1,6 +1,10 @@
 <script setup lang="ts">
 import type { RoadmapDemand, RoadmapProject, DemandDependencyOption, DemandFormData, DemandType, DemandClassification, DemandStatus } from '~/types/roadmap'
 
+type DemandFormState = Omit<DemandFormData, 'classification'> & {
+  classification: DemandClassification | ''
+}
+
 const props = defineProps<{
   open: boolean
   projects: RoadmapProject[]
@@ -60,14 +64,14 @@ const dependencySearch = ref('')
 const observationRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
 
-const form = reactive<DemandFormData>({
+const form = reactive<DemandFormState>({
   title: '',
   description: '',
   projectId: '',
   quarterYear: currentYear,
   quarterNumber: 1,
   type: 'Planned',
-  classification: 'Evolution',
+  classification: '',
   productIds: [],
   status: 'Backlog',
   observation: '',
@@ -135,7 +139,7 @@ watch(() => props.open, (open) => {
     form.quarterYear = props.defaultQuarterYear ?? currentYear
     form.quarterNumber = props.defaultQuarterNumber ?? 1
     form.type = 'Planned'
-    form.classification = 'Evolution'
+    form.classification = ''
     form.productIds = []
     form.status = 'Backlog'
     form.observation = ''
@@ -170,13 +174,18 @@ const customerTags = computed(() =>
   form.customers ?? []
 )
 
+const hasCustomerQuery = computed(() => customerInput.value.trim().length > 0)
+
 const filteredCustomerSuggestions = computed(() => {
   const query = customerInput.value.trim().toLowerCase()
+  if (!query)
+    return []
+
   const selected = new Set(customerTags.value.map(customer => customer.toLowerCase()))
 
   return props.customerSuggestions
     .filter(customer => !selected.has(customer.toLowerCase()))
-    .filter(customer => !query || customer.toLowerCase().includes(query))
+    .filter(customer => customer.toLowerCase().includes(query))
     .slice(0, 8)
 })
 
@@ -188,15 +197,16 @@ const canCreateCustomerFromInput = computed(() => {
   return !customerTags.value.some(customer => customer.toLowerCase() === normalized.toLowerCase())
 })
 
+const hasDependencyQuery = computed(() => dependencySearch.value.trim().length > 0)
+
 const filteredDependencyOptions = computed(() => {
   const query = dependencySearch.value.trim().toLowerCase()
+  if (!query)
+    return []
 
   return props.dependencyOptions.filter(option => {
     if (props.demand && option.demandId === props.demand.id)
       return false
-
-    if (!query)
-      return true
 
     return `${option.projectName} ${option.title} ${option.quarterLabel} ${option.status}`.toLowerCase().includes(query)
   })
@@ -250,6 +260,7 @@ function removeDependency(demandId: string) {
 const isSubmitDisabled = computed(() =>
   !form.title
   || !form.projectId
+  || !form.classification
   || form.productIds.length === 0
   || (observationRequired.value && !form.observation)
   || (deliveryDateRequired.value && !form.deliveryDate)
@@ -262,7 +273,7 @@ async function handleSubmit() {
   if (isSubmitDisabled.value) return
   isSubmitting.value = true
   try {
-    emit('submit', { ...form })
+    emit('submit', { ...form, classification: form.classification as DemandClassification })
   }
   finally {
     isSubmitting.value = false
@@ -333,8 +344,9 @@ async function handleSubmit() {
 
           <UFormField label="Classificação" required>
             <USelect
-              v-model="form.classification as DemandClassification"
+              v-model="form.classification"
               :items="classificationOptions"
+              placeholder="Selecione"
               class="w-full"
             />
           </UFormField>
@@ -392,7 +404,7 @@ async function handleSubmit() {
             </div>
 
             <div
-              v-if="filteredCustomerSuggestions.length || canCreateCustomerFromInput"
+              v-if="hasCustomerQuery && (filteredCustomerSuggestions.length || canCreateCustomerFromInput)"
               class="rounded-lg border border-default bg-default shadow-sm"
             >
               <p class="border-b border-default px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
@@ -456,7 +468,7 @@ async function handleSubmit() {
         <!-- Status + Marcação de Impedimento (somente edição) -->
         <div
           v-if="isEdit"
-          class="grid grid-cols-1 gap-3 items-start sm:grid-cols-3"
+          class="grid grid-cols-1 gap-3 items-start sm:grid-cols-2"
         >
           <UFormField label="Status">
             <USelect
@@ -482,18 +494,19 @@ async function handleSubmit() {
             </div>
           </UFormField>
 
-          <UFormField
-            v-if="deliveryDateRequired"
-            label="Data de entrega *"
-          >
-            <UInput
-              v-model="form.deliveryDate"
-              type="date"
-              class="w-full"
-              :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
-            />
-          </UFormField>
         </div>
+
+        <UFormField
+          v-if="isEdit && deliveryDateRequired"
+          label="Data de entrega *"
+        >
+          <UInput
+            v-model="form.deliveryDate"
+            type="date"
+            class="w-full"
+            :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
+          />
+        </UFormField>
 
         <!-- Motivo do impedimento -->
         <UFormField
@@ -548,7 +561,7 @@ async function handleSubmit() {
           <div class="space-y-2">
             <UInput
               v-model="dependencySearch"
-              placeholder="Buscar por projeto, título, quarter ou status"
+              placeholder="Digite para buscar por projeto, título, quarter ou status"
               icon="i-lucide-search"
               class="w-full"
             />
@@ -573,7 +586,10 @@ async function handleSubmit() {
               </span>
             </div>
 
-            <div class="max-h-56 space-y-2 overflow-y-auto rounded-lg border border-default bg-elevated p-2.5">
+            <div
+              v-if="hasDependencyQuery"
+              class="max-h-56 space-y-2 overflow-y-auto rounded-lg border border-default bg-elevated p-2.5"
+            >
               <label
                 v-for="dependency in filteredDependencyOptions"
                 :key="dependency.demandId"
