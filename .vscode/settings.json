@@ -1,0 +1,9 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "&": true,
+        "dotnet --version 2>&1": true,
+        "node_modules\\.bin\\nuxt": true,
+        "npx nuxt": true,
+        "dotnet test": true
+    }
+}

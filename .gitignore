@@ -1,0 +1,22 @@
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Dependencies
+**/node_modules/
+
+# Build outputs
+frontend/.nuxt/
+frontend/.output/
+backend/src/**/bin/
+backend/src/**/obj/
+backend/tests/**/bin/
+backend/tests/**/obj/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

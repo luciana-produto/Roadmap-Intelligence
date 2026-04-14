@@ -1,0 +1,126 @@
+using ProductHub.Domain.Common;
+using ProductHub.Domain.Interfaces;
+
+namespace ProductHub.Domain.Roadmap;
+
+public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
+{
+    private List<RoadmapDemandProduct> _products = [];
+
+    public string Title { get; private set; } = default!;
+    public string? Description { get; private set; }
+    public Guid ProjectId { get; private set; }
+    public int QuarterYear { get; private set; }
+    public int QuarterNumber { get; private set; }
+    public DemandStatus Status { get; private set; }
+    public DemandType Type { get; private set; }
+    public DemandClassification Classification { get; private set; }
+    public int SortOrder { get; private set; }
+    public string? Observation { get; private set; }
+    public string? JiraIssue { get; private set; }
+    public decimal? Hours { get; private set; }
+    public IReadOnlyList<string> Customers { get; private set; } = [];
+    public bool IsBlocked { get; private set; }
+    public string? BlockedReason { get; private set; }
+    public DateOnly? DeliveryDate { get; private set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+
+    public IReadOnlyList<RoadmapDemandProduct> Products => _products.AsReadOnly();
+    public Quarter Quarter => Quarter.Create(QuarterYear, QuarterNumber);
+
+    private RoadmapDemand() { }
+
+    public static RoadmapDemand Create(
+        string title,
+        string? description,
+        Guid projectId,
+        int quarterYear,
+        int quarterNumber,
+        DemandType type,
+        DemandClassification classification,
+        IEnumerable<Guid> productIds,
+        int sortOrder = 0,
+        string? jiraIssue = null,
+        decimal? hours = null,
+        IEnumerable<string>? customers = null,
+        bool isBlocked = false,
+        string? blockedReason = null)
+    {
+        Quarter.Create(quarterYear, quarterNumber);
+
+        var demand = new RoadmapDemand
+        {
+            Title = title,
+            Description = description,
+            ProjectId = projectId,
+            QuarterYear = quarterYear,
+            QuarterNumber = quarterNumber,
+            Status = DemandStatus.Backlog,
+            Type = type,
+            Classification = classification,
+            SortOrder = sortOrder,
+            JiraIssue = jiraIssue,
+            Hours = hours,
+            Customers = NormalizeCustomers(customers),
+            IsBlocked = isBlocked,
+            BlockedReason = isBlocked ? blockedReason : null
+        };
+        demand._products = productIds
+            .Distinct()
+            .Select(id => RoadmapDemandProduct.Create(demand.Id, id))
+            .ToList();
+        return demand;
+    }
+
+    public void Update(
+        string title,
+        string? description,
+        int quarterYear,
+        int quarterNumber,
+        DemandStatus status,
+        DemandType type,
+        DemandClassification classification,
+        int? sortOrder = null,
+        string? observation = null,
+        string? jiraIssue = null,
+        decimal? hours = null,
+        IEnumerable<string>? customers = null,
+        bool isBlocked = false,
+        string? blockedReason = null,
+        DateOnly? deliveryDate = null)
+    {
+        Quarter.Create(quarterYear, quarterNumber);
+
+        Title = title;
+        Description = description;
+        QuarterYear = quarterYear;
+        QuarterNumber = quarterNumber;
+        Status = status;
+        Type = type;
+        Classification = classification;
+        if (sortOrder.HasValue)
+            SortOrder = sortOrder.Value;
+        Observation = observation;
+        JiraIssue = jiraIssue;
+        Hours = hours;
+        Customers = NormalizeCustomers(customers);
+        IsBlocked = isBlocked;
+        BlockedReason = isBlocked ? blockedReason : null;
+        DeliveryDate = deliveryDate;
+    }
+
+    public void SetSortOrder(int sortOrder) =>
+        SortOrder = sortOrder;
+
+    public void SetStatus(DemandStatus status) =>
+        Status = status;
+
+    private static IReadOnlyList<string> NormalizeCustomers(IEnumerable<string>? customers) =>
+        customers?
+            .Select(customer => customer.Trim())
+            .Where(customer => !string.IsNullOrWhiteSpace(customer))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()
+        ?? [];
+}

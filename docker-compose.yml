@@ -1,0 +1,83 @@
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: producthub_sqlserver
+    environment:
+      - ACCEPT_EULA=Y
+      - SA_PASSWORD=ProductHub@2026!
+      - MSSQL_PID=Developer
+    ports:
+      - '1433:1433'
+    volumes:
+      - sqlserver_data:/var/opt/mssql
+    networks:
+      - producthub
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'ProductHub@2026!' -Q 'SELECT 1' -No -C || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  seq:
+    image: datalust/seq:latest
+    container_name: producthub_seq
+    environment:
+      - ACCEPT_EULA=Y
+    ports:
+      - '5341:5341'
+      - '8080:80'
+    volumes:
+      - seq_data:/data
+    networks:
+      - producthub
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: producthub_api
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_HTTP_PORTS=8080
+      - Serilog__SeqUrl=http://seq:5341
+      - Cors__AllowedOrigins__0=http://localhost:3001
+    ports:
+      - '5001:8080'
+    networks:
+      - producthub
+    depends_on:
+      seq:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 60s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: producthub_frontend
+    environment:
+      - NUXT_PUBLIC_API_BASE=http://localhost:5001
+      - NUXT_PUBLIC_SSO_CLIENT_ID=product-hub
+      - NUXT_PUBLIC_SSO_TENANT_KEY=linx
+      - NUXT_PUBLIC_SSO_BASE_URL=https://sso-auth-hub.linxfood.com.br
+    ports:
+      - '3001:3000'
+    networks:
+      - producthub
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  producthub:
+    driver: bridge
+
+volumes:
+  sqlserver_data:
+  seq_data:
