@@ -902,11 +902,11 @@ async function confirmDelete() {
 const statusLabels: Record<DemandStatus, string> = {
   Backlog: 'Backlog', InProgress: 'Em andamento', Done: 'Concluído', Deprioritized: 'Despriorizado'
 }
-const statusColorClass: Record<DemandStatus, string> = {
-  Backlog: 'text-muted bg-elevated border-default',
-  InProgress: 'text-blue-600 bg-blue-50 border-blue-200 dark:text-blue-400 dark:bg-blue-900/20 dark:border-blue-800',
-  Done: 'text-green-600 bg-green-50 border-green-200 dark:text-green-400 dark:bg-green-900/20 dark:border-green-800',
-  Deprioritized: 'text-amber-600 bg-amber-50 border-amber-200 dark:text-amber-400 dark:bg-amber-900/20 dark:border-amber-800'
+const statusIndicatorClass: Record<DemandStatus, string> = {
+  Backlog: 'border-default bg-elevated',
+  InProgress: 'border-blue-200 bg-blue-500/85 dark:border-blue-800 dark:bg-blue-400',
+  Done: 'border-green-200 bg-green-500/85 dark:border-green-800 dark:bg-green-400',
+  Deprioritized: 'border-amber-200 bg-amber-500/85 dark:border-amber-800 dark:bg-amber-400'
 }
 const typeLabels: Record<DemandType, string> = {
   Planned: 'Planejado', Spillover: 'Transbordo', Unplanned: 'Não Planejado', Additional: 'Adicional'
@@ -2110,10 +2110,15 @@ await Promise.all([
               :ui="{ base: 'w-full table-fixed', thead: 'hidden', td: 'py-2 overflow-hidden' }"
             >
               <template #status-cell="{ row }">
-                <div class="flex items-center gap-1.5" :title="getDemandNotesTooltip(row.original) || undefined">
-                  <span class="text-xs border rounded-full px-2 py-0.5" :class="statusColorClass[row.original.status]">
-                    {{ statusLabels[row.original.status] }}
-                  </span>
+                <div
+                  class="flex items-center gap-1.5"
+                  :title="getDemandNotesTooltip(row.original) || statusLabels[row.original.status]"
+                >
+                  <span
+                    class="inline-flex h-3.5 w-8 shrink-0 rounded-full border"
+                    :class="statusIndicatorClass[row.original.status]"
+                    :aria-label="statusLabels[row.original.status]"
+                  />
                   <span
                     v-if="row.original.isBlocked"
                     class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"

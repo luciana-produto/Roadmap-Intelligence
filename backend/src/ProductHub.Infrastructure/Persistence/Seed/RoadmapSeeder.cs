@@ -238,8 +238,9 @@ public static class RoadmapSeeder
         if (crossProject is null || retaguardaProject is null)
             return;
 
-        var hasDemandChanges = await SeedProjectDemandsAsync(context, crossProject, CrossDemands, seededDemandIdsByKey)
-            || await SeedProjectDemandsAsync(context, retaguardaProject, RetaguardaQ22026Demands, seededDemandIdsByKey);
+            var crossDemandChanges = await SeedProjectDemandsAsync(context, crossProject, CrossDemands, seededDemandIdsByKey);
+            var retaguardaDemandChanges = await SeedProjectDemandsAsync(context, retaguardaProject, RetaguardaQ22026Demands, seededDemandIdsByKey);
+            var hasDemandChanges = crossDemandChanges || retaguardaDemandChanges;
 
         if (hasDemandChanges)
             await context.SaveChangesAsync();

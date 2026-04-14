@@ -27,6 +27,13 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         var originalQuarterYear = demand.QuarterYear;
         var originalQuarterNumber = demand.QuarterNumber;
 
+        if (request.ProjectId != demand.ProjectId)
+        {
+            throw new ValidationException([
+                new ValidationFailure(nameof(request.ProjectId), "Changing the project of an existing demand is not supported.")
+            ]);
+        }
+
         var project = await projectRepository.GetByIdWithProductsAsync(demand.ProjectId, cancellationToken)
             ?? throw new NotFoundException("RoadmapProject", demand.ProjectId);
 

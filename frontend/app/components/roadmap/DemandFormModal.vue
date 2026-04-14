@@ -273,6 +273,7 @@ async function handleSubmit() {
               :items="projects.map(p => ({ value: p.id, label: p.name }))"
               placeholder="Selecione"
               class="w-full"
+              :disabled="isEdit"
             />
           </UFormField>
 
