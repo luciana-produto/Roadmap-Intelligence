@@ -5,7 +5,7 @@ const props = defineProps<{
   demand: RoadmapDemand
   planningQuarterOptions?: { value: string, label: string }[]
 }>()
-defineEmits<{ edit: [demand: RoadmapDemand], delete: [id: string], plan: [demand: RoadmapDemand, quarterValue: string] }>()
+const emit = defineEmits<{ edit: [demand: RoadmapDemand], delete: [id: string], plan: [demand: RoadmapDemand, quarterValue: string], dependencyClick: [dependency: RoadmapDemand['dependsOn'][number]] }>()
 
 const statusConfig: Record<DemandStatus, { color: string, dot: string, label: string }> = {
   Backlog:      { color: 'text-muted', dot: 'bg-neutral-400 dark:bg-neutral-500', label: 'Backlog' },
@@ -36,6 +36,9 @@ const customerTags = computed(() =>
 
 const isAdditionalDemand = computed(() => props.demand.type === 'Additional')
 const isBacklogQuarterDemand = computed(() => props.demand.quarterYear === 0 && props.demand.quarterNumber === 0)
+const hasInconsistentDependency = computed(() =>
+  props.demand.dependsOn.some(dependency => isDependencyInconsistent(dependency))
+)
 
 const statusTooltip = computed(() => {
   const notes = []
@@ -50,8 +53,8 @@ function formatDependencySummary(dependency: RoadmapDemand['dependsOn'][number])
   return `${dependency.projectName} · ${dependency.title}`
 }
 
-function formatDependencyProjectLabel(dependency: RoadmapDemand['dependsOn'][number]) {
-  return dependency.projectName.toUpperCase()
+function formatDependencyBadgeLabel(prefix: 'Bloqueado por' | 'Bloqueia', dependency: RoadmapDemand['dependsOn'][number]) {
+  return `${prefix} ${dependency.projectName}`
 }
 
 function compareQuarterPosition(
@@ -81,7 +84,12 @@ function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependenc
 </script>
 
 <template>
-  <div class="bg-default border border-default rounded-xl p-3.5 space-y-2.5 hover:border-primary/40 transition-colors group">
+  <div
+    class="rounded-xl border p-3.5 space-y-2.5 transition-colors group"
+    :class="hasInconsistentDependency
+      ? 'border-red-300 bg-red-50/80 shadow-[0_0_0_1px_rgba(239,68,68,0.08)] hover:border-red-400 dark:border-red-800 dark:bg-red-950/20'
+      : 'bg-default border-default hover:border-primary/40'"
+  >
     <div v-if="isBacklogQuarterDemand || isAdditionalDemand" class="flex flex-wrap items-center gap-1.5">
       <div
         v-if="isBacklogQuarterDemand"
@@ -173,32 +181,37 @@ function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependenc
 
     <div v-if="demand.dependsOn.length || demand.dependedOnBy.length" class="space-y-1.5">
       <div v-if="demand.dependsOn.length" class="flex flex-wrap gap-1">
-          <span
+          <button
             v-for="dependency in demand.dependsOn.slice(0, 2)"
             :key="dependency.demandId"
-            class="inline-flex max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+            type="button"
+            class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium transition-colors hover:brightness-[0.97]"
             :class="isDependencyInconsistent(dependency)
               ? 'border border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
               : 'border border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'"
             :title="`${getDependencyTooltip('É bloqueado por', dependency)}${isDependencyInconsistent(dependency) ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`"
+            @click.stop="emit('dependencyClick', dependency)"
           >
             <UIcon name="i-lucide-link" class="h-3 w-3 shrink-0" />
-            <span class="min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]">{{ formatDependencyProjectLabel(dependency) }}</span>
+            <span class="min-w-0 max-w-[14rem] truncate">{{ formatDependencyBadgeLabel('Bloqueado por', dependency) }}</span>
             <UIcon v-if="isDependencyInconsistent(dependency)" name="i-lucide-triangle-alert" class="h-3 w-3 shrink-0" />
-          </span>
+            <span v-if="isDependencyInconsistent(dependency)" class="shrink-0 font-semibold">Inconsistente</span>
+          </button>
           <span v-if="demand.dependsOn.length > 2" class="text-[11px] text-muted">+{{ demand.dependsOn.length - 2 }}</span>
       </div>
 
       <div v-if="demand.dependedOnBy.length" class="flex flex-wrap gap-1">
-          <span
+          <button
             v-for="dependency in demand.dependedOnBy.slice(0, 2)"
             :key="dependency.demandId"
-            class="inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+            type="button"
+            class="inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-900/50"
             :title="getDependencyTooltip('Bloqueia', dependency)"
+            @click.stop="emit('dependencyClick', dependency)"
           >
             <UIcon name="i-lucide-link" class="h-3 w-3 shrink-0" />
-            <span class="min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]">{{ formatDependencyProjectLabel(dependency) }}</span>
-          </span>
+            <span class="min-w-0 max-w-[14rem] truncate">{{ formatDependencyBadgeLabel('Bloqueia', dependency) }}</span>
+          </button>
           <span v-if="demand.dependedOnBy.length > 2" class="text-[11px] text-muted">+{{ demand.dependedOnBy.length - 2 }}</span>
       </div>
     </div>

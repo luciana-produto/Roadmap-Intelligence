@@ -85,6 +85,7 @@ export interface RoadmapCapacitySummary {
   committedHours: number
   additionalHours: number
   totalDemandHours: number
+  nonEstimatedDemandCount?: number
   remainingHours?: number
   overCapacityHours?: number
 }

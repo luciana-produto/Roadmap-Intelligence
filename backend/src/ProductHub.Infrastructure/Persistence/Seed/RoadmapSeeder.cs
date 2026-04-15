@@ -14,7 +14,7 @@ public static class RoadmapSeeder
         DemandStatus Status,
         DemandType Type,
         DemandClassification Classification,
-        decimal Hours,
+        decimal? Hours,
         string[] ProductNames,
         string? Observation = null,
         string? JiraIssue = null,
@@ -100,7 +100,7 @@ public static class RoadmapSeeder
             DemandStatus.Deprioritized,
             DemandType.Additional,
             DemandClassification.Evolution,
-            24,
+            null,
             ["HUB CRM"],
             Observation: "Demanda deslocada para acomodar iniciativas mandatórias.",
             JiraIssue: "CROSS-231",
@@ -175,7 +175,7 @@ public static class RoadmapSeeder
             DemandStatus.Backlog,
             DemandType.Spillover,
             DemandClassification.Evolution,
-            44,
+            null,
             ["Retaguarda"],
             Observation: "Refinamento pendente com o time de plataforma.",
             JiraIssue: "RET-102",
@@ -186,6 +186,7 @@ public static class RoadmapSeeder
     [
         new("CROSS-201", "RET-101"),
         new("CROSS-214", "RET-101"),
+        new("CROSS-239", "CROSS-245"),
         new("CROSS-245", "RET-102")
     ];
 

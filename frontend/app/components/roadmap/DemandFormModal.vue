@@ -257,6 +257,16 @@ function removeDependency(demandId: string) {
   form.dependencyDemandIds = (form.dependencyDemandIds ?? []).filter(id => id !== demandId)
 }
 
+function updateHours(value: string | number | null | undefined) {
+  if (value === '' || value == null) {
+    form.hours = undefined
+    return
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value)
+  form.hours = Number.isNaN(parsed) ? undefined : parsed
+}
+
 const isSubmitDisabled = computed(() =>
   !form.title
   || !form.projectId
@@ -273,7 +283,11 @@ async function handleSubmit() {
   if (isSubmitDisabled.value) return
   isSubmitting.value = true
   try {
-    emit('submit', { ...form, classification: form.classification as DemandClassification })
+    emit('submit', {
+      ...form,
+      hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
+      classification: form.classification as DemandClassification
+    })
   }
   finally {
     isSubmitting.value = false
@@ -364,12 +378,13 @@ async function handleSubmit() {
 
           <UFormField label="Horas">
             <UInput
-              v-model.number="form.hours"
+              :model-value="form.hours ?? ''"
               type="number"
               min="0"
               step="0.5"
               placeholder="Ex: 8"
               class="w-full"
+              @update:model-value="updateHours"
             />
           </UFormField>
         </div>
@@ -468,7 +483,7 @@ async function handleSubmit() {
         <!-- Status + Marcação de Impedimento (somente edição) -->
         <div
           v-if="isEdit"
-          class="grid grid-cols-1 gap-3 items-start sm:grid-cols-2"
+          class="grid grid-cols-1 gap-3 items-start sm:grid-cols-3"
         >
           <UFormField label="Status">
             <USelect
@@ -494,19 +509,19 @@ async function handleSubmit() {
             </div>
           </UFormField>
 
-        </div>
+          <UFormField
+            v-if="deliveryDateRequired"
+            label="Data de entrega *"
+          >
+            <UInput
+              v-model="form.deliveryDate"
+              type="date"
+              class="w-full"
+              :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
 
-        <UFormField
-          v-if="isEdit && deliveryDateRequired"
-          label="Data de entrega *"
-        >
-          <UInput
-            v-model="form.deliveryDate"
-            type="date"
-            class="w-full"
-            :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
-          />
-        </UFormField>
+        </div>
 
         <!-- Motivo do impedimento -->
         <UFormField

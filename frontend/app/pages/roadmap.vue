@@ -14,15 +14,7 @@ const toast = useToast()
 const { projects, demands, dependencyOptions, customerSuggestions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
 
 // ─── View mode ───────────────────────────────────────────────────────────────
-const viewMode = ref<'kanban' | 'list'>('list')
-
-// ─── Status columns ───────────────────────────────────────────────────────────
-const statusColumns = [
-  { key: 'Backlog' as DemandStatus,       label: 'Backlog',       icon: 'i-lucide-circle-dashed' },
-  { key: 'InProgress' as DemandStatus,    label: 'Em andamento',  icon: 'i-lucide-loader-circle' },
-  { key: 'Done' as DemandStatus,          label: 'Concluído',     icon: 'i-lucide-circle-check-big' },
-  { key: 'Deprioritized' as DemandStatus, label: 'Despriorizado', icon: 'i-lucide-circle-arrow-down' }
-]
+const viewMode = ref<'list'>('list')
 
 // ─── Quarter phase ────────────────────────────────────────────────────────────
 const now = new Date()
@@ -93,8 +85,8 @@ function formatDependencySummaryLine(dependency: DemandDependency) {
   return `${dependency.projectName} · ${dependency.title}`
 }
 
-function formatDependencyProjectLabel(dependency: DemandDependency) {
-  return dependency.projectName.toUpperCase()
+function formatDependencyBadgeLabel(prefix: 'Bloqueado por' | 'Bloqueia', dependency: DemandDependency) {
+  return `${prefix} ${dependency.projectName}`
 }
 
 function compareQuarterPosition(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber'>, right: Pick<DemandDependency, 'quarterYear' | 'quarterNumber'>) {
@@ -116,6 +108,33 @@ function isDependencyInconsistent(demand: RoadmapDemand, dependency: DemandDepen
   return compareQuarterPosition(demand, dependency) < 0
 }
 
+function hasInconsistentDependency(demand: RoadmapDemand) {
+  return demand.dependsOn.some(dependency => isDependencyInconsistent(demand, dependency))
+}
+
+function isDemandEstimated(demand: Pick<RoadmapDemand, 'hours'>) {
+  return typeof demand.hours === 'number' && demand.hours > 0
+}
+
+async function openDependencyDemand(dependency: DemandDependency) {
+  let targetDemand = demands.value.find(demand => demand.id === dependency.demandId)
+
+  if (!targetDemand) {
+    selectedProjectId.value = dependency.projectId
+    selectedQuarterYear.value = null
+    selectedQuarterNumber.value = null
+    await roadmapStore.fetchDemands()
+    targetDemand = demands.value.find(demand => demand.id === dependency.demandId)
+  }
+
+  if (!targetDemand) {
+    toast.add({ title: 'Demanda vinculada não encontrada', color: 'warning' })
+    return
+  }
+
+  openEditModal(targetDemand)
+}
+
 function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependency: DemandDependency) {
   return `${prefix} ${dependency.projectName}: ${dependency.title}`
 }
@@ -134,20 +153,22 @@ function isAdditionalDemand(demand: Pick<RoadmapDemand, 'type'>): boolean {
   return demand.type === 'Additional'
 }
 
-function getDemandGroupOrder(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>): number {
-  if (isBacklogDemand(demand as RoadmapDemand)) return 2
-  if (isAdditionalDemand(demand)) return 1
-  return 0
-}
-
-function getDemandGroupKey(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>): 'regular' | 'additional' | 'backlog' {
-  if (isBacklogDemand(demand as RoadmapDemand)) return 'backlog'
+function getDemandGroupKey(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>): 'regular' | 'additional' {
   if (isAdditionalDemand(demand)) return 'additional'
   return 'regular'
 }
 
 function compareListDemandGroups(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>, right: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>) {
-  return getDemandGroupOrder(left) - getDemandGroupOrder(right)
+  const leftBacklog = isBacklogDemand(left as RoadmapDemand)
+  const rightBacklog = isBacklogDemand(right as RoadmapDemand)
+  if (leftBacklog !== rightBacklog) return leftBacklog ? 1 : -1
+
+  if (left.quarterYear !== right.quarterYear) return left.quarterYear - right.quarterYear
+  if (left.quarterNumber !== right.quarterNumber) return left.quarterNumber - right.quarterNumber
+
+  const leftAdditional = isAdditionalDemand(left) ? 1 : 0
+  const rightAdditional = isAdditionalDemand(right) ? 1 : 0
+  return leftAdditional - rightAdditional
 }
 
 function withListGroupSorting(compareWithinGroup: (left: RoadmapDemand, right: RoadmapDemand) => number) {
@@ -161,12 +182,7 @@ function withListGroupSorting(compareWithinGroup: (left: RoadmapDemand, right: R
 }
 
 // ─── Filters ──────────────────────────────────────────────────────────────────
-const filterText = ref('')
 const filterProducts = ref<string[]>([])
-const filterCustomer = ref('')
-const filterTypes = ref<DemandType[]>([])
-const filterClassifications = ref<DemandClassification[]>([])
-const showKanbanFilters = ref(false)
 
 const demandTypes: DemandType[] = ['Planned', 'Spillover', 'Unplanned', 'Additional']
 const demandClassifications: DemandClassification[] = [
@@ -175,14 +191,6 @@ const demandClassifications: DemandClassification[] = [
 
 const selectedProjectProducts = computed(() =>
   projects.value.find(p => p.id === selectedProjectId.value)?.products ?? []
-)
-
-const hasActiveFilters = computed(() =>
-  !!(filterText.value || filterProducts.value.length || filterCustomer.value || filterTypes.value.length || filterClassifications.value.length)
-)
-const activeFilterCount = computed(() =>
-  [filterText.value, filterCustomer.value].filter(Boolean).length
-  + filterProducts.value.length + filterTypes.value.length + filterClassifications.value.length
 )
 
 const activeCapacityScope = computed(() => {
@@ -231,6 +239,10 @@ const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
     .filter(demand => demand.type === 'Additional')
     .reduce((total, demand) => total + (demand.hours ?? 0), 0)
 
+  const nonEstimatedDemandCount = quarterScopedDemands.value
+    .filter(demand => !isDemandEstimated(demand))
+    .length
+
   const configuredCapacity = capacitySummary.value?.capacityHours
   const remainingHours = typeof configuredCapacity === 'number'
     ? Math.max(configuredCapacity - committedHours, 0)
@@ -250,6 +262,7 @@ const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
     committedHours,
     additionalHours,
     totalDemandHours: committedHours + additionalHours,
+    nonEstimatedDemandCount,
     remainingHours,
     overCapacityHours
   }
@@ -305,6 +318,18 @@ const capacityPercentTone = computed(() => {
 const capacityCommittedTone = computed(() => {
   if (!capacityConfigured.value) return 'text-highlighted'
   return capacityIsOver.value ? 'text-red-600 dark:text-red-300' : 'text-highlighted'
+})
+
+const capacityUnestimatedTone = computed(() => {
+  if ((displayCapacitySummary.value?.nonEstimatedDemandCount ?? 0) > 0)
+    return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+
+  return 'border-default bg-default text-muted'
+})
+
+const capacityUnestimatedLabel = computed(() => {
+  const count = displayCapacitySummary.value?.nonEstimatedDemandCount ?? 0
+  return `${count} ${count === 1 ? 'demanda sem estimativa' : 'demandas sem estimativa'}`
 })
 
 const scopedDemandTotalHours = computed(() =>
@@ -395,32 +420,6 @@ const typeSummaryDot: Record<DemandType, string> = {
   Additional: 'bg-blue-500'
 }
 
-function toggleProductFilter(id: string) {
-  const idx = filterProducts.value.indexOf(id)
-  if (idx >= 0) filterProducts.value.splice(idx, 1)
-  else filterProducts.value.push(id)
-}
-
-function toggleTypeFilter(type: DemandType) {
-  const idx = filterTypes.value.indexOf(type)
-  if (idx >= 0) filterTypes.value.splice(idx, 1)
-  else filterTypes.value.push(type)
-}
-
-function toggleClassificationFilter(cls: DemandClassification) {
-  const idx = filterClassifications.value.indexOf(cls)
-  if (idx >= 0) filterClassifications.value.splice(idx, 1)
-  else filterClassifications.value.push(cls)
-}
-
-function clearFilters() {
-  filterText.value = ''
-  filterProducts.value = []
-  filterCustomer.value = ''
-  filterTypes.value = []
-  filterClassifications.value = []
-}
-
 watch(activeCapacityScope, async (scope) => {
   if (!scope) {
     roadmapStore.clearCapacity()
@@ -444,12 +443,6 @@ const quarterFilteredDemands = computed(() => {
     const groupComparison = compareListDemandGroups(left, right)
     if (groupComparison !== 0)
       return groupComparison
-
-    if (left.quarterYear !== right.quarterYear)
-      return left.quarterYear - right.quarterYear
-
-    if (left.quarterNumber !== right.quarterNumber)
-      return left.quarterNumber - right.quarterNumber
 
     return left.sortOrder - right.sortOrder
   })
@@ -480,26 +473,10 @@ const filteredDemands = computed(() => {
   return list
 })
 
-function getDemandsForStatus(status: DemandStatus) {
-  return filteredDemands.value.filter(d => d.status === status)
-}
-
 // ─── Drag and Drop ────────────────────────────────────────────────────────────
-const draggingId = ref<string | null>(null)
-const kanbanListRefs = reactive<Record<DemandStatus, HTMLElement | null>>({
-  Backlog: null,
-  InProgress: null,
-  Done: null,
-  Deprioritized: null
-})
-const kanbanSortables: Partial<Record<DemandStatus, Sortable>> = {}
 const listScrollContainerRef = ref<HTMLElement | null>(null)
 const listTableRootRef = ref<HTMLElement | null>(null)
 let listBodySortable: Sortable | null = null
-
-function setKanbanListRef(status: DemandStatus, element: Element | null) {
-  kanbanListRefs[status] = element as HTMLElement | null
-}
 
 function moveDemandId(
   ids: string[],
@@ -545,7 +522,7 @@ function isSameDemandGroup(
 
 function getScopedDemandIds(demand: RoadmapDemand) {
   return demands.value
-    .filter(item => isSameDemandGroup(item, demand))
+    .filter(item => isSameDemandScope(item, demand))
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .map(item => item.id)
 }
@@ -607,65 +584,6 @@ async function persistDemandPriority(
   }
 }
 
-function getKanbanFallbackAnchors(
-  status: DemandStatus,
-  idsByStatus: Record<DemandStatus, string[]>
-) {
-  const statusIndex = statusColumns.findIndex(column => column.key === status)
-
-  for (let index = statusIndex - 1; index >= 0; index--) {
-    const previousIds = idsByStatus[statusColumns[index]!.key]
-    if (previousIds.length)
-      return { beforeId: null, afterId: previousIds[previousIds.length - 1] ?? null }
-  }
-
-  for (let index = statusIndex + 1; index < statusColumns.length; index++) {
-    const nextIds = idsByStatus[statusColumns[index]!.key]
-    if (nextIds.length)
-      return { beforeId: nextIds[0] ?? null, afterId: null }
-  }
-
-  return { beforeId: null, afterId: null }
-}
-
-async function handleKanbanSortEnd(event: Sortable.SortableEvent, targetStatus: DemandStatus) {
-  const movedId = (event.item as HTMLElement | null)?.dataset.demandId
-  draggingId.value = null
-
-  if (!movedId || event.newIndex == null) {
-    await roadmapStore.fetchDemands()
-    return
-  }
-
-  const demand = quarterFilteredDemands.value.find(item => item.id === movedId)
-  if (!demand) {
-    await roadmapStore.fetchDemands()
-    return
-  }
-
-  const idsByStatus = Object.fromEntries(
-    statusColumns.map(column => [column.key, getDemandsForStatus(column.key).map(item => item.id)])
-  ) as Record<DemandStatus, string[]>
-
-  for (const status of Object.keys(idsByStatus) as DemandStatus[])
-    idsByStatus[status] = idsByStatus[status].filter(id => id !== movedId)
-
-  idsByStatus[targetStatus].splice(event.newIndex, 0, movedId)
-
-  const beforeId = idsByStatus[targetStatus][event.newIndex + 1] ?? null
-  const afterId = idsByStatus[targetStatus][event.newIndex - 1] ?? null
-  const fallbackAnchors = !beforeId && !afterId
-    ? getKanbanFallbackAnchors(targetStatus, idsByStatus)
-    : { beforeId: null, afterId: null }
-
-  await persistDemandPriority(
-    demand,
-    targetStatus,
-    beforeId ?? fallbackAnchors.beforeId,
-    afterId ?? fallbackAnchors.afterId
-  )
-}
-
 async function handleListSortEnd(oldIndex: number, newIndex: number) {
   const visibleRows = listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? quarterFilteredDemands.value
   const demand = visibleRows[oldIndex]
@@ -675,19 +593,67 @@ async function handleListSortEnd(oldIndex: number, newIndex: number) {
   }
 
   const remainingRows = visibleRows.filter((_, index) => index !== oldIndex)
-  const nextScopedRow = remainingRows.slice(newIndex).find(item => isSameDemandGroup(item, demand))
-  const previousScopedRow = [...remainingRows.slice(0, newIndex)].reverse().find(item => isSameDemandGroup(item, demand))
-  const beforeId = nextScopedRow?.id ?? null
-  const afterId = beforeId ? null : previousScopedRow?.id ?? null
+
+  // Determine target quarter from drop position
+  const rowAtNewIndex = remainingRows[newIndex]
+  const rowBeforeNewIndex = newIndex > 0 ? remainingRows[newIndex - 1] : null
+  const targetQuarterRef = rowAtNewIndex ?? rowBeforeNewIndex
+
+  if (!targetQuarterRef) {
+    await roadmapStore.fetchDemands()
+    return
+  }
+
+  const targetQuarter = { quarterYear: targetQuarterRef.quarterYear, quarterNumber: targetQuarterRef.quarterNumber }
+  const quarterChanged = demand.quarterYear !== targetQuarter.quarterYear || demand.quarterNumber !== targetQuarter.quarterNumber
 
   listSorting.value = []
-  await persistDemandPriority(demand, demand.status, beforeId, afterId)
-}
 
-function destroyKanbanSortables() {
-  for (const status of Object.keys(kanbanSortables) as DemandStatus[]) {
-    kanbanSortables[status]?.destroy()
-    delete kanbanSortables[status]
+  if (quarterChanged) {
+    const scrollTop = listScrollContainerRef.value?.scrollTop ?? null
+    const scrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+    // Find anchors in target quarter among same-group demands
+    const sameGroupInTarget = (item: RoadmapDemand) =>
+      item.quarterYear === targetQuarter.quarterYear
+      && item.quarterNumber === targetQuarter.quarterNumber
+      && getDemandGroupKey(item) === getDemandGroupKey(demand)
+
+    const nextScopedRow = remainingRows.slice(newIndex).find(sameGroupInTarget)
+    const previousScopedRow = [...remainingRows.slice(0, newIndex)].reverse().find(sameGroupInTarget)
+    const beforeId = nextScopedRow?.id ?? null
+    const afterId = beforeId ? null : previousScopedRow?.id ?? null
+
+    try {
+      const updatedDemand = await roadmapStore.updateDemand(
+        demand.id,
+        buildDemandFormData(demand, {
+          quarterYear: targetQuarter.quarterYear,
+          quarterNumber: targetQuarter.quarterNumber,
+          status: demand.status
+        })
+      )
+
+      await persistDemandPriority(updatedDemand, updatedDemand.status, beforeId, afterId)
+      await refreshListPresentation(scrollTop, scrollLeft)
+
+      toast.add({
+        title: 'Demanda movida de quarter',
+        description: `${demand.title} movida para ${quarterShortLabel(`${targetQuarter.quarterNumber}-${targetQuarter.quarterYear}`)}`,
+        color: 'success'
+      })
+    }
+    catch {
+      // handled by useApi
+    }
+  }
+  else {
+    const nextScopedRow = remainingRows.slice(newIndex).find(item => isSameDemandGroup(item, demand))
+    const previousScopedRow = [...remainingRows.slice(0, newIndex)].reverse().find(item => isSameDemandGroup(item, demand))
+    const beforeId = nextScopedRow?.id ?? null
+    const afterId = beforeId ? null : previousScopedRow?.id ?? null
+
+    await persistDemandPriority(demand, demand.status, beforeId, afterId)
   }
 }
 
@@ -696,31 +662,8 @@ function destroyListSortable() {
   listBodySortable = null
 }
 
-function initKanbanSortables() {
-  destroyKanbanSortables()
-  if (viewMode.value !== 'kanban') return
-
-  for (const column of statusColumns) {
-    const element = kanbanListRefs[column.key]
-    if (!element) continue
-
-    kanbanSortables[column.key] = Sortable.create(element, {
-      group: 'roadmap-kanban-priority',
-      animation: 150,
-      draggable: '.kanban-demand-item',
-      dataIdAttr: 'data-demand-id',
-      ghostClass: 'opacity-40',
-      onStart: (event) => {
-        draggingId.value = (event.item as HTMLElement | null)?.dataset.demandId ?? null
-      },
-      onEnd: (event) => handleKanbanSortEnd(event, column.key)
-    })
-  }
-}
-
 function initListSortable() {
   destroyListSortable()
-  if (viewMode.value !== 'list') return
 
   const tbody = listTableRootRef.value?.querySelector('tbody')
   if (!tbody) return
@@ -738,20 +681,21 @@ function initListSortable() {
     filter: 'a,input,textarea,[role="button"]',
     preventOnFilter: false,
     onMove: (event) => {
-      const draggedScope = (event.dragged as HTMLElement | null)?.dataset.scopeKey
+      const dragged = event.dragged as HTMLElement | null
       const related = event.related as HTMLElement | null
-      const relatedScope = related?.dataset.scopeKey
 
-      if (!draggedScope)
+      if (!related?.dataset.demandId)
         return false
 
-      if (!related)
+      const draggedQuarter = dragged?.dataset.quarterKey
+      const relatedQuarter = related.dataset.quarterKey
+
+      // Cross-quarter: always allow
+      if (draggedQuarter !== relatedQuarter)
         return true
 
-      if (!relatedScope)
-        return false
-
-      return draggedScope === relatedScope
+      // Same quarter: only within same type group
+      return dragged?.dataset.scopeKey === related.dataset.scopeKey
     },
     onEnd: (event) => {
       const oldIndex = event.oldDraggableIndex ?? event.oldIndex
@@ -769,6 +713,23 @@ function syncListSectionDividers() {
   const tbody = listTableRootRef.value?.querySelector('tbody')
   if (!tbody) return
 
+  const table = tbody.closest('table')
+
+  // Inject <colgroup> to lock column widths (prevents colSpan dividers from breaking table-fixed)
+  if (table) {
+    let colgroup = table.querySelector('colgroup')
+    if (!colgroup) {
+      colgroup = document.createElement('colgroup')
+      table.insertBefore(colgroup, table.firstChild)
+    }
+    colgroup.innerHTML = ''
+    for (const col of listOrderedCols.value) {
+      const colEl = document.createElement('col')
+      colEl.style.width = listColWidth(col.id, col.defaultWidth)
+      colgroup.appendChild(colEl)
+    }
+  }
+
   tbody.querySelectorAll('.list-section-divider').forEach(node => node.remove())
 
   const rows = Array.from(tbody.querySelectorAll('tr')) as HTMLTableRowElement[]
@@ -778,33 +739,70 @@ function syncListSectionDividers() {
     const demand = visibleRows[index]
     if (!demand) {
       row.classList.remove('list-demand-row')
+      row.classList.remove('bg-red-50/70', 'dark:bg-red-950/20')
       delete row.dataset.demandId
       delete row.dataset.scopeKey
+      delete row.dataset.quarterKey
       return
     }
 
     row.classList.add('list-demand-row')
     row.dataset.demandId = demand.id
     row.dataset.scopeKey = getDemandScopeKey(demand)
+    row.dataset.quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
+
+    const inconsistent = hasInconsistentDependency(demand)
+    row.classList.toggle('bg-red-50/70', inconsistent)
+    row.classList.toggle('dark:bg-red-950/20', inconsistent)
+
+    for (const cell of Array.from(row.children) as HTMLTableCellElement[]) {
+      cell.classList.toggle('bg-red-50/70', inconsistent)
+      cell.classList.toggle('dark:bg-red-950/20', inconsistent)
+    }
   })
 
-  const dividerConfigs = [
-    {
-      demand: visibleRows.find(demand => isAdditionalDemand(demand)),
-      shouldRender: visibleRows.some(demand => !isAdditionalDemand(demand) && !isBacklogDemand(demand)),
-      label: 'Adicionais - Não comprometidas'
-    },
-    {
-      demand: visibleRows.find(demand => isBacklogDemand(demand)),
-      shouldRender: visibleRows.some(demand => !isBacklogDemand(demand)),
-      label: 'Backlog'
+  const distinctQuarters = new Set(visibleRows.map(d => `${d.quarterYear}:${d.quarterNumber}`))
+  const multipleQuarters = distinctQuarters.size > 1
+
+  const dividerConfigs: { demandId: string; label: string; kind: 'quarter' | 'additional' }[] = []
+  let prevQuarterKey = ''
+
+  for (let i = 0; i < visibleRows.length; i++) {
+    const demand = visibleRows[i]!
+    const quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
+    const groupKey = getDemandGroupKey(demand)
+    const isNewQuarter = quarterKey !== prevQuarterKey
+
+    if (isNewQuarter) {
+      prevQuarterKey = quarterKey
+
+      if (multipleQuarters) {
+        const label = isBacklogDemand(demand) ? 'Backlog' : demand.quarterLabel
+        dividerConfigs.push({ demandId: demand.id, label, kind: 'quarter' })
+      }
     }
-  ]
 
-  dividerConfigs.forEach(({ demand, shouldRender, label }) => {
-    if (!demand || !shouldRender) return
+    if (groupKey === 'additional') {
+      const isFirstAdditional = !visibleRows.slice(0, i).some(d =>
+        `${d.quarterYear}:${d.quarterNumber}` === quarterKey && getDemandGroupKey(d) === 'additional'
+      )
+      if (isFirstAdditional) {
+        const hasRegularInQuarter = visibleRows.some(d =>
+          `${d.quarterYear}:${d.quarterNumber}` === quarterKey && getDemandGroupKey(d) === 'regular'
+        )
+        if (hasRegularInQuarter) {
+          const quarterLabel = isBacklogDemand(demand) ? 'Backlog' : demand.quarterLabel
+          const label = multipleQuarters
+            ? `${quarterLabel} — Adicionais - Não comprometidas`
+            : 'Adicionais - Não comprometidas'
+          dividerConfigs.push({ demandId: demand.id, label, kind: 'additional' })
+        }
+      }
+    }
+  }
 
-    const targetRow = rows.find(row => row.dataset.demandId === demand.id)
+  dividerConfigs.forEach(({ demandId, label, kind }) => {
+    const targetRow = rows.find(row => row.dataset.demandId === demandId)
     if (!targetRow) return
 
     const dividerRow = document.createElement('tr')
@@ -812,7 +810,14 @@ function syncListSectionDividers() {
 
     const dividerCell = document.createElement('td')
     dividerCell.colSpan = listOrderedCols.value.length
-    dividerCell.className = 'border-y-2 border-default bg-gray-200 px-3 py-2 text-center text-xs font-extrabold uppercase tracking-[0.2em] text-gray-900 dark:bg-gray-700/80 dark:text-gray-50'
+
+    if (kind === 'quarter') {
+      dividerCell.className = 'border-y-2 border-indigo-300 bg-indigo-100 px-3 py-2.5 text-center text-xs font-extrabold uppercase tracking-[0.2em] text-indigo-800 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200'
+    }
+    else {
+      dividerCell.className = 'border-y border-default bg-gray-100 px-3 py-1.5 text-center text-[11px] font-bold uppercase tracking-[0.15em] text-gray-500 dark:bg-gray-800/60 dark:text-gray-400'
+    }
+
     dividerCell.textContent = label
 
     dividerRow.appendChild(dividerCell)
@@ -824,7 +829,6 @@ watch(
   () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}`,
   async () => {
     await nextTick()
-    initKanbanSortables()
     syncListSectionDividers()
     initListSortable()
   },
@@ -977,13 +981,13 @@ const statusTextClass: Record<DemandStatus, string> = {
   Backlog: 'text-muted',
   InProgress: 'text-blue-600 dark:text-blue-400',
   Done: 'text-green-600 dark:text-green-400',
-  Deprioritized: 'text-amber-600 dark:text-amber-400'
+  Deprioritized: 'text-red-600 dark:text-red-400'
 }
 const statusDotClass: Record<DemandStatus, string> = {
   Backlog: 'bg-neutral-400 dark:bg-neutral-500',
   InProgress: 'bg-blue-500 dark:bg-blue-400',
   Done: 'bg-green-500 dark:bg-green-400',
-  Deprioritized: 'bg-amber-500 dark:bg-amber-400'
+  Deprioritized: 'bg-red-500 dark:bg-red-400'
 }
 const typeLabels: Record<DemandType, string> = {
   Planned: 'Planejado', Spillover: 'Transbordo', Unplanned: 'Não Planejado', Additional: 'Adicional'
@@ -1027,11 +1031,19 @@ const listTableKey = computed(() =>
     .map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`)
     .join('|')
 )
-const priorityRankByDemandId = computed(() =>
-  Object.fromEntries(
-    quarterFilteredDemands.value.map((demand, index) => [demand.id, index + 1])
-  ) as Record<string, number>
-)
+const priorityRankByDemandId = computed(() => {
+  const result: Record<string, number> = {}
+  const counterByQuarter: Record<string, number> = {}
+
+  for (const demand of quarterFilteredDemands.value) {
+    const quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
+    const counter = (counterByQuarter[quarterKey] ?? 0) + 1
+    counterByQuarter[quarterKey] = counter
+    result[demand.id] = counter
+  }
+
+  return result
+})
 const selectedDemandIds = ref<string[]>([])
 const isBulkPlanning = ref(false)
 const visibleListDemandIds = computed(() => visibleListRows.value.map(demand => demand.id))
@@ -1093,7 +1105,7 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'classification', label: 'Classificação', defaultWidth: 148, filterType: 'multi-select', selectOptions: CLASSIFICATION_SELECT_OPTIONS, allLabel: 'Todas as classificações', itemLabelPlural: 'classificações' },
   { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text' },
   { id: 'products',       label: 'Produtos',      defaultWidth: 136, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
-  { id: 'hours',          label: 'Horas',         defaultWidth: 68,  disableFilter: true, alignRight: true },
+  { id: 'hours',          label: 'Horas',         defaultWidth: 60, disableFilter: true, alignRight: true },
   { id: 'status',         label: 'Status',        defaultWidth: 140, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 150, filterType: 'text' },
   { id: '_actions',       label: '',              defaultWidth: 80,  disableFilter: true, disableSorting: true, alignRight: true },
@@ -1222,7 +1234,6 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
       )
     }
 
-    await roadmapStore.fetchDemands()
     await refreshListPresentation(listScrollTop, listScrollLeft)
 
     selectedDemandIds.value = []
@@ -1275,27 +1286,36 @@ const UIconComp   = resolveComponent('UIcon')
 const UPopoverComp = resolveComponent('UPopover')
 
 function renderDependencyBadge(dependency: DemandDependency) {
-  return h('span', {
-    class: 'inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
-    title: formatDependencySummaryLine(dependency)
+  return h('button', {
+    type: 'button',
+    class: 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-900/50',
+    title: formatDependencySummaryLine(dependency),
+    onClick: () => openDependencyDemand(dependency)
   }, [
     h(UIconComp, { name: 'i-lucide-link', class: 'h-3 w-3 shrink-0' }),
-    h('span', { class: 'min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]' }, formatDependencyProjectLabel(dependency))
+    h('span', { class: 'min-w-0 max-w-[14rem] truncate' }, formatDependencyBadgeLabel('Bloqueia', dependency))
   ])
 }
 
 function renderDependsOnBadge(demand: RoadmapDemand, dependency: DemandDependency) {
   const inconsistent = isDependencyInconsistent(demand, dependency)
 
-  return h('span', {
+  return h('button', {
+    type: 'button',
     class: inconsistent
-      ? 'inline-flex max-w-full items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
-      : 'inline-flex max-w-full items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
-    title: `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`
+      ? 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:border-red-700 dark:hover:bg-red-900/50'
+      : 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-900/50',
+    title: `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`,
+    onClick: () => openDependencyDemand(dependency)
   }, [
     h(UIconComp, { name: 'i-lucide-link', class: 'h-3 w-3 shrink-0' }),
-    h('span', { class: 'min-w-0 max-w-[9rem] truncate uppercase tracking-[0.04em]' }, formatDependencyProjectLabel(dependency)),
-    ...(inconsistent ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3 w-3 shrink-0' })] : [])
+    h('span', { class: 'min-w-0 max-w-[14rem] truncate' }, formatDependencyBadgeLabel('Bloqueado por', dependency)),
+    ...(inconsistent
+      ? [
+          h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3 w-3 shrink-0' }),
+          h('span', { class: 'shrink-0 font-semibold' }, 'Inconsistente')
+        ]
+      : [])
   ])
 }
 
@@ -1360,7 +1380,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { style: { td: () => ({ width: listColWidth('title', 360) }), th: () => ({ width: listColWidth('title', 360) }) } },
     cell: ({ row }) => {
       const d = row.original
-      const textNodes = [h('p', { class: 'font-medium text-highlighted truncate', title: d.description || undefined }, d.title)]
+      const isDeprioritized = d.status === 'Deprioritized'
+      const textNodes = [h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title)]
       if (d.jiraIssue) textNodes.push(h('p', { class: 'text-xs text-blue-500 font-mono' }, d.jiraIssue))
       if (d.dependsOn.length) {
         textNodes.push(
@@ -1375,10 +1396,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (d.dependedOnBy.length) {
         textNodes.push(
           h('div', { class: 'mt-1 flex flex-wrap gap-1' }, [
-              ...d.dependedOnBy.slice(0, 2).map(dependency => h('span', {
-                ...renderDependencyBadge(dependency).props,
-                title: getDependencyTooltip('Bloqueia', dependency)
-              }, renderDependencyBadge(dependency).children)),
+              ...d.dependedOnBy.slice(0, 2).map(dependency => renderDependencyBadge(dependency)),
               ...(d.dependedOnBy.length > 2
                 ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
                 : [])
@@ -1494,9 +1512,13 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => (left.hours ?? 0) - (right.hours ?? 0)),
     enableColumnFilter: false,
-    size: 68,
-    meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('hours', 68) }), th: () => ({ width: listColWidth('hours', 68) }) } },
-    cell: ({ row }) => h('span', { class: 'text-xs text-muted' }, row.original.hours ? `${row.original.hours}h` : '—'),
+    size: 60,
+    meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('hours', 60) }), th: () => ({ width: listColWidth('hours', 60) }) } },
+    cell: ({ row }) => isDemandEstimated(row.original)
+      ? h('span', { class: 'text-xs text-muted' }, `${row.original.hours}h`)
+      : h('span', {
+          class: 'inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+        }, '0h'),
   },
   {
     id: '_actions',
@@ -1564,7 +1586,7 @@ function buildListBlobUrl(rows: RoadmapDemand[]): string {
     if (c.id === 'classification') return classificationLabels[row.classification]
     if (c.id === 'products') return row.products.map(p => p.name).join(', ')
     if (c.id === 'customers') return formatDemandCustomers(row.customers)
-    if (c.id === 'hours') return row.hours ? `${row.hours}h` : ''
+    if (c.id === 'hours') return isDemandEstimated(row) ? `${row.hours}h` : 'Não estimada'
     return (row as unknown as Record<string, unknown>)[c.id] ?? ''
   }))
   const ws = XLSX.utils.aoa_to_sheet([header, ...data])
@@ -1589,7 +1611,6 @@ function toggleListExportMenu() {
 function closeListExportMenu() { listExportMenuOpen.value = false }
 
 onUnmounted(() => {
-  destroyKanbanSortables()
   destroyListSortable()
   if (listExportUrlVisible.value) URL.revokeObjectURL(listExportUrlVisible.value)
   if (listExportUrlFull.value) URL.revokeObjectURL(listExportUrlFull.value)
@@ -1670,25 +1691,6 @@ await Promise.all([
           </template>
         </UPopover>
 
-        <div class="flex items-center border border-default rounded-lg overflow-hidden">
-          <button
-            class="px-3 py-1.5 text-sm flex items-center gap-1.5 transition-colors"
-            :class="viewMode === 'kanban' ? 'bg-primary text-white' : 'text-muted hover:text-highlighted'"
-            @click="viewMode = 'kanban'"
-          >
-            <UIcon name="i-lucide-layout-dashboard" class="w-4 h-4" />
-            Kanban
-          </button>
-          <button
-            class="px-3 py-1.5 text-sm flex items-center gap-1.5 border-l border-default transition-colors"
-            :class="viewMode === 'list' ? 'bg-primary text-white' : 'text-muted hover:text-highlighted'"
-            @click="viewMode = 'list'"
-          >
-            <UIcon name="i-lucide-list" class="w-4 h-4" />
-            Lista
-          </button>
-        </div>
-
         <UButton
           icon="i-lucide-plus"
           label="Nova Demanda"
@@ -1725,6 +1727,13 @@ await Promise.all([
                 >
                   <UIcon :name="capacityIsOver ? 'i-lucide-circle-alert' : 'i-lucide-circle-check'" class="h-3 w-3" />
                   {{ capacityDeltaLabel }}: {{ capacityDeltaValue?.toLocaleString('pt-BR') ?? '—' }}h
+                </span>
+                <span
+                  class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+                  :class="capacityUnestimatedTone"
+                >
+                  <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
+                  {{ capacityUnestimatedLabel }}
                 </span>
               </div>
             </div>
@@ -1780,172 +1789,6 @@ await Promise.all([
       </div>
     </div>
 
-    <div
-      v-if="viewMode === 'kanban'"
-      class="space-y-2"
-    >
-      <div class="flex items-center justify-between gap-2 rounded-lg border border-default bg-elevated/30 px-3 py-2">
-        <div class="flex items-center gap-2 text-sm text-muted">
-          <UIcon name="i-lucide-sliders-horizontal" class="h-4 w-4" />
-          <span class="text-highlighted">Filtros do Kanban</span>
-          <UBadge v-if="hasActiveFilters" size="xs" color="primary" variant="solid">{{ activeFilterCount }}</UBadge>
-        </div>
-        <UButton
-          size="xs"
-          variant="ghost"
-          color="neutral"
-          :icon="showKanbanFilters ? 'i-lucide-chevron-up' : 'i-lucide-chevron-down'"
-          :label="showKanbanFilters ? 'Ocultar filtros' : 'Mostrar filtros'"
-          @click="showKanbanFilters = !showKanbanFilters"
-        />
-      </div>
-
-      <!-- Filter bar (Kanban only) -->
-      <div
-        v-if="showKanbanFilters"
-        class="bg-elevated border border-default rounded-xl p-3 space-y-2.5"
-      >
-      <!-- Text search + Customer -->
-      <div class="flex gap-2 flex-wrap">
-        <UInput
-          v-model="filterText"
-          placeholder="Buscar por título ou descrição..."
-          icon="i-lucide-search"
-          class="flex-1 min-w-[200px]"
-        />
-        <UInput
-          v-model="filterCustomer"
-          placeholder="Filtrar por cliente..."
-          icon="i-lucide-users"
-          class="w-52"
-        />
-      </div>
-      <div class="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <!-- Type multi-select -->
-        <div class="flex items-center gap-1.5 min-w-0">
-          <span class="text-xs text-muted shrink-0 w-14">Tipo:</span>
-          <UPopover>
-            <button class="flex items-center gap-1.5 text-xs border border-default rounded-lg px-2.5 py-1.5 bg-background hover:border-primary/40 transition-colors min-w-[160px] max-w-[220px]">
-              <span class="flex-1 text-left truncate text-highlighted">
-                {{ filterTypes.length === 0 ? 'Todos os tipos' : filterTypes.length === 1 ? typeLabels[filterTypes[0]] : `${filterTypes.length} tipos selecionados` }}
-              </span>
-              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
-            </button>
-            <template #content>
-              <div class="py-1 min-w-[180px]">
-                <button
-                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                  :class="filterTypes.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
-                  @click="filterTypes = []"
-                >
-                  <UIcon v-if="filterTypes.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
-                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  Todos os tipos
-                </button>
-                <button
-                  v-for="t in demandTypes"
-                  :key="t"
-                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                  :class="filterTypes.includes(t) ? 'text-primary' : 'text-highlighted'"
-                  @click="toggleTypeFilter(t)"
-                >
-                  <UIcon v-if="filterTypes.includes(t)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
-                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  {{ typeLabels[t] }}
-                </button>
-              </div>
-            </template>
-          </UPopover>
-        </div>
-        <!-- Classification multi-select -->
-        <div class="flex items-center gap-1.5 min-w-0">
-          <span class="text-xs text-muted shrink-0 w-14">Class.:</span>
-          <UPopover>
-            <button class="flex items-center gap-1.5 text-xs border border-default rounded-lg px-2.5 py-1.5 bg-background hover:border-primary/40 transition-colors min-w-[180px] max-w-[240px]">
-              <span class="flex-1 text-left truncate text-highlighted">
-                {{ filterClassifications.length === 0 ? 'Todas as classificações' : filterClassifications.length === 1 ? classificationLabels[filterClassifications[0]] : `${filterClassifications.length} classificações` }}
-              </span>
-              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
-            </button>
-            <template #content>
-              <div class="py-1 min-w-[200px]">
-                <button
-                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                  :class="filterClassifications.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
-                  @click="filterClassifications = []"
-                >
-                  <UIcon v-if="filterClassifications.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
-                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  Todas as classificações
-                </button>
-                <button
-                  v-for="c in demandClassifications"
-                  :key="c"
-                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                  :class="filterClassifications.includes(c) ? 'text-primary' : 'text-highlighted'"
-                  @click="toggleClassificationFilter(c)"
-                >
-                  <UIcon v-if="filterClassifications.includes(c)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
-                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  {{ classificationLabels[c] }}
-                </button>
-              </div>
-            </template>
-          </UPopover>
-        </div>
-        <!-- Product multi-select -->
-        <div
-          v-if="selectedProjectProducts.length"
-          class="flex items-center gap-1.5 min-w-0"
-        >
-          <span class="text-xs text-muted shrink-0 w-14">Produtos:</span>
-          <UPopover>
-            <button class="flex items-center gap-1.5 text-xs border border-default rounded-lg px-2.5 py-1.5 bg-background hover:border-primary/40 transition-colors min-w-[180px] max-w-[240px]">
-              <span class="flex-1 text-left truncate text-highlighted">
-                {{ filterProducts.length === 0 ? 'Todos os produtos' : filterProducts.length === 1 ? selectedProjectProducts.find(product => product.id === filterProducts[0])?.name ?? '1 produto' : `${filterProducts.length} produtos` }}
-              </span>
-              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
-            </button>
-            <template #content>
-              <div class="py-1 min-w-[220px] max-h-72 overflow-y-auto">
-                <button
-                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                  :class="filterProducts.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
-                  @click="filterProducts = []"
-                >
-                  <UIcon v-if="filterProducts.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
-                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  Todos os produtos
-                </button>
-                <button
-                  v-for="product in selectedProjectProducts"
-                  :key="product.id"
-                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                  :class="filterProducts.includes(product.id) ? 'text-primary' : 'text-highlighted'"
-                  @click="toggleProductFilter(product.id)"
-                >
-                  <UIcon v-if="filterProducts.includes(product.id)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
-                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  {{ product.name }}
-                </button>
-              </div>
-            </template>
-          </UPopover>
-        </div>
-        <div v-if="hasActiveFilters" class="flex items-center min-w-0 sm:ml-auto">
-          <UButton
-            variant="ghost"
-            color="neutral"
-            size="xs"
-            icon="i-lucide-x"
-            :label="`Limpar filtros (${activeFilterCount})`"
-            @click="clearFilters"
-          />
-        </div>
-      </div>
-    </div>
-    </div>
-
     <!-- Loading -->
     <div
       v-if="isLoading"
@@ -1958,63 +1801,8 @@ await Promise.all([
     </div>
 
     <template v-else>
-      <!-- ── KANBAN VIEW ──────────────────────────────────────────────────── -->
-      <div
-        v-if="viewMode === 'kanban'"
-        class="overflow-x-auto pb-4"
-      >
-        <div class="flex gap-4 min-w-max">
-          <div
-            v-for="col in statusColumns"
-            :key="col.key"
-            class="w-72 shrink-0 rounded-xl p-1 transition-all duration-150"
-            :class="draggingId ? 'bg-primary/5 ring-2 ring-inset ring-primary/20' : 'ring-2 ring-inset ring-transparent'"
-          >
-            <!-- Column header -->
-            <div class="flex items-center gap-2 px-1 mb-3">
-              <UIcon
-                :name="col.icon"
-                class="w-4 h-4 text-muted"
-              />
-              <span class="text-sm font-semibold text-highlighted">{{ col.label }}</span>
-              <span class="text-xs text-muted bg-elevated border border-default rounded-full px-1.5 ml-auto">
-                {{ getDemandsForStatus(col.key).length }}
-              </span>
-            </div>
-
-            <!-- Demand cards -->
-            <div :ref="(el) => setKanbanListRef(col.key, el)" :data-status="col.key" class="space-y-2.5 min-h-24">
-              <div
-                v-for="demand in getDemandsForStatus(col.key)"
-                :key="demand.id"
-                :data-demand-id="demand.id"
-                class="kanban-demand-item cursor-grab active:cursor-grabbing select-none transition-opacity"
-                :class="draggingId === demand.id ? 'opacity-40' : ''"
-              >
-                <RoadmapDemandCard
-                  :demand="demand"
-                  :planning-quarter-options="planningQuarterOptions"
-                  @edit="openEditModal"
-                  @delete="promptDelete"
-                  @plan="planDemandToQuarter"
-                />
-              </div>
-
-              <div
-                v-if="!getDemandsForStatus(col.key).length"
-                class="border-2 border-dashed rounded-xl p-4 flex items-center justify-center text-xs text-muted transition-colors"
-                :class="draggingId ? 'border-primary' : 'border-default'"
-              >
-                {{ hasActiveFilters ? 'Sem resultados' : 'Nenhuma demanda' }}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- ── LIST VIEW ───────────────────────────────────────────────────── -->
       <UCard
-        v-else
         :ui="{ header: 'px-3 py-2 sm:px-3 sm:py-2', body: 'p-0 sm:p-0' }"
         class="ring-default overflow-hidden"
       >
@@ -2213,29 +2001,38 @@ await Promise.all([
             >
               <template #status-cell="{ row }">
                 <div
-                  class="flex items-center gap-1.5"
+                  class="flex flex-col gap-1"
                   :title="getDemandNotesTooltip(row.original) || statusLabels[row.original.status]"
                 >
-                  <span
-                    class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                    :class="statusDotClass[row.original.status]"
-                    aria-hidden="true"
-                  />
-                  <span class="text-xs font-medium" :class="statusTextClass[row.original.status]">
-                    {{ statusLabels[row.original.status] }}
-                  </span>
-                  <span
-                    v-if="row.original.isBlocked"
-                    class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
+                  <div class="flex items-center gap-1.5">
+                    <span
+                      class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                      :class="statusDotClass[row.original.status]"
+                      aria-hidden="true"
+                    />
+                    <span class="text-xs font-medium" :class="statusTextClass[row.original.status]">
+                      {{ statusLabels[row.original.status] }}
+                    </span>
+                    <span
+                      v-if="row.original.isBlocked"
+                      class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
+                    >
+                      <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
+                    </span>
+                    <span
+                      v-else-if="getDemandNotesTooltip(row.original)"
+                      class="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                    >
+                      <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
+                    </span>
+                  </div>
+                  <div
+                    v-if="row.original.status === 'Done' && row.original.deliveryDate"
+                    class="ml-4 flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400"
                   >
-                    <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
-                  </span>
-                  <span
-                    v-else-if="getDemandNotesTooltip(row.original)"
-                    class="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                  >
-                    <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
-                  </span>
+                    <UIcon name="i-lucide-calendar-check" class="h-3 w-3" />
+                    <span>{{ row.original.deliveryDate }}</span>
+                  </div>
                 </div>
               </template>
             </UTable>
