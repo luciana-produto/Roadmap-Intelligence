@@ -43,6 +43,7 @@ public static class DependencyInjection
         services.AddScoped<IRoadmapProjectRepository, RoadmapProjectRepository>();
         services.AddScoped<IRoadmapDemandRepository, RoadmapDemandRepository>();
         services.AddScoped<IRoadmapCapacityRepository, RoadmapCapacityRepository>();
+        services.AddScoped<IKpiRepository, KpiRepository>();
 
         return services;
     }

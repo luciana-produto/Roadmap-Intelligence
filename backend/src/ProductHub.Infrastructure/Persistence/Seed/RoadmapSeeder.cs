@@ -279,6 +279,82 @@ public static class RoadmapSeeder
 
         if (hasDependencyChanges)
             await context.SaveChangesAsync();
+
+        // ─── KPI Seed ────────────────────────────────────────────────────
+        await SeedKpisAsync(context, crossProject.Id, seededDemandIdsByKey);
+    }
+
+    private static async Task SeedKpisAsync(
+        AppDbContext context,
+        Guid projectId,
+        IDictionary<string, Guid> demandIdsByKey)
+    {
+        var existingKpis = await context.Kpis
+            .Where(k => k.ProjectId == projectId)
+            .ToListAsync();
+
+        if (existingKpis.Count > 0)
+            return;
+
+        var kpis = new[]
+        {
+            Kpi.Create(projectId, "Taxa de Churn Mensal", KpiType.Business, KpiLever.Customer,
+                "Percentual de clientes que cancelaram no mês",
+                "(Clientes cancelados / Total clientes início do mês) x 100",
+                2.5m, 3.1m),
+            Kpi.Create(projectId, "Receita Recorrente Mensal (MRR)", KpiType.Business, KpiLever.Growth,
+                "Receita mensal recorrente de assinaturas ativas",
+                "Soma de todas assinaturas ativas no mês",
+                850000m, 780000m),
+            Kpi.Create(projectId, "NPS do Produto", KpiType.Product, KpiLever.Customer,
+                "Net Promoter Score coletado trimestralmente",
+                "(% Promotores - % Detratores)",
+                70m, 62m),
+            Kpi.Create(projectId, "Taxa de Compliance Fiscal", KpiType.Quality, KpiLever.Efficiency,
+                "Percentual de notas fiscais emitidas sem rejeição",
+                "(NFs aprovadas / Total NFs emitidas) x 100",
+                99.5m, 98.8m),
+            Kpi.Create(projectId, "Tempo Médio de Onboarding", KpiType.Usability, KpiLever.Efficiency,
+                "Dias entre contratação e primeiro uso em produção",
+                "Média de dias entre data de contrato e primeiro pedido",
+                15m, 22m),
+            Kpi.Create(projectId, "Tickets de Suporte / Cliente", KpiType.Quality, KpiLever.Customer,
+                "Média de tickets abertos por cliente ativo no mês",
+                "Total tickets mês / Total clientes ativos",
+                1.5m, 2.1m)
+        };
+
+        foreach (var kpi in kpis)
+            await context.Kpis.AddAsync(kpi);
+
+        await context.SaveChangesAsync();
+
+        // Seed demand-KPI links
+        var kpiByName = kpis.ToDictionary(k => k.Name, StringComparer.OrdinalIgnoreCase);
+
+        var linkSeeds = new (string DemandKey, string KpiName, ImpactType Impact, decimal? EstimatedImpact, ConfidenceLevel Confidence)[]
+        {
+            ("CROSS-201", "Taxa de Churn Mensal", ImpactType.Decrease, 0.3m, ConfidenceLevel.Medium),
+            ("CROSS-201", "Tempo Médio de Onboarding", ImpactType.Decrease, 5m, ConfidenceLevel.High),
+            ("CROSS-214", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.5m, ConfidenceLevel.High),
+            ("CROSS-176", "NPS do Produto", ImpactType.Increase, 3m, ConfidenceLevel.Medium),
+            ("CROSS-223", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.2m, ConfidenceLevel.Low),
+            ("RET-101", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.7m, ConfidenceLevel.High),
+            ("RET-101", "Receita Recorrente Mensal (MRR)", ImpactType.Increase, 15000m, ConfidenceLevel.Medium)
+        };
+
+        foreach (var (demandKey, kpiName, impact, estimated, confidence) in linkSeeds)
+        {
+            if (!demandIdsByKey.TryGetValue(demandKey, out var demandId))
+                continue;
+            if (!kpiByName.TryGetValue(kpiName, out var kpi))
+                continue;
+
+            await context.DemandKpiLinks.AddAsync(
+                DemandKpiLink.FromRepository(demandId, kpi.Id, impact, estimated, confidence));
+        }
+
+        await context.SaveChangesAsync();
     }
 
     private static async Task<bool> SeedProjectDemandsAsync(

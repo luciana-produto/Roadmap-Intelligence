@@ -9,7 +9,9 @@ internal static class RoadmapDemandDtoMapper
         IReadOnlyDictionary<Guid, string> productNamesById,
         IReadOnlyDictionary<Guid, RoadmapDemand> demandsById,
         IReadOnlyDictionary<Guid, string> projectNamesById,
-        IEnumerable<RoadmapDemandDependency> dependencyLinks)
+        IEnumerable<RoadmapDemandDependency> dependencyLinks,
+        IReadOnlyDictionary<Guid, string>? kpiNamesById = null,
+        IEnumerable<DemandKpiLink>? kpiLinks = null)
     {
         var dependsOn = dependencyLinks
             .Where(link => link.DemandId == demand.Id)
@@ -24,6 +26,19 @@ internal static class RoadmapDemandDtoMapper
             .Select(link => MapDependency(link.DemandId, demandsById, projectNamesById))
             .Where(dto => dto is not null)
             .Cast<DemandDependencyDto>()
+            .ToList()
+            .AsReadOnly();
+
+        var kpiLinkDtos = (kpiLinks ?? [])
+            .Where(link => link.DemandId == demand.Id)
+            .Select(link => new DemandKpiLinkDto(
+                link.Id,
+                link.DemandId,
+                link.KpiId,
+                kpiNamesById != null && kpiNamesById.TryGetValue(link.KpiId, out var kpiName) ? kpiName : string.Empty,
+                link.ImpactType.ToString(),
+                link.EstimatedImpact,
+                link.ConfidenceLevel.ToString()))
             .ToList()
             .AsReadOnly();
 
@@ -54,6 +69,9 @@ internal static class RoadmapDemandDtoMapper
             dependsOn,
             dependedOnBy,
             demand.DeliveryDate,
+            demand.ProblemClarity,
+            demand.HasNoKpi,
+            kpiLinkDtos,
             demand.CreatedAt,
             demand.UpdatedAt);
     }

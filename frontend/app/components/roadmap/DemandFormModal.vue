@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { RoadmapDemand, RoadmapProject, DemandDependencyOption, DemandFormData, DemandType, DemandClassification, DemandStatus } from '~/types/roadmap'
+import type { RoadmapDemand, RoadmapProject, DemandDependencyOption, DemandFormData, DemandType, DemandClassification, DemandStatus, Kpi, DemandKpiLink, DemandKpiLinkInput, ImpactType, ConfidenceLevel } from '~/types/roadmap'
 
 type DemandFormState = Omit<DemandFormData, 'classification'> & {
   classification: DemandClassification | ''
@@ -14,11 +14,12 @@ const props = defineProps<{
   defaultProjectId?: string
   defaultQuarterYear?: number
   defaultQuarterNumber?: number
+  availableKpis?: Kpi[]
 }>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  submit: [data: DemandFormData]
+  submit: [data: DemandFormData, links: DemandKpiLinkInput[]]
 }>()
 
 const isEdit = computed(() => !!props.demand)
@@ -58,8 +59,14 @@ const statusOptions = [
   { value: 'Deprioritized', label: 'Despriorizado' }
 ]
 
+const resultTabs = [
+  { value: 'general', label: 'Geral' },
+  { value: 'result', label: 'Resultado' }
+] as const
+
 const customerInput = ref('')
 const dependencySearch = ref('')
+const activeTab = ref<'general' | 'result'>('general')
 
 const observationRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
@@ -81,8 +88,23 @@ const form = reactive<DemandFormState>({
   dependencyDemandIds: [],
   isBlocked: false,
   blockedReason: '',
-  deliveryDate: ''
+  deliveryDate: '',
+  problemClarity: undefined,
+  hasNoKpi: false
 })
+
+const kpiLinkEdits = ref<DemandKpiLinkInput[]>([])
+
+const impactTypeOptions = [
+  { value: 'Increase', label: 'Aumentar' },
+  { value: 'Decrease', label: 'Reduzir' }
+]
+
+const confidenceLevelOptions = [
+  { value: 'High', label: 'Alta' },
+  { value: 'Medium', label: 'Média' },
+  { value: 'Low', label: 'Baixa' }
+]
 
 const selectedQuarter = computed({
   get: () => `${form.quarterNumber}-${form.quarterYear}`,
@@ -112,6 +134,8 @@ function syncSingleProductSelection() {
 watch(() => props.open, (open) => {
   if (!open) return
 
+  activeTab.value = 'general'
+
   if (props.demand) {
     form.title = props.demand.title
     form.description = props.demand.description ?? ''
@@ -130,6 +154,14 @@ watch(() => props.open, (open) => {
     form.isBlocked = props.demand.isBlocked
     form.blockedReason = props.demand.blockedReason ?? ''
     form.deliveryDate = props.demand.deliveryDate ?? ''
+    form.problemClarity = props.demand.problemClarity ?? undefined
+    form.hasNoKpi = props.demand.hasNoKpi ?? false
+    kpiLinkEdits.value = (props.demand.kpiLinks ?? []).map(l => ({
+      kpiId: l.kpiId,
+      impactType: l.impactType,
+      estimatedImpact: l.estimatedImpact,
+      confidenceLevel: l.confidenceLevel
+    }))
     customerInput.value = ''
   }
   else {
@@ -150,6 +182,9 @@ watch(() => props.open, (open) => {
     form.isBlocked = false
     form.blockedReason = ''
     form.deliveryDate = ''
+    form.problemClarity = undefined
+    form.hasNoKpi = false
+    kpiLinkEdits.value = []
     customerInput.value = ''
     syncSingleProductSelection()
   }
@@ -267,6 +302,37 @@ function updateHours(value: string | number | null | undefined) {
   form.hours = Number.isNaN(parsed) ? undefined : parsed
 }
 
+function addKpiLink() {
+  kpiLinkEdits.value.push({
+    kpiId: '',
+    impactType: 'Increase',
+    estimatedImpact: undefined,
+    confidenceLevel: 'Medium'
+  })
+}
+
+function removeKpiLink(index: number) {
+  kpiLinkEdits.value.splice(index, 1)
+}
+
+const availableKpisForLink = computed(() => {
+  const usedIds = new Set(kpiLinkEdits.value.map(l => l.kpiId))
+  return (props.availableKpis ?? []).filter(k => !usedIds.has(k.id))
+})
+
+const kpiOptions = computed(() =>
+  (props.availableKpis ?? []).map(kpi => ({ value: kpi.id, label: kpi.name }))
+)
+
+function getKpiOptionsForRow(selectedKpiId: string) {
+  const selectedOption = kpiOptions.value.filter(option => option.value === selectedKpiId)
+  const availableOptions = kpiOptions.value.filter(option =>
+    option.value === selectedKpiId || availableKpisForLink.value.some(kpi => kpi.id === option.value)
+  )
+
+  return [...selectedOption, ...availableOptions.filter(option => option.value !== selectedKpiId)]
+}
+
 const isSubmitDisabled = computed(() =>
   !form.title
   || !form.projectId
@@ -283,11 +349,15 @@ async function handleSubmit() {
   if (isSubmitDisabled.value) return
   isSubmitting.value = true
   try {
+    const validLinks = form.hasNoKpi
+      ? []
+      : kpiLinkEdits.value.filter(link => link.kpiId)
+
     emit('submit', {
       ...form,
       hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
       classification: form.classification as DemandClassification
-    })
+    }, validLinks)
   }
   finally {
     isSubmitting.value = false
@@ -308,6 +378,20 @@ async function handleSubmit() {
         class="space-y-4"
         @submit.prevent="handleSubmit"
       >
+        <div class="flex gap-2 border-b border-default pb-3">
+          <button
+            v-for="tab in resultTabs"
+            :key="tab.value"
+            type="button"
+            class="rounded-lg px-3 py-2 text-sm font-medium transition-colors"
+            :class="activeTab === tab.value ? 'bg-primary text-inverted' : 'bg-elevated text-muted hover:text-highlighted'"
+            @click="activeTab = tab.value"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+
+        <template v-if="activeTab === 'general'">
         <!-- Título -->
         <UFormField label="Título" required>
           <UInput
@@ -629,6 +713,129 @@ async function handleSubmit() {
             </div>
           </div>
         </UFormField>
+        </template>
+
+        <template v-else>
+        <UCard :ui="{ body: 'p-4 space-y-4' }">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">Clareza do problema</h3>
+            <p class="mt-1 text-xs text-muted">
+              Sabemos qual problema estamos resolvendo - ou só estamos construindo alguma coisa?
+            </p>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+            <UFormField label="Nota de clareza (0 a 10)">
+              <UInput
+                :model-value="form.problemClarity ?? ''"
+                type="number"
+                min="0"
+                max="10"
+                step="1"
+                placeholder="0 = vago, 10 = validado"
+                class="w-full"
+                @update:model-value="(v: string | number | null | undefined) => form.problemClarity = v === '' || v == null ? undefined : Number(v)"
+              />
+            </UFormField>
+
+            <UFormField label="Opção de exceção">
+              <label class="flex h-10 items-center gap-2 cursor-pointer select-none">
+                <input
+                  v-model="form.hasNoKpi"
+                  type="checkbox"
+                  class="accent-primary w-4 h-4"
+                >
+                <span class="text-sm" :class="form.hasNoKpi ? 'text-warning font-medium' : 'text-muted'">
+                  Marcar demanda como sem KPI
+                </span>
+              </label>
+            </UFormField>
+          </div>
+        </UCard>
+
+        <UCard :ui="{ body: 'p-4 space-y-4' }">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">KPIs impactados</h3>
+            <p class="mt-1 text-xs text-muted">
+              Relacione a demanda aos indicadores que devem ser influenciados pela entrega.
+            </p>
+          </div>
+
+          <div v-if="form.hasNoKpi" class="rounded-lg border border-dashed border-warning/40 bg-warning/5 p-3 text-sm text-muted">
+            Esta demanda foi marcada como sem KPI vinculado.
+          </div>
+
+          <div v-else class="space-y-3">
+            <div
+              v-for="(link, idx) in kpiLinkEdits"
+              :key="idx"
+              class="rounded-lg border border-default bg-elevated p-3"
+            >
+              <div class="mb-3 flex items-center justify-between gap-3">
+                <span class="text-xs font-semibold uppercase tracking-[0.08em] text-muted">Vínculo {{ idx + 1 }}</span>
+                <UButton
+                  icon="i-lucide-trash-2"
+                  variant="ghost"
+                  size="xs"
+                  color="error"
+                  @click="removeKpiLink(idx)"
+                />
+              </div>
+
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-12">
+                <UFormField label="KPI relacionado" class="md:col-span-5">
+                  <USelect
+                    v-model="link.kpiId"
+                    :items="getKpiOptionsForRow(link.kpiId)"
+                    placeholder="Selecione um KPI"
+                    class="w-full"
+                  />
+                </UFormField>
+
+                <UFormField label="Tipo de impacto" class="md:col-span-3">
+                  <USelect
+                    v-model="link.impactType"
+                    :items="impactTypeOptions"
+                    class="w-full"
+                  />
+                </UFormField>
+
+                <UFormField label="Impacto estimado" class="md:col-span-2">
+                  <UInput
+                    v-model.number="link.estimatedImpact"
+                    type="number"
+                    step="0.1"
+                    placeholder="Ex: 3"
+                    class="w-full"
+                  />
+                </UFormField>
+
+                <UFormField label="Nível de confiança" class="md:col-span-2">
+                  <USelect
+                    v-model="link.confidenceLevel"
+                    :items="confidenceLevelOptions"
+                    class="w-full"
+                  />
+                </UFormField>
+              </div>
+            </div>
+
+            <UButton
+              v-if="availableKpisForLink.length || !kpiLinkEdits.length"
+              type="button"
+              icon="i-lucide-plus"
+              label="Adicionar KPI impactado"
+              variant="soft"
+              size="sm"
+              @click="addKpiLink"
+            />
+
+            <p v-if="!(props.availableKpis ?? []).length" class="text-xs text-muted italic">
+              Nenhum KPI cadastrado para este projeto. Cadastre na página de KPIs.
+            </p>
+          </div>
+        </UCard>
+        </template>
       </form>
     </template>
 

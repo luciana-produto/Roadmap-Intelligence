@@ -52,6 +52,9 @@ public sealed record RoadmapDemandDto(
     IReadOnlyList<DemandDependencyDto> DependsOn,
     IReadOnlyList<DemandDependencyDto> DependedOnBy,
     DateOnly? DeliveryDate,
+    int? ProblemClarity,
+    bool HasNoKpi,
+    IReadOnlyList<DemandKpiLinkDto> KpiLinks,
     DateTime CreatedAt,
     DateTime? UpdatedAt);
 

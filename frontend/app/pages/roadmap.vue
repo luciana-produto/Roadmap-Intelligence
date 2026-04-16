@@ -4,14 +4,16 @@ import Sortable from 'sortablejs'
 import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
-import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification } from '~/types/roadmap'
+import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, DemandKpiLinkInput } from '~/types/roadmap'
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
 const roadmapStore = useRoadmapStore()
+const kpiStore = useKpiStore()
 const toast = useToast()
 
 const { projects, demands, dependencyOptions, customerSuggestions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
+const { kpis: availableKpis } = storeToRefs(kpiStore)
 
 // ─── View mode ───────────────────────────────────────────────────────────────
 const viewMode = ref<'list'>('list')
@@ -914,14 +916,18 @@ async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) 
   }
 }
 
-async function handleSubmit(data: DemandFormData) {
+async function handleSubmit(data: DemandFormData, links: DemandKpiLinkInput[] = []) {
   try {
     if (editingDemand.value) {
-      await roadmapStore.updateDemand(editingDemand.value.id, data)
+      const updatedDemand = await roadmapStore.updateDemand(editingDemand.value.id, data)
+      await kpiStore.updateDemandKpiLinks(updatedDemand.id, links)
+      await roadmapStore.fetchDemands()
       toast.add({ title: 'Demanda atualizada', color: 'success' })
     }
     else {
-      await roadmapStore.createDemand(data)
+      const createdDemand = await roadmapStore.createDemand(data)
+      await kpiStore.updateDemandKpiLinks(createdDemand.id, links)
+      await roadmapStore.fetchDemands()
       toast.add({ title: 'Demanda criada', color: 'success' })
     }
     modalOpen.value = false
@@ -1626,6 +1632,14 @@ await Promise.all([
   roadmapStore.fetchDependencyOptions(),
   roadmapStore.fetchCustomerSuggestions()
 ])
+
+// Load KPIs for the selected project
+if (selectedProjectId.value) {
+  kpiStore.fetchKpis(selectedProjectId.value)
+}
+watch(selectedProjectId, (id) => {
+  if (id) kpiStore.fetchKpis(id)
+})
 </script>
 
 <template>
@@ -2187,6 +2201,7 @@ await Promise.all([
       :dependency-options="dependencyOptions"
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
+      :available-kpis="availableKpis"
       :default-project-id="selectedProjectId ?? undefined"
       :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? selectedQuarterYear ?? undefined"
       :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? selectedQuarterNumber ?? undefined"

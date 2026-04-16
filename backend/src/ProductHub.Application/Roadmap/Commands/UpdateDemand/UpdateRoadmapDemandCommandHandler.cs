@@ -84,7 +84,9 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.Customers,
             request.IsBlocked,
             request.BlockedReason,
-            request.DeliveryDate);
+            request.DeliveryDate,
+            request.ProblemClarity,
+            request.HasNoKpi);
 
         demandRepository.Update(demand);
         await demandRepository.ReplaceProductsAsync(demand.Id, request.ProductIds, cancellationToken);

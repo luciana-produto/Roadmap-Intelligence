@@ -17,4 +17,6 @@ public sealed record CreateRoadmapDemandCommand(
     decimal? Hours = null,
     IReadOnlyList<string>? Customers = null,
     bool IsBlocked = false,
-    string? BlockedReason = null) : IRequest<RoadmapDemandDto>;
+    string? BlockedReason = null,
+    int? ProblemClarity = null,
+    bool HasNoKpi = false) : IRequest<RoadmapDemandDto>;

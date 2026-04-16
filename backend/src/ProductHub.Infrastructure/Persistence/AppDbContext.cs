@@ -16,6 +16,10 @@ public class AppDbContext(
     public DbSet<RoadmapDemandProduct> RoadmapDemandProducts => Set<RoadmapDemandProduct>();
     public DbSet<RoadmapDemandDependency> RoadmapDemandDependencies => Set<RoadmapDemandDependency>();
     public DbSet<RoadmapCapacity> RoadmapCapacities => Set<RoadmapCapacity>();
+    public DbSet<Kpi> Kpis => Set<Kpi>();
+    public DbSet<DemandKpiLink> DemandKpiLinks => Set<DemandKpiLink>();
+    public DbSet<KpiMeasurement> KpiMeasurements => Set<KpiMeasurement>();
+    public DbSet<DemandTradeOff> DemandTradeOffs => Set<DemandTradeOff>();
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.AddInterceptors(auditInterceptor);

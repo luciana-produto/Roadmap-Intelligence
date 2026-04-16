@@ -58,7 +58,9 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.Hours,
             request.Customers,
             request.IsBlocked,
-            request.BlockedReason);
+            request.BlockedReason,
+            request.ProblemClarity,
+            request.HasNoKpi);
 
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);

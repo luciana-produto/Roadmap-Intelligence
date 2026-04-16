@@ -50,5 +50,8 @@ public sealed class CreateRoadmapDemandCommandValidator
             .NotEmpty().WithMessage("Blocked reason is required when demand is blocked.")
             .When(x => x.IsBlocked);
         RuleFor(x => x.BlockedReason).MaximumLength(500);
+        RuleFor(x => x.ProblemClarity)
+            .InclusiveBetween(0, 10).When(x => x.ProblemClarity.HasValue)
+            .WithMessage("Problem clarity must be between 0 and 10.");
     }
 }

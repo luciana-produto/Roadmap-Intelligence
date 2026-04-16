@@ -65,5 +65,8 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.DependencyDemandIds)
             .Must((command, ids) => ids == null || !ids.Contains(command.Id))
             .WithMessage("A demand cannot depend on itself.");
+        RuleFor(x => x.ProblemClarity)
+            .InclusiveBetween(0, 10).When(x => x.ProblemClarity.HasValue)
+            .WithMessage("Problem clarity must be between 0 and 10.");
     }
 }

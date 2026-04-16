@@ -8,7 +8,8 @@ namespace ProductHub.Application.Roadmap.Queries.GetRoadmap;
 
 public sealed class GetDemandsQueryHandler(
     IRoadmapDemandRepository demandRepository,
-    IRoadmapProjectRepository projectRepository)
+    IRoadmapProjectRepository projectRepository,
+    IKpiRepository kpiRepository)
     : IRequestHandler<GetDemandsQuery, IEnumerable<RoadmapDemandDto>>
 {
     public async Task<IEnumerable<RoadmapDemandDto>> Handle(
@@ -40,7 +41,15 @@ public sealed class GetDemandsQueryHandler(
             .Concat(relatedDemands)
             .ToDictionary(demand => demand.Id, demand => demand);
 
+        var kpiLinks = await kpiRepository.GetKpiLinksByDemandIdsAsync(demandIds, cancellationToken);
+        var kpiIds = kpiLinks.Select(l => l.KpiId).Distinct().ToArray();
+        var kpis = kpiIds.Length > 0
+            ? (await kpiRepository.GetByProjectAsync(request.ProjectId, cancellationToken))
+                .Where(k => kpiIds.Contains(k.Id))
+                .ToDictionary(k => k.Id, k => k.Name)
+            : new Dictionary<Guid, string>();
+
         return demands.Select(demand =>
-            RoadmapDemandDtoMapper.Map(demand, productMap, demandsById, projectNamesById, dependencyLinks));
+            RoadmapDemandDtoMapper.Map(demand, productMap, demandsById, projectNamesById, dependencyLinks, kpis, kpiLinks));
     }
 }

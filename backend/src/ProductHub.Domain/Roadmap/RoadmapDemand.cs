@@ -23,6 +23,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public bool IsBlocked { get; private set; }
     public string? BlockedReason { get; private set; }
     public DateOnly? DeliveryDate { get; private set; }
+    public int? ProblemClarity { get; private set; }
+    public bool HasNoKpi { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -45,9 +47,14 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         decimal? hours = null,
         IEnumerable<string>? customers = null,
         bool isBlocked = false,
-        string? blockedReason = null)
+        string? blockedReason = null,
+        int? problemClarity = null,
+        bool hasNoKpi = false)
     {
         Quarter.Create(quarterYear, quarterNumber);
+
+        if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
+            throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
         var demand = new RoadmapDemand
         {
@@ -64,7 +71,9 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             Hours = hours,
             Customers = NormalizeCustomers(customers),
             IsBlocked = isBlocked,
-            BlockedReason = isBlocked ? blockedReason : null
+            BlockedReason = isBlocked ? blockedReason : null,
+            ProblemClarity = problemClarity,
+            HasNoKpi = hasNoKpi
         };
         demand._products = productIds
             .Distinct()
@@ -88,9 +97,14 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         IEnumerable<string>? customers = null,
         bool isBlocked = false,
         string? blockedReason = null,
-        DateOnly? deliveryDate = null)
+        DateOnly? deliveryDate = null,
+        int? problemClarity = null,
+        bool hasNoKpi = false)
     {
         Quarter.Create(quarterYear, quarterNumber);
+
+        if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
+            throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
         Title = title;
         Description = description;
@@ -108,6 +122,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         IsBlocked = isBlocked;
         BlockedReason = isBlocked ? blockedReason : null;
         DeliveryDate = deliveryDate;
+        ProblemClarity = problemClarity;
+        HasNoKpi = hasNoKpi;
     }
 
     public void SetSortOrder(int sortOrder) =>

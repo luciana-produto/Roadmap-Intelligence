@@ -8,6 +8,11 @@ export type DemandClassification =
   | 'Mandatory'
   | 'Homologation'
 
+export type KpiType = 'Business' | 'Product' | 'Quality' | 'Usability'
+export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
+export type ImpactType = 'Increase' | 'Decrease'
+export type ConfidenceLevel = 'High' | 'Medium' | 'Low'
+
 export interface DemandProduct {
   productId: string
   name: string
@@ -70,6 +75,9 @@ export interface RoadmapDemand {
   dependsOn: DemandDependency[]
   dependedOnBy: DemandDependency[]
   deliveryDate?: string
+  problemClarity?: number
+  hasNoKpi: boolean
+  kpiLinks: DemandKpiLink[]
   createdAt: string
   updatedAt?: string
 }
@@ -108,6 +116,8 @@ export interface DemandFormData {
   isBlocked?: boolean
   blockedReason?: string
   deliveryDate?: string
+  problemClarity?: number
+  hasNoKpi?: boolean
 }
 
 export interface CapacityFormData {
@@ -116,4 +126,47 @@ export interface CapacityFormData {
   quarterNumber: number
   capacityHours: number
   observation?: string
+}
+
+export interface Kpi {
+  id: string
+  projectId: string
+  name: string
+  type: KpiType
+  lever: KpiLever
+  description?: string
+  calculation?: string
+  target?: number
+  currentValue?: number
+  linkedDemandsCount: number
+  createdAt: string
+  updatedAt?: string
+}
+
+export interface KpiFormData {
+  projectId: string
+  name: string
+  type: KpiType
+  lever: KpiLever
+  description?: string
+  calculation?: string
+  target?: number
+  currentValue?: number
+}
+
+export interface DemandKpiLink {
+  id: string
+  demandId: string
+  kpiId: string
+  kpiName: string
+  impactType: ImpactType
+  estimatedImpact?: number
+  confidenceLevel: ConfidenceLevel
+}
+
+export interface DemandKpiLinkInput {
+  kpiId: string
+  impactType: ImpactType
+  estimatedImpact?: number
+  confidenceLevel: ConfidenceLevel
 }
