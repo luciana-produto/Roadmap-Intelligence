@@ -11,7 +11,8 @@ internal static class RoadmapDemandDtoMapper
         IReadOnlyDictionary<Guid, string> projectNamesById,
         IEnumerable<RoadmapDemandDependency> dependencyLinks,
         IReadOnlyDictionary<Guid, string>? kpiNamesById = null,
-        IEnumerable<DemandKpiLink>? kpiLinks = null)
+        IEnumerable<DemandKpiLink>? kpiLinks = null,
+        IEnumerable<KpiMeasurement>? kpiMeasurements = null)
     {
         var effectivePromisedDate = GetEffectivePromisedDate(demand);
         var today = DateOnly.FromDateTime(DateTime.Today);
@@ -52,6 +53,24 @@ internal static class RoadmapDemandDtoMapper
             .ToList()
             .AsReadOnly();
 
+        var demandMeasurementDtos = (kpiMeasurements ?? [])
+            .Where(measurement => measurement.DemandId == demand.Id)
+            .OrderByDescending(measurement => measurement.MeasurementDate)
+            .ThenByDescending(measurement => measurement.CreatedAt)
+            .Select(measurement => new KpiMeasurementDto(
+                measurement.Id,
+                measurement.KpiId,
+                kpiNamesById != null && kpiNamesById.TryGetValue(measurement.KpiId, out var measurementKpiName) ? measurementKpiName : string.Empty,
+                measurement.DemandId,
+                demand.Title,
+                measurement.MeasuredValue,
+                measurement.MeasurementDate,
+                measurement.Result.ToString(),
+                measurement.Observation,
+                measurement.CreatedAt))
+            .ToList()
+            .AsReadOnly();
+
         return new RoadmapDemandDto(
             demand.Id,
             demand.Title,
@@ -86,6 +105,7 @@ internal static class RoadmapDemandDtoMapper
             demand.ProblemClarity,
             demand.HasNoKpi,
             kpiLinkDtos,
+                demandMeasurementDtos,
             demand.CreatedAt,
             demand.UpdatedAt);
     }

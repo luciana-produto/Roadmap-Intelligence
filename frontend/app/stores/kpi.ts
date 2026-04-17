@@ -4,7 +4,10 @@ import type {
   Kpi,
   KpiFormData,
   DemandKpiLink,
-  DemandKpiLinkInput
+  DemandKpiLinkInput,
+  KpiMeasurement,
+  CreateDemandKpiMeasurementInput,
+  UpdateDemandKpiMeasurementInput
 } from '~/types/roadmap'
 
 export const useKpiStore = defineStore('kpi', () => {
@@ -52,6 +55,31 @@ export const useKpiStore = defineStore('kpi', () => {
     return response.data ?? []
   }
 
+  async function fetchDemandKpiMeasurements(demandId: string): Promise<KpiMeasurement[]> {
+    const response = await api.get<ApiResponse<KpiMeasurement[]>>(`/api/kpis/demands/${demandId}/measurements`)
+    return response.data ?? []
+  }
+
+  async function createDemandKpiMeasurement(demandId: string, data: CreateDemandKpiMeasurementInput): Promise<KpiMeasurement> {
+    const response = await api.post<ApiResponse<KpiMeasurement>>(
+      `/api/kpis/demands/${demandId}/measurements`,
+      data as unknown as Record<string, unknown>
+    )
+    return response.data!
+  }
+
+  async function updateDemandKpiMeasurement(id: string, data: UpdateDemandKpiMeasurementInput): Promise<KpiMeasurement> {
+    const response = await api.put<ApiResponse<KpiMeasurement>>(
+      `/api/kpis/measurements/${id}`,
+      data as unknown as Record<string, unknown>
+    )
+    return response.data!
+  }
+
+  async function deleteDemandKpiMeasurement(id: string) {
+    await api.del(`/api/kpis/measurements/${id}`)
+  }
+
   return {
     kpis,
     isLoading,
@@ -59,6 +87,10 @@ export const useKpiStore = defineStore('kpi', () => {
     createKpi,
     updateKpi,
     deleteKpi,
-    updateDemandKpiLinks
+    updateDemandKpiLinks,
+    fetchDemandKpiMeasurements,
+    createDemandKpiMeasurement,
+    updateDemandKpiMeasurement,
+    deleteDemandKpiMeasurement
   }
 })

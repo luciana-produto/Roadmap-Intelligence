@@ -10,6 +10,7 @@ public interface IKpiRepository : IRepository<Kpi>
     Task<IReadOnlyList<DemandKpiLink>> GetKpiLinksByKpiIdAsync(Guid kpiId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<KpiMeasurement>> GetMeasurementsByKpiIdAsync(Guid kpiId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<KpiMeasurement>> GetMeasurementsByDemandIdAsync(Guid demandId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<KpiMeasurement>> GetMeasurementsByDemandIdsAsync(IEnumerable<Guid> demandIds, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<DemandTradeOff>> GetTradeOffsByDemandIdAsync(Guid demandId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<DemandTradeOff>> GetTradeOffsByProjectAsync(Guid projectId, CancellationToken cancellationToken = default);
     Task ReplaceDemandKpiLinksAsync(Guid demandId, IEnumerable<DemandKpiLink> links, CancellationToken cancellationToken = default);

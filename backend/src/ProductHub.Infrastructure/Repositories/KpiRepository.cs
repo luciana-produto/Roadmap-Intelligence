@@ -60,7 +60,23 @@ public sealed class KpiRepository(AppDbContext context)
             .AsNoTracking()
             .Where(m => m.DemandId == demandId)
             .OrderByDescending(m => m.MeasurementDate)
+            .ThenByDescending(m => m.CreatedAt)
             .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<KpiMeasurement>> GetMeasurementsByDemandIdsAsync(
+        IEnumerable<Guid> demandIds,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = demandIds.Distinct().ToArray();
+        if (ids.Length == 0) return [];
+
+        return await context.KpiMeasurements
+            .AsNoTracking()
+            .Where(m => m.DemandId.HasValue && ids.Contains(m.DemandId.Value))
+            .OrderByDescending(m => m.MeasurementDate)
+            .ThenByDescending(m => m.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
 
     public async Task<IReadOnlyList<DemandTradeOff>> GetTradeOffsByDemandIdAsync(
         Guid demandId,

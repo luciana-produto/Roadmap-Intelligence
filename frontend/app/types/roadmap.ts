@@ -13,6 +13,7 @@ export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
 export type KpiObjective = 'Increase' | 'Decrease'
 export type ImpactType = 'Increase' | 'Decrease'
 export type ConfidenceLevel = 'High' | 'Medium' | 'Low'
+export type MeasurementResult = 'Positive' | 'Negative' | 'Neutral'
 
 export interface DemandProduct {
   productId: string
@@ -83,6 +84,7 @@ export interface RoadmapDemand {
   problemClarity?: number
   hasNoKpi: boolean
   kpiLinks: DemandKpiLink[]
+  kpiMeasurements: KpiMeasurement[]
   createdAt: string
   updatedAt?: string
 }
@@ -177,4 +179,32 @@ export interface DemandKpiLinkInput {
   impactType: ImpactType
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
+}
+
+export interface KpiMeasurement {
+  id: string
+  kpiId: string
+  kpiName: string
+  demandId?: string
+  demandTitle?: string
+  measuredValue: number
+  measurementDate: string
+  result: MeasurementResult
+  observation?: string
+  createdAt: string
+}
+
+export interface CreateDemandKpiMeasurementInput {
+  kpiId: string
+  measuredValue: number
+  measurementDate: string
+  result: MeasurementResult
+  observation?: string
+}
+
+export interface UpdateDemandKpiMeasurementInput {
+  measuredValue: number
+  measurementDate: string
+  result: MeasurementResult
+  observation?: string
 }

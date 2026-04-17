@@ -59,6 +59,7 @@ public sealed record RoadmapDemandDto(
     int? ProblemClarity,
     bool HasNoKpi,
     IReadOnlyList<DemandKpiLinkDto> KpiLinks,
+    IReadOnlyList<KpiMeasurementDto> KpiMeasurements,
     DateTime CreatedAt,
     DateTime? UpdatedAt);
 

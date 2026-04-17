@@ -1,5 +1,22 @@
 <script setup lang="ts">
-import type { RoadmapDemand, RoadmapProject, DemandDependencyOption, DemandFormData, DemandType, DemandClassification, DemandStatus, Kpi, DemandKpiLinkInput, ImpactType, ConfidenceLevel } from '~/types/roadmap'
+import type {
+  RoadmapDemand,
+  RoadmapProject,
+  DemandDependencyOption,
+  DemandFormData,
+  DemandType,
+  DemandClassification,
+  DemandStatus,
+  Kpi,
+  DemandKpiLink,
+  DemandKpiLinkInput,
+  ImpactType,
+  ConfidenceLevel,
+  KpiMeasurement,
+  MeasurementResult,
+  CreateDemandKpiMeasurementInput,
+  UpdateDemandKpiMeasurementInput
+} from '~/types/roadmap'
 
 type DemandFormState = Omit<DemandFormData, 'classification'> & {
   classification: DemandClassification | ''
@@ -11,6 +28,19 @@ type EditableDemandKpiLink = DemandKpiLinkInput & {
   impactDisplayType: ImpactDisplayType
   estimatedImpactInput: string
 }
+
+type MeasurementEditorState = {
+  id?: string
+  kpiId: string
+  measuredValueInput: string
+  measurementDate: string
+  result: MeasurementResult
+  observation: string
+}
+
+const kpiStore = useKpiStore()
+const roadmapStore = useRoadmapStore()
+const toast = useToast()
 
 const props = defineProps<{
   open: boolean
@@ -114,6 +144,10 @@ const form = reactive<DemandFormState>({
 })
 
 const kpiLinkEdits = ref<EditableDemandKpiLink[]>([])
+const kpiMeasurements = ref<KpiMeasurement[]>([])
+const measurementDrafts = ref<Record<string, MeasurementEditorState>>({})
+const measurementSavingKpiId = ref<string | null>(null)
+const measurementDeletingId = ref<string | null>(null)
 
 const impactTypeOptions = [
   { value: 'Percentage', label: 'Percentual' },
@@ -125,6 +159,12 @@ const confidenceLevelOptions = [
   { value: 'High', label: 'Alta' },
   { value: 'Medium', label: 'Média' },
   { value: 'Low', label: 'Baixa' }
+]
+
+const measurementResultOptions = [
+  { value: 'Positive', label: 'Positivo' },
+  { value: 'Neutral', label: 'Neutro' },
+  { value: 'Negative', label: 'Negativo' }
 ]
 
 const confidenceLevelHelp = [
@@ -212,6 +252,8 @@ watch(() => props.open, (open) => {
       estimatedImpact: l.estimatedImpact,
       confidenceLevel: l.confidenceLevel
     }))
+    kpiMeasurements.value = sortMeasurements(props.demand.kpiMeasurements ?? [])
+    measurementDrafts.value = {}
     customerInput.value = ''
   }
   else {
@@ -236,6 +278,8 @@ watch(() => props.open, (open) => {
     form.problemClarity = undefined
     form.hasNoKpi = false
     kpiLinkEdits.value = []
+    kpiMeasurements.value = []
+    measurementDrafts.value = {}
     customerInput.value = ''
     syncSingleProductSelection()
   }
@@ -424,6 +468,24 @@ function formatEstimatedImpact(value: number | undefined, displayType: ImpactDis
   }).format(value)
 }
 
+function formatMeasurementValue(value: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  }).format(value)
+}
+
+function formatMeasurementDate(value: string) {
+  if (!value)
+    return ''
+
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day)
+    return value
+
+  return new Intl.DateTimeFormat('pt-BR').format(new Date(year, month - 1, day))
+}
+
 function toEditableKpiLink(link?: Partial<DemandKpiLinkInput>): EditableDemandKpiLink {
   const estimatedImpact = link?.estimatedImpact
   const impactDisplayType: ImpactDisplayType = 'Number'
@@ -530,6 +592,181 @@ function getKpiImpactSummary(link: EditableDemandKpiLink) {
     : formatEstimatedImpact(link.estimatedImpact, link.impactDisplayType)
 
   return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, impactDefined)} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
+}
+
+function getPersistedKpiImpactSummary(link: DemandKpiLink) {
+  const kpi = getKpiById(link.kpiId)
+  if (!kpi)
+    return null
+
+  const impactValue = link.estimatedImpact == null
+    ? '[NÃO DEFINIDO]'
+    : formatMeasurementValue(link.estimatedImpact)
+
+  return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, link.estimatedImpact != null)} ${kpi.name}`
+}
+
+function getMeasurementResultLabel(result: MeasurementResult) {
+  switch (result) {
+    case 'Positive':
+      return 'Positivo'
+    case 'Neutral':
+      return 'Neutro'
+    case 'Negative':
+      return 'Negativo'
+  }
+}
+
+function getMeasurementResultTone(result: MeasurementResult) {
+  switch (result) {
+    case 'Positive':
+      return 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300'
+    case 'Neutral':
+      return 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+    case 'Negative':
+      return 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-900 dark:bg-rose-950/40 dark:text-rose-300'
+  }
+}
+
+function sortMeasurements(measurements: KpiMeasurement[]) {
+  return [...measurements].sort((left, right) => {
+    const dateCompare = right.measurementDate.localeCompare(left.measurementDate)
+    if (dateCompare !== 0)
+      return dateCompare
+
+    return right.createdAt.localeCompare(left.createdAt)
+  })
+}
+
+const persistedKpiLinks = computed(() => props.demand?.kpiLinks ?? [])
+
+const measurementSectionState = computed(() => {
+  if (!isEdit.value || !props.demand?.id)
+    return { enabled: false, message: 'Salve a demanda primeiro para registrar apurações.' }
+
+  if (form.hasNoKpi || persistedKpiLinks.value.length === 0)
+    return { enabled: false, message: 'A apuração só fica disponível para demandas com KPI vinculado.' }
+
+  if (form.status !== 'Done')
+    return { enabled: false, message: 'A apuração fica disponível após a entrega da demanda.' }
+
+  return { enabled: true, message: '' }
+})
+
+function getMeasurementsForKpi(kpiId: string) {
+  return kpiMeasurements.value.filter(measurement => measurement.kpiId === kpiId)
+}
+
+function getCurrentMeasurement(kpiId: string) {
+  return getMeasurementsForKpi(kpiId)[0] ?? null
+}
+
+function buildMeasurementDraft(kpiId: string, measurement?: KpiMeasurement): MeasurementEditorState {
+  return {
+    id: measurement?.id,
+    kpiId,
+    measuredValueInput: measurement != null ? String(measurement.measuredValue).replace('.', ',') : '',
+    measurementDate: measurement?.measurementDate ?? new Date().toISOString().slice(0, 10),
+    result: measurement?.result ?? 'Neutral',
+    observation: measurement?.observation ?? ''
+  }
+}
+
+function openMeasurementDraft(kpiId: string, measurement?: KpiMeasurement) {
+  measurementDrafts.value = {
+    ...measurementDrafts.value,
+    [kpiId]: buildMeasurementDraft(kpiId, measurement)
+  }
+}
+
+function cancelMeasurementDraft(kpiId: string) {
+  const nextDrafts = { ...measurementDrafts.value }
+  delete nextDrafts[kpiId]
+  measurementDrafts.value = nextDrafts
+}
+
+function getMeasurementDraft(kpiId: string) {
+  return measurementDrafts.value[kpiId] ?? null
+}
+
+function upsertMeasurement(measurement: KpiMeasurement) {
+  const nextMeasurements = kpiMeasurements.value.filter(item => item.id !== measurement.id)
+  nextMeasurements.push(measurement)
+  kpiMeasurements.value = sortMeasurements(nextMeasurements)
+}
+
+async function refreshDemandMeasurements() {
+  if (!props.demand?.id)
+    return
+
+  kpiMeasurements.value = sortMeasurements(await kpiStore.fetchDemandKpiMeasurements(props.demand.id))
+  await roadmapStore.fetchDemands()
+}
+
+async function saveMeasurement(kpiId: string) {
+  const draft = getMeasurementDraft(kpiId)
+  if (!draft || !props.demand?.id)
+    return
+
+  const measuredValue = parseMaskedNumber(draft.measuredValueInput)
+  if (measuredValue == null || !draft.measurementDate) {
+    toast.add({ title: 'Preencha valor e data da apuração', color: 'warning' })
+    return
+  }
+
+  measurementSavingKpiId.value = kpiId
+
+  try {
+    if (draft.id) {
+      const payload: UpdateDemandKpiMeasurementInput = {
+        measuredValue,
+        measurementDate: draft.measurementDate,
+        result: draft.result,
+        observation: draft.observation || undefined
+      }
+
+      upsertMeasurement(await kpiStore.updateDemandKpiMeasurement(draft.id, payload))
+      toast.add({ title: 'Apuração atualizada', color: 'success' })
+    }
+    else {
+      const payload: CreateDemandKpiMeasurementInput = {
+        kpiId,
+        measuredValue,
+        measurementDate: draft.measurementDate,
+        result: draft.result,
+        observation: draft.observation || undefined
+      }
+
+      upsertMeasurement(await kpiStore.createDemandKpiMeasurement(props.demand.id, payload))
+      toast.add({ title: 'Apuração registrada', color: 'success' })
+    }
+
+    cancelMeasurementDraft(kpiId)
+    await refreshDemandMeasurements()
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    measurementSavingKpiId.value = null
+  }
+}
+
+async function deleteMeasurement(measurementId: string) {
+  measurementDeletingId.value = measurementId
+
+  try {
+    await kpiStore.deleteDemandKpiMeasurement(measurementId)
+    kpiMeasurements.value = kpiMeasurements.value.filter(item => item.id !== measurementId)
+    toast.add({ title: 'Apuração removida', color: 'success' })
+    await refreshDemandMeasurements()
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    measurementDeletingId.value = null
+  }
 }
 
 function isKpiLinkComplete(link: EditableDemandKpiLink) {
@@ -1174,6 +1411,187 @@ async function handleSubmit() {
             <p v-if="!(props.availableKpis ?? []).length" class="text-xs text-muted italic">
               Nenhum KPI cadastrado para este projeto. Cadastre na página de KPIs.
             </p>
+          </div>
+        </section>
+
+        <section class="space-y-4 border-t border-default pt-4">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">Apuração pós-entrega</h3>
+            <p class="mt-1 text-xs text-muted">
+              Registre as apurações dos KPIs vinculados. A mais recente passa a ser considerada a apuração atual.
+            </p>
+          </div>
+
+          <div
+            v-if="!measurementSectionState.enabled"
+            class="rounded-lg border border-dashed border-default bg-elevated p-3 text-sm text-muted"
+          >
+            {{ measurementSectionState.message }}
+          </div>
+
+          <div v-else class="space-y-4">
+            <article
+              v-for="link in persistedKpiLinks"
+              :key="link.id"
+              class="rounded-xl border border-default bg-elevated p-4"
+            >
+              <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div class="space-y-1">
+                  <p class="text-sm font-semibold text-highlighted">{{ link.kpiName }}</p>
+                  <p v-if="getPersistedKpiImpactSummary(link)" class="text-xs text-muted">
+                    Impacto esperado: {{ getPersistedKpiImpactSummary(link) }}
+                  </p>
+                  <p class="text-xs text-muted">
+                    Confiança: {{ confidenceLevelOptions.find(option => option.value === link.confidenceLevel)?.label ?? link.confidenceLevel }}
+                  </p>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <span
+                    v-if="getCurrentMeasurement(link.kpiId)"
+                    class="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
+                  >
+                    Atual: {{ formatMeasurementValue(getCurrentMeasurement(link.kpiId)!.measuredValue) }} em {{ formatMeasurementDate(getCurrentMeasurement(link.kpiId)!.measurementDate) }}
+                  </span>
+                  <UButton
+                    type="button"
+                    size="xs"
+                    variant="soft"
+                    icon="i-lucide-plus"
+                    label="Nova apuração"
+                    @click="openMeasurementDraft(link.kpiId)"
+                  />
+                </div>
+              </div>
+
+              <div
+                v-if="getMeasurementDraft(link.kpiId)"
+                class="mt-4 grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1fr)_12rem_11rem]"
+              >
+                <UFormField label="Impacto apurado" required>
+                  <UInput
+                    :model-value="getMeasurementDraft(link.kpiId)?.measuredValueInput ?? ''"
+                    placeholder="Ex: 12,5"
+                    class="w-full"
+                    @update:model-value="(value) => {
+                      const draft = getMeasurementDraft(link.kpiId)
+                      if (draft) draft.measuredValueInput = String(value ?? '')
+                    }"
+                  />
+                </UFormField>
+
+                <UFormField label="Data de apuração" required>
+                  <UInput
+                    :model-value="getMeasurementDraft(link.kpiId)?.measurementDate ?? ''"
+                    type="date"
+                    class="w-full"
+                    @update:model-value="(value) => {
+                      const draft = getMeasurementDraft(link.kpiId)
+                      if (draft) draft.measurementDate = String(value ?? '')
+                    }"
+                  />
+                </UFormField>
+
+                <UFormField label="Classificação do resultado" required>
+                  <USelect
+                    :model-value="getMeasurementDraft(link.kpiId)?.result ?? 'Neutral'"
+                    :items="measurementResultOptions"
+                    class="w-full"
+                    @update:model-value="(value) => {
+                      const draft = getMeasurementDraft(link.kpiId)
+                      if (draft) draft.result = (value ?? 'Neutral') as MeasurementResult
+                    }"
+                  />
+                </UFormField>
+
+                <UFormField label="Observação" class="md:col-span-3">
+                  <UTextarea
+                    :model-value="getMeasurementDraft(link.kpiId)?.observation ?? ''"
+                    :rows="2"
+                    placeholder="Contexto da apuração (opcional)"
+                    class="w-full"
+                    @update:model-value="(value) => {
+                      const draft = getMeasurementDraft(link.kpiId)
+                      if (draft) draft.observation = String(value ?? '')
+                    }"
+                  />
+                </UFormField>
+
+                <div class="md:col-span-3 flex justify-end gap-2">
+                  <UButton
+                    type="button"
+                    variant="ghost"
+                    color="neutral"
+                    label="Cancelar"
+                    @click="cancelMeasurementDraft(link.kpiId)"
+                  />
+                  <UButton
+                    type="button"
+                    :loading="measurementSavingKpiId === link.kpiId"
+                    icon="i-lucide-save"
+                    :label="getMeasurementDraft(link.kpiId)?.id ? 'Atualizar apuração' : 'Salvar apuração'"
+                    @click="saveMeasurement(link.kpiId)"
+                  />
+                </div>
+              </div>
+
+              <div v-if="getMeasurementsForKpi(link.kpiId).length" class="mt-4 space-y-2">
+                <article
+                  v-for="(measurement, measurementIndex) in getMeasurementsForKpi(link.kpiId)"
+                  :key="measurement.id"
+                  class="rounded-lg border border-default bg-default p-3"
+                >
+                  <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div class="space-y-2">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span
+                          v-if="measurementIndex === 0"
+                          class="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-primary"
+                        >
+                          Atual
+                        </span>
+                        <span
+                          class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
+                          :class="getMeasurementResultTone(measurement.result)"
+                        >
+                          {{ getMeasurementResultLabel(measurement.result) }}
+                        </span>
+                      </div>
+                      <p class="text-sm font-medium text-highlighted">
+                        {{ formatMeasurementValue(measurement.measuredValue) }} em {{ formatMeasurementDate(measurement.measurementDate) }}
+                      </p>
+                      <p v-if="measurement.observation" class="text-xs leading-relaxed text-muted">
+                        {{ measurement.observation }}
+                      </p>
+                    </div>
+
+                    <div class="flex items-center gap-1 self-end md:self-start">
+                      <UButton
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        color="neutral"
+                        icon="i-lucide-pencil"
+                        @click="openMeasurementDraft(link.kpiId, measurement)"
+                      />
+                      <UButton
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        color="error"
+                        icon="i-lucide-trash-2"
+                        :loading="measurementDeletingId === measurement.id"
+                        @click="deleteMeasurement(measurement.id)"
+                      />
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <p v-else class="mt-4 text-xs italic text-muted">
+                Nenhuma apuração registrada para este KPI.
+              </p>
+            </article>
           </div>
         </section>
         </template>

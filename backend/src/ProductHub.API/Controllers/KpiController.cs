@@ -1,10 +1,14 @@
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using ProductHub.Application.Roadmap.Commands.CreateDemandKpiMeasurement;
+using ProductHub.Application.Roadmap.Commands.DeleteDemandKpiMeasurement;
 using ProductHub.Application.Roadmap.Commands.CreateKpi;
 using ProductHub.Application.Roadmap.Commands.DeleteKpi;
+using ProductHub.Application.Roadmap.Commands.UpdateDemandKpiMeasurement;
 using ProductHub.Application.Roadmap.Commands.UpdateDemandKpiLinks;
 using ProductHub.Application.Roadmap.Commands.UpdateKpi;
 using ProductHub.Application.Roadmap.DTOs;
+using ProductHub.Application.Roadmap.Queries.GetDemandKpiMeasurements;
 using ProductHub.Application.Roadmap.Queries.GetKpis;
 using ProductHub.Shared.Models;
 
@@ -58,5 +62,43 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     {
         var result = await sender.Send(command with { DemandId = demandId }, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<DemandKpiLinkDto>>.Ok(result, CorrelationId));
+    }
+
+    [HttpGet("demands/{demandId:guid}/measurements")]
+    public async Task<IActionResult> GetDemandKpiMeasurements(
+        Guid demandId,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new GetDemandKpiMeasurementsQuery(demandId), cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<KpiMeasurementDto>>.Ok(result, CorrelationId));
+    }
+
+    [HttpPost("demands/{demandId:guid}/measurements")]
+    public async Task<IActionResult> CreateDemandKpiMeasurement(
+        Guid demandId,
+        [FromBody] CreateDemandKpiMeasurementCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(command with { DemandId = demandId }, cancellationToken);
+        return StatusCode(201, ApiResponse<KpiMeasurementDto>.Ok(result, CorrelationId));
+    }
+
+    [HttpPut("measurements/{id:guid}")]
+    public async Task<IActionResult> UpdateDemandKpiMeasurement(
+        Guid id,
+        [FromBody] UpdateDemandKpiMeasurementCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(command with { Id = id }, cancellationToken);
+        return Ok(ApiResponse<KpiMeasurementDto>.Ok(result, CorrelationId));
+    }
+
+    [HttpDelete("measurements/{id:guid}")]
+    public async Task<IActionResult> DeleteDemandKpiMeasurement(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        await sender.Send(new DeleteDemandKpiMeasurementCommand(id), cancellationToken);
+        return Ok(ApiResponse.Ok(CorrelationId));
     }
 }
