@@ -21,6 +21,8 @@ public static class RoadmapSeeder
         string[]? Customers = null,
         bool IsBlocked = false,
         string? BlockedReason = null,
+        int? ProblemClarity = null,
+        DateOnly? PromisedDate = null,
         DateOnly? DeliveryDate = null);
 
     private sealed record MockDependencySeed(string DemandKey, string DependsOnDemandKey);
@@ -49,7 +51,9 @@ public static class RoadmapSeeder
             ["SVO", "HUB CRM", "SVC"],
             Observation: "Integração técnica priorizada pelo time de plataforma.",
             JiraIssue: "CROSS-201",
-            Customers: ["Operações", "CS"]),
+            Customers: ["Operações", "CS"],
+            ProblemClarity: 8,
+            PromisedDate: new DateOnly(2026, 6, 20)),
         new(
             2026,
             2,
@@ -62,7 +66,9 @@ public static class RoadmapSeeder
             ["HUB CRM"],
             Observation: "Escopo alinhado com jurídico e segurança.",
             JiraIssue: "CROSS-214",
-            Customers: ["Jurídico"]),
+            Customers: ["Jurídico"],
+            ProblemClarity: 7,
+            PromisedDate: new DateOnly(2026, 6, 10)),
         new(
             2026,
             2,
@@ -76,6 +82,8 @@ public static class RoadmapSeeder
             Observation: "Entrega concluída e validada em homologação.",
             JiraIssue: "CROSS-176",
             Customers: ["Implantação"],
+            ProblemClarity: 9,
+            PromisedDate: new DateOnly(2026, 5, 10),
             DeliveryDate: new DateOnly(2026, 5, 18)),
         new(
             2026,
@@ -91,7 +99,9 @@ public static class RoadmapSeeder
             JiraIssue: "CROSS-223",
             Customers: ["Infra", "Segurança"],
             IsBlocked: true,
-            BlockedReason: "Aguardando liberação da janela de manutenção do balanceador."),
+            BlockedReason: "Aguardando liberação da janela de manutenção do balanceador.",
+            ProblemClarity: 6,
+            PromisedDate: new DateOnly(2026, 6, 5)),
         new(
             2026,
             2,
@@ -104,7 +114,9 @@ public static class RoadmapSeeder
             ["HUB CRM"],
             Observation: "Demanda deslocada para acomodar iniciativas mandatórias.",
             JiraIssue: "CROSS-231",
-            Customers: ["Comercial"]),
+            Customers: ["Comercial"],
+            ProblemClarity: 5,
+            PromisedDate: new DateOnly(2026, 6, 12)),
         new(
             2026,
             2,
@@ -117,7 +129,9 @@ public static class RoadmapSeeder
             ["SVO", "Taste"],
             Observation: "Homologação compartilhada com operações de loja.",
             JiraIssue: "CROSS-239",
-            Customers: ["Suporte", "Operações"])
+                Customers: ["Suporte", "Operações"],
+                ProblemClarity: 8,
+                PromisedDate: new DateOnly(2026, 6, 25))
     ];
 
     private static readonly MockDemandSeed[] CrossBacklogDemands =
@@ -134,7 +148,8 @@ public static class RoadmapSeeder
             ["HUB CRM", "SVO"],
             Observation: "Aguardando refinamento final com produto e operações.",
             JiraIssue: "CROSS-245",
-            Customers: ["Produto", "Operações"]),
+            Customers: ["Produto", "Operações"],
+            ProblemClarity: 4),
         new(
             Quarter.BacklogYear,
             Quarter.BacklogNumber,
@@ -147,7 +162,8 @@ public static class RoadmapSeeder
             ["HUB CRM", "Taste", "SVC"],
             Observation: "Backlog técnico-comercial sem quarter comprometido.",
             JiraIssue: "CROSS-246",
-            Customers: ["Comercial", "Suporte"])
+                Customers: ["Comercial", "Suporte"],
+                ProblemClarity: 3)
     ];
 
     private static readonly MockDemandSeed[] CrossDemands = [.. CrossQ22026Demands, .. CrossBacklogDemands];
@@ -166,7 +182,9 @@ public static class RoadmapSeeder
             ["Retaguarda"],
             Observation: "Entrega acompanhada pelo time financeiro e arquitetura.",
             JiraIssue: "RET-101",
-            Customers: ["Financeiro", "Arquitetura"]),
+            Customers: ["Financeiro", "Arquitetura"],
+            ProblemClarity: 8,
+            PromisedDate: new DateOnly(2026, 6, 28)),
         new(
             2026,
             2,
@@ -179,7 +197,9 @@ public static class RoadmapSeeder
             ["Retaguarda"],
             Observation: "Refinamento pendente com o time de plataforma.",
             JiraIssue: "RET-102",
-            Customers: ["Plataforma"])
+                Customers: ["Plataforma"],
+                ProblemClarity: 6,
+                PromisedDate: new DateOnly(2026, 6, 18))
     ];
 
     private static readonly MockDependencySeed[] CrossProjectDependencies =
@@ -306,22 +326,10 @@ public static class RoadmapSeeder
                 "Receita mensal recorrente de assinaturas ativas",
                 "Soma de todas assinaturas ativas no mês",
                 850000m, 780000m),
-            Kpi.Create(projectId, "NPS do Produto", KpiType.Product, KpiLever.Customer, KpiObjective.Increase,
-                "Net Promoter Score coletado trimestralmente",
-                "(% Promotores - % Detratores)",
-                70m, 62m),
-            Kpi.Create(projectId, "Taxa de Compliance Fiscal", KpiType.Quality, KpiLever.Efficiency, KpiObjective.Increase,
-                "Percentual de notas fiscais emitidas sem rejeição",
-                "(NFs aprovadas / Total NFs emitidas) x 100",
-                99.5m, 98.8m),
-            Kpi.Create(projectId, "Tempo Médio de Onboarding", KpiType.Usability, KpiLever.Efficiency, KpiObjective.Decrease,
-                "Dias entre contratação e primeiro uso em produção",
-                "Média de dias entre data de contrato e primeiro pedido",
-                15m, 22m),
-            Kpi.Create(projectId, "Tickets de Suporte / Cliente", KpiType.Quality, KpiLever.Customer, KpiObjective.Decrease,
-                "Média de tickets abertos por cliente ativo no mês",
-                "Total tickets mês / Total clientes ativos",
-                1.5m, 2.1m)
+            Kpi.Create(projectId, "Taxa de Adoção da Funcionalidade", KpiType.Product, KpiLever.Customer, KpiObjective.Increase,
+                "Percentual de usuários elegíveis que utilizam a funcionalidade lançada",
+                "(Usuários ativos da funcionalidade / Usuários elegíveis) x 100",
+                45m, 18m)
         };
 
         foreach (var kpi in kpis)
@@ -401,7 +409,9 @@ public static class RoadmapSeeder
                 seed.Hours,
                 seed.Customers,
                 seed.IsBlocked,
-                seed.BlockedReason);
+                seed.BlockedReason,
+                seed.PromisedDate,
+                seed.ProblemClarity);
 
             demand.Update(
                 seed.Title,
@@ -418,7 +428,9 @@ public static class RoadmapSeeder
                 customers: seed.Customers,
                 isBlocked: seed.IsBlocked,
                 blockedReason: seed.BlockedReason,
-                deliveryDate: seed.DeliveryDate);
+                promisedDate: seed.PromisedDate,
+                deliveryDate: seed.DeliveryDate,
+                problemClarity: seed.ProblemClarity);
 
             await context.RoadmapDemands.AddAsync(demand);
             existingDemandKeySet[demandKey] = demand.Id;

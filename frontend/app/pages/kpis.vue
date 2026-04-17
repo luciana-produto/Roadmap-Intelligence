@@ -7,6 +7,7 @@ useSeoMeta({ title: 'KPIs · ProductHub' })
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
 const toast = useToast()
+const productKpiName = 'Taxa de Adoção da Funcionalidade'
 
 const { projects, selectedProjectId } = storeToRefs(roadmapStore)
 const { kpis, isLoading } = storeToRefs(kpiStore)
@@ -26,9 +27,7 @@ watch(selectedProjectId, async (id) => {
 // ─── Constants ───────────────────────────────────────────────────────────────
 const kpiTypeOptions: { value: KpiType, label: string }[] = [
   { value: 'Business', label: 'Negócio' },
-  { value: 'Product', label: 'Produto' },
-  { value: 'Quality', label: 'Qualidade' },
-  { value: 'Usability', label: 'Usabilidade' }
+  { value: 'Product', label: 'Produto' }
 ]
 
 const kpiLeverOptions: { value: KpiLever, label: string }[] = [
@@ -44,9 +43,7 @@ const kpiObjectiveOptions: { value: KpiObjective, label: string }[] = [
 
 const kpiTypeLabels: Record<KpiType, string> = {
   Business: 'Negócio',
-  Product: 'Produto',
-  Quality: 'Qualidade',
-  Usability: 'Usabilidade'
+  Product: 'Produto'
 }
 
 const kpiLeverLabels: Record<KpiLever, string> = {
@@ -62,9 +59,7 @@ const kpiObjectiveLabels: Record<KpiObjective, string> = {
 
 const kpiTypeBadgeColor: Record<KpiType, string> = {
   Business: 'primary',
-  Product: 'info',
-  Quality: 'warning',
-  Usability: 'success'
+  Product: 'info'
 }
 
 const kpiLeverBadgeColor: Record<KpiLever, string> = {
@@ -107,6 +102,7 @@ function emptyForm(): KpiFormData {
 function openCreate() {
   editingKpi.value = null
   formData.value = emptyForm()
+  syncKpiFormByType(formData.value.type)
   showFormModal.value = true
 }
 
@@ -123,8 +119,23 @@ function openEdit(kpi: Kpi) {
     target: kpi.target,
     currentValue: kpi.currentValue
   }
+  syncKpiFormByType(formData.value.type)
   showFormModal.value = true
 }
+
+function syncKpiFormByType(type: KpiType) {
+  if (type === 'Product') {
+    formData.value.name = productKpiName
+    return
+  }
+
+  if (formData.value.name === productKpiName)
+    formData.value.name = ''
+}
+
+watch(() => formData.value.type, (type) => {
+  syncKpiFormByType(type)
+})
 
 async function submitForm() {
   try {
@@ -359,7 +370,12 @@ function getProgressPercent(kpi: Kpi): number | null {
       <template #body>
         <div class="space-y-4 p-4">
           <UFormField label="Nome" required>
-            <UInput v-model="formData.name" placeholder="Ex: Taxa de churn mensal" class="w-full" />
+            <UInput
+              v-model="formData.name"
+              :placeholder="formData.type === 'Product' ? productKpiName : 'Ex: Taxa de churn mensal'"
+              :disabled="formData.type === 'Product'"
+              class="w-full"
+            />
           </UFormField>
 
           <div class="grid grid-cols-3 gap-4">

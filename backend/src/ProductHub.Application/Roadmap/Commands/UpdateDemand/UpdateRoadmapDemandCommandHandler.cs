@@ -84,6 +84,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.Customers,
             request.IsBlocked,
             request.BlockedReason,
+            request.PromisedDate,
             request.DeliveryDate,
             request.ProblemClarity,
             request.HasNoKpi);

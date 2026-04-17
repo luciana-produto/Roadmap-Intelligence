@@ -43,6 +43,9 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.DeliveryDate)
             .NotNull().WithMessage("Delivery date is required when status is Done.")
             .When(x => x.Status is "Done");
+        RuleFor(x => x.PromisedDate)
+            .Must((command, promisedDate) => !promisedDate.HasValue || command.QuarterNumber > 0)
+            .WithMessage("Promised date requires a prioritized quarter.");
         RuleFor(x => x.JiraIssue).MaximumLength(100);
         RuleFor(x => x.Hours).GreaterThan(0).When(x => x.Hours.HasValue);
         RuleFor(x => x.Customers)

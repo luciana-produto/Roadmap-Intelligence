@@ -59,6 +59,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.Customers,
             request.IsBlocked,
             request.BlockedReason,
+            request.PromisedDate,
             request.ProblemClarity,
             request.HasNoKpi);
 

@@ -107,6 +107,7 @@ const form = reactive<DemandFormState>({
   dependencyDemandIds: [],
   isBlocked: false,
   blockedReason: '',
+  promisedDate: '',
   deliveryDate: '',
   problemClarity: undefined,
   hasNoKpi: false
@@ -201,6 +202,7 @@ watch(() => props.open, (open) => {
     form.dependencyDemandIds = props.demand.dependsOn.map(item => item.demandId)
     form.isBlocked = props.demand.isBlocked
     form.blockedReason = props.demand.blockedReason ?? ''
+    form.promisedDate = props.demand.promisedDate ?? ''
     form.deliveryDate = props.demand.deliveryDate ?? ''
     form.problemClarity = props.demand.problemClarity ?? undefined
     form.hasNoKpi = props.demand.hasNoKpi ?? false
@@ -229,6 +231,7 @@ watch(() => props.open, (open) => {
     form.dependencyDemandIds = []
     form.isBlocked = false
     form.blockedReason = ''
+    form.promisedDate = ''
     form.deliveryDate = ''
     form.problemClarity = undefined
     form.hasNoKpi = false
@@ -348,6 +351,21 @@ function updateHours(value: string | number | null | undefined) {
 
   const parsed = typeof value === 'number' ? value : Number(value)
   form.hours = Number.isNaN(parsed) ? undefined : parsed
+}
+
+function updateProblemClarity(value: string | number | null | undefined) {
+  if (value === '' || value == null) {
+    form.problemClarity = undefined
+    return
+  }
+
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (Number.isNaN(parsed)) {
+    form.problemClarity = undefined
+    return
+  }
+
+  form.problemClarity = Math.min(10, Math.max(0, Math.round(parsed)))
 }
 
 function normalizeDecimalInput(value: string) {
@@ -708,7 +726,7 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-2 gap-3 md:grid-cols-3">
             <UFormField label="Issue (Jira)">
               <UInput
                 v-model="form.jiraIssue"
@@ -726,6 +744,14 @@ async function handleSubmit() {
                 placeholder="Ex: 8"
                 class="w-full"
                 @update:model-value="updateHours"
+              />
+            </UFormField>
+
+            <UFormField label="Data prometida">
+              <UInput
+                v-model="form.promisedDate"
+                type="date"
+                class="w-full"
               />
             </UFormField>
           </div>
@@ -893,7 +919,7 @@ async function handleSubmit() {
             <h3 class="text-sm font-semibold text-highlighted">Status e acompanhamento</h3>
           </div>
 
-          <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-4">
             <UFormField label="Status">
               <USelect
                 v-model="form.status as DemandStatus"
@@ -913,6 +939,14 @@ async function handleSubmit() {
                   {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
                 </span>
               </label>
+            </UFormField>
+
+            <UFormField v-if="deliveryDateRequired" label="Data prometida">
+              <UInput
+                v-model="form.promisedDate"
+                type="date"
+                class="w-full"
+              />
             </UFormField>
 
             <UFormField v-if="deliveryDateRequired" label="Data de entrega" required>
@@ -990,7 +1024,7 @@ async function handleSubmit() {
                 step="1"
                 placeholder="0 = Vago, 10 = validado"
                 class="w-full max-w-40"
-                @update:model-value="(v: string | number | null | undefined) => form.problemClarity = v === '' || v == null ? undefined : Number(v)"
+                @update:model-value="updateProblemClarity"
               />
             </div>
           </div>

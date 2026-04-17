@@ -18,6 +18,7 @@ public sealed record UpdateRoadmapDemandCommand(
     string? Observation = null,
     string? JiraIssue = null,
     decimal? Hours = null,
+    DateOnly? PromisedDate = null,
     IReadOnlyList<string>? Customers = null,
     bool IsBlocked = false,
     string? BlockedReason = null,

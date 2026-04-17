@@ -61,6 +61,7 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
 
         builder.Property(x => x.IsBlocked).IsRequired();
         builder.Property(x => x.BlockedReason).HasMaxLength(500);
+        builder.Property(x => x.PromisedDate);
         builder.Property(x => x.DeliveryDate);
 
         builder.Property(x => x.ProblemClarity);

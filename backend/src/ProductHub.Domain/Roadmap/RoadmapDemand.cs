@@ -22,6 +22,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public IReadOnlyList<string> Customers { get; private set; } = [];
     public bool IsBlocked { get; private set; }
     public string? BlockedReason { get; private set; }
+    public DateOnly? PromisedDate { get; private set; }
     public DateOnly? DeliveryDate { get; private set; }
     public int? ProblemClarity { get; private set; }
     public bool HasNoKpi { get; private set; }
@@ -48,6 +49,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         IEnumerable<string>? customers = null,
         bool isBlocked = false,
         string? blockedReason = null,
+        DateOnly? promisedDate = null,
         int? problemClarity = null,
         bool hasNoKpi = false)
     {
@@ -72,6 +74,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             Customers = NormalizeCustomers(customers),
             IsBlocked = isBlocked,
             BlockedReason = isBlocked ? blockedReason : null,
+            PromisedDate = promisedDate,
             ProblemClarity = problemClarity,
             HasNoKpi = hasNoKpi
         };
@@ -97,6 +100,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         IEnumerable<string>? customers = null,
         bool isBlocked = false,
         string? blockedReason = null,
+        DateOnly? promisedDate = null,
         DateOnly? deliveryDate = null,
         int? problemClarity = null,
         bool hasNoKpi = false)
@@ -121,6 +125,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         Customers = NormalizeCustomers(customers);
         IsBlocked = isBlocked;
         BlockedReason = isBlocked ? blockedReason : null;
+        PromisedDate = promisedDate;
         DeliveryDate = deliveryDate;
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;

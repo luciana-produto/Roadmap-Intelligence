@@ -8,7 +8,7 @@ export type DemandClassification =
   | 'Mandatory'
   | 'Homologation'
 
-export type KpiType = 'Business' | 'Product' | 'Quality' | 'Usability'
+export type KpiType = 'Business' | 'Product'
 export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
 export type KpiObjective = 'Increase' | 'Decrease'
 export type ImpactType = 'Increase' | 'Decrease'
@@ -73,9 +73,13 @@ export interface RoadmapDemand {
   customers?: string[]
   isBlocked: boolean
   blockedReason?: string
+  promisedDate?: string
   dependsOn: DemandDependency[]
   dependedOnBy: DemandDependency[]
+  effectivePromisedDate?: string
   deliveryDate?: string
+  isOverdue: boolean
+  isDeliveredLate: boolean
   problemClarity?: number
   hasNoKpi: boolean
   kpiLinks: DemandKpiLink[]
@@ -116,6 +120,7 @@ export interface DemandFormData {
   dependencyDemandIds?: string[]
   isBlocked?: boolean
   blockedReason?: string
+  promisedDate?: string
   deliveryDate?: string
   problemClarity?: number
   hasNoKpi?: boolean

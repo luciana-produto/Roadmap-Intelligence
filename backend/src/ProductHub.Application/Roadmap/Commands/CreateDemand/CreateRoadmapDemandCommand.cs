@@ -15,6 +15,7 @@ public sealed record CreateRoadmapDemandCommand(
     IReadOnlyList<Guid>? DependencyDemandIds = null,
     string? JiraIssue = null,
     decimal? Hours = null,
+    DateOnly? PromisedDate = null,
     IReadOnlyList<string>? Customers = null,
     bool IsBlocked = false,
     string? BlockedReason = null,

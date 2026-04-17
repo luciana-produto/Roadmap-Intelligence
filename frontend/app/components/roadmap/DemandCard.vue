@@ -14,6 +14,21 @@ const statusConfig: Record<DemandStatus, { color: string, dot: string, label: st
   Deprioritized:{ color: 'text-amber-500', dot: 'bg-amber-500 dark:bg-amber-400', label: 'Despriorizado' }
 }
 
+function formatDate(value?: string) {
+  if (!value)
+    return ''
+
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day)
+    return value
+
+  return new Intl.DateTimeFormat('pt-BR').format(new Date(year, month - 1, day))
+}
+
+function getDisplayedStatus(demand: RoadmapDemand) {
+  return statusConfig[demand.status]
+}
+
 const typeConfig: Record<DemandType, { color: string, label: string }> = {
   Planned:    { color: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300', label: 'Planejado' },
   Spillover:  { color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300', label: 'Transbordo' },
@@ -48,6 +63,10 @@ const statusTooltip = computed(() => {
     notes.push(`Despriorização\n${props.demand.observation}`)
   return notes.join('\n\n')
 })
+
+const displayedStatus = computed(() => getDisplayedStatus(props.demand))
+const displayPromisedDate = computed(() => props.demand.effectivePromisedDate ?? props.demand.promisedDate ?? '')
+const showDelayMarker = computed(() => props.demand.isOverdue || props.demand.isDeliveredLate)
 
 function formatDependencySummary(dependency: RoadmapDemand['dependsOn'][number]) {
   return `${dependency.projectName} · ${dependency.title}`
@@ -109,9 +128,9 @@ function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependenc
     <div class="flex items-start justify-between gap-2">
       <div class="flex items-start gap-2 min-w-0">
         <div class="flex items-center gap-1.5 min-w-0 flex-wrap" :title="statusTooltip || undefined">
-          <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" :class="statusConfig[demand.status].dot" />
-          <span class="text-xs truncate" :class="statusConfig[demand.status].color">
-            {{ statusConfig[demand.status].label }}
+          <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" :class="displayedStatus.dot" />
+          <span class="text-xs truncate" :class="displayedStatus.color">
+            {{ displayedStatus.label }}
           </span>
           <span
             v-if="demand.isBlocked"
@@ -126,6 +145,14 @@ function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependenc
           >
             <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
           </span>
+        </div>
+        <div v-if="displayPromisedDate" class="mt-1 flex items-center gap-1 text-[11px] text-muted">
+          <UIcon name="i-lucide-calendar-clock" class="h-3 w-3" />
+          <span>{{ formatDate(displayPromisedDate) }}</span>
+        </div>
+        <div v-if="showDelayMarker" class="mt-1 flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+          <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
+          <span>Atrasado</span>
         </div>
       </div>
       <div class="flex items-start gap-1.5 shrink-0">

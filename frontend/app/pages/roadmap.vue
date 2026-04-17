@@ -74,6 +74,33 @@ function formatDemandCustomers(customers?: string[]): string {
   return customers?.join(', ') ?? ''
 }
 
+function formatDemandDate(value?: string) {
+  if (!value)
+    return ''
+
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day)
+    return value
+
+  return new Intl.DateTimeFormat('pt-BR').format(new Date(year, month - 1, day))
+}
+
+function getDisplayedDemandStatus(demand: RoadmapDemand) {
+  return {
+    label: statusLabels[demand.status],
+    textClass: statusTextClass[demand.status],
+    dotClass: statusDotClass[demand.status]
+  }
+}
+
+function getDisplayedPromisedDate(demand: RoadmapDemand) {
+  return demand.effectivePromisedDate ?? demand.promisedDate ?? ''
+}
+
+function showDemandDelayMarker(demand: RoadmapDemand) {
+  return demand.isOverdue || demand.isDeliveredLate
+}
+
 function getDemandNotesTooltip(demand: RoadmapDemand): string {
   const notes = []
   if (demand.isBlocked && demand.blockedReason)
@@ -879,6 +906,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     observation: demand.observation ?? '',
     jiraIssue: demand.jiraIssue ?? '',
     hours: demand.hours,
+    promisedDate: demand.promisedDate ?? '',
     customers: demand.customers ?? [],
     dependencyDemandIds: demand.dependsOn.map(item => item.demandId),
     isBlocked: demand.isBlocked,
@@ -1587,7 +1615,7 @@ function buildListBlobUrl(rows: RoadmapDemand[]): string {
   const header = cols.map(c => c.label)
   const data = rows.map(row => cols.map(c => {
     if (c.id === 'priority') return priorityRankByDemandId.value[row.id] ? `#${priorityRankByDemandId.value[row.id]}` : ''
-    if (c.id === 'status') return statusLabels[row.status]
+    if (c.id === 'status') return getDisplayedDemandStatus(row).label
     if (c.id === 'type') return typeLabels[row.type]
     if (c.id === 'classification') return classificationLabels[row.classification]
     if (c.id === 'products') return row.products.map(p => p.name).join(', ')
@@ -2016,16 +2044,16 @@ watch(selectedProjectId, (id) => {
               <template #status-cell="{ row }">
                 <div
                   class="flex flex-col gap-1"
-                  :title="getDemandNotesTooltip(row.original) || statusLabels[row.original.status]"
+                  :title="getDemandNotesTooltip(row.original) || getDisplayedDemandStatus(row.original).label"
                 >
                   <div class="flex items-center gap-1.5">
                     <span
                       class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                      :class="statusDotClass[row.original.status]"
+                      :class="getDisplayedDemandStatus(row.original).dotClass"
                       aria-hidden="true"
                     />
-                    <span class="text-xs font-medium" :class="statusTextClass[row.original.status]">
-                      {{ statusLabels[row.original.status] }}
+                    <span class="text-xs font-medium" :class="getDisplayedDemandStatus(row.original).textClass">
+                      {{ getDisplayedDemandStatus(row.original).label }}
                     </span>
                     <span
                       v-if="row.original.isBlocked"
@@ -2041,11 +2069,25 @@ watch(selectedProjectId, (id) => {
                     </span>
                   </div>
                   <div
+                    v-if="getDisplayedPromisedDate(row.original)"
+                    class="ml-4 flex items-center gap-1 text-[11px] text-muted"
+                  >
+                    <UIcon name="i-lucide-calendar-clock" class="h-3 w-3" />
+                    <span>{{ formatDemandDate(getDisplayedPromisedDate(row.original)) }}</span>
+                  </div>
+                  <div
                     v-if="row.original.status === 'Done' && row.original.deliveryDate"
                     class="ml-4 flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400"
                   >
                     <UIcon name="i-lucide-calendar-check" class="h-3 w-3" />
-                    <span>{{ row.original.deliveryDate }}</span>
+                    <span>{{ formatDemandDate(row.original.deliveryDate) }}</span>
+                  </div>
+                  <div
+                    v-if="showDemandDelayMarker(row.original)"
+                    class="ml-4 flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400"
+                  >
+                    <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
+                    <span>Atrasado</span>
                   </div>
                 </div>
               </template>

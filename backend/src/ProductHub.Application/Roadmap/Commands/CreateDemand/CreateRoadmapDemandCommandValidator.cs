@@ -43,6 +43,9 @@ public sealed class CreateRoadmapDemandCommandValidator
             .WithMessage("Dependency demands must be unique.");
         RuleFor(x => x.JiraIssue).MaximumLength(100);
         RuleFor(x => x.Hours).GreaterThan(0).When(x => x.Hours.HasValue);
+        RuleFor(x => x.PromisedDate)
+            .Must((command, promisedDate) => !promisedDate.HasValue || command.QuarterNumber > 0)
+            .WithMessage("Promised date requires a prioritized quarter.");
         RuleFor(x => x.Customers)
             .Must(customers => customers == null || string.Join(", ", customers).Length <= 500)
             .WithMessage("Customers must have a maximum combined length of 500 characters.");

@@ -13,6 +13,16 @@ internal static class RoadmapDemandDtoMapper
         IReadOnlyDictionary<Guid, string>? kpiNamesById = null,
         IEnumerable<DemandKpiLink>? kpiLinks = null)
     {
+        var effectivePromisedDate = GetEffectivePromisedDate(demand);
+        var today = DateOnly.FromDateTime(DateTime.Today);
+        var isDeliveredLate = demand.Status == DemandStatus.Done
+            && demand.DeliveryDate.HasValue
+            && effectivePromisedDate.HasValue
+            && demand.DeliveryDate.Value > effectivePromisedDate.Value;
+        var isOverdue = demand.Status is not DemandStatus.Done and not DemandStatus.Deprioritized
+            && effectivePromisedDate.HasValue
+            && today > effectivePromisedDate.Value;
+
         var dependsOn = dependencyLinks
             .Where(link => link.DemandId == demand.Id)
             .Select(link => MapDependency(link.DependsOnDemandId, demandsById, projectNamesById))
@@ -68,12 +78,29 @@ internal static class RoadmapDemandDtoMapper
             demand.BlockedReason,
             dependsOn,
             dependedOnBy,
+            demand.PromisedDate,
+            effectivePromisedDate,
             demand.DeliveryDate,
+            isOverdue,
+            isDeliveredLate,
             demand.ProblemClarity,
             demand.HasNoKpi,
             kpiLinkDtos,
             demand.CreatedAt,
             demand.UpdatedAt);
+    }
+
+    private static DateOnly? GetEffectivePromisedDate(RoadmapDemand demand)
+    {
+        if (demand.PromisedDate.HasValue)
+            return demand.PromisedDate;
+
+        if (demand.QuarterYear <= 0 || demand.QuarterNumber <= 0)
+            return null;
+
+        var month = demand.QuarterNumber * 3;
+        var lastDay = DateTime.DaysInMonth(demand.QuarterYear, month);
+        return new DateOnly(demand.QuarterYear, month, lastDay);
     }
 
     private static DemandDependencyDto? MapDependency(
