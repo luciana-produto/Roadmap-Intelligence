@@ -31,6 +31,7 @@ public sealed class GetKpisByProjectQueryHandler(IKpiRepository kpiRepository)
             kpi.Name,
             kpi.Type.ToString(),
             kpi.Lever.ToString(),
+            kpi.Objective.ToString(),
             kpi.Description,
             kpi.Calculation,
             kpi.Target,

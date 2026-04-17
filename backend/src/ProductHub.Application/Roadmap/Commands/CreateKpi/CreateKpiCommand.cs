@@ -8,6 +8,7 @@ public sealed record CreateKpiCommand(
     string Name,
     string Type,
     string Lever,
+    string Objective,
     string? Description = null,
     string? Calculation = null,
     decimal? Target = null,

@@ -17,6 +17,10 @@ public sealed class UpdateKpiCommandValidator : AbstractValidator<UpdateKpiComma
             .NotEmpty()
             .Must(l => Enum.TryParse<KpiLever>(l, true, out _))
             .WithMessage("Lever must be Growth, Efficiency or Customer.");
+        RuleFor(x => x.Objective)
+            .NotEmpty()
+            .Must(o => Enum.TryParse<KpiObjective>(o, true, out _))
+            .WithMessage("Objective must be Increase or Decrease.");
         RuleFor(x => x.Description).MaximumLength(2000);
         RuleFor(x => x.Calculation).MaximumLength(500);
         RuleFor(x => x.Target).GreaterThanOrEqualTo(0).When(x => x.Target.HasValue);

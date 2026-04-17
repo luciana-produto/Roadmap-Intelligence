@@ -24,6 +24,10 @@ public sealed class KpiConfiguration : IEntityTypeConfiguration<Kpi>
             .HasConversion<string>()
             .IsRequired();
 
+        builder.Property(x => x.Objective)
+            .HasConversion<string>()
+            .IsRequired();
+
         builder.Property(x => x.Description)
             .HasMaxLength(2000);
 

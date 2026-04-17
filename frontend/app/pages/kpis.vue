@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
-import type { Kpi, KpiFormData, KpiType, KpiLever } from '~/types/roadmap'
+import type { Kpi, KpiFormData, KpiType, KpiLever, KpiObjective } from '~/types/roadmap'
 
 useSeoMeta({ title: 'KPIs · ProductHub' })
 
@@ -37,6 +37,11 @@ const kpiLeverOptions: { value: KpiLever, label: string }[] = [
   { value: 'Customer', label: 'Cliente' }
 ]
 
+const kpiObjectiveOptions: { value: KpiObjective, label: string }[] = [
+  { value: 'Increase', label: 'Aumentar' },
+  { value: 'Decrease', label: 'Reduzir' }
+]
+
 const kpiTypeLabels: Record<KpiType, string> = {
   Business: 'Negócio',
   Product: 'Produto',
@@ -48,6 +53,11 @@ const kpiLeverLabels: Record<KpiLever, string> = {
   Growth: 'Crescer',
   Efficiency: 'Eficiência',
   Customer: 'Cliente'
+}
+
+const kpiObjectiveLabels: Record<KpiObjective, string> = {
+  Increase: 'Aumentar',
+  Decrease: 'Reduzir'
 }
 
 const kpiTypeBadgeColor: Record<KpiType, string> = {
@@ -68,6 +78,7 @@ const columns: TableColumn<Kpi>[] = [
   { accessorKey: 'name', header: 'Nome' },
   { accessorKey: 'type', header: 'Tipo' },
   { accessorKey: 'lever', header: 'Alavanca' },
+  { accessorKey: 'objective', header: 'Objetivo' },
   { accessorKey: 'target', header: 'Meta' },
   { accessorKey: 'currentValue', header: 'Valor Atual' },
   { accessorKey: 'linkedDemandsCount', header: 'Demandas' },
@@ -85,6 +96,7 @@ function emptyForm(): KpiFormData {
     name: '',
     type: 'Business',
     lever: 'Growth',
+    objective: 'Increase',
     description: '',
     calculation: '',
     target: undefined,
@@ -105,6 +117,7 @@ function openEdit(kpi: Kpi) {
     name: kpi.name,
     type: kpi.type,
     lever: kpi.lever,
+    objective: kpi.objective,
     description: kpi.description ?? '',
     calculation: kpi.calculation ?? '',
     target: kpi.target,
@@ -278,6 +291,10 @@ function getProgressPercent(kpi: Kpi): number | null {
         </UBadge>
       </template>
 
+      <template #objective-cell="{ row }">
+        <span class="text-sm text-highlighted">{{ kpiObjectiveLabels[row.original.objective] }}</span>
+      </template>
+
       <template #target-cell="{ row }">
         <span class="text-sm">{{ formatNumber(row.original.target) }}</span>
       </template>
@@ -345,7 +362,7 @@ function getProgressPercent(kpi: Kpi): number | null {
             <UInput v-model="formData.name" placeholder="Ex: Taxa de churn mensal" class="w-full" />
           </UFormField>
 
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-3 gap-4">
             <UFormField label="Tipo" required>
               <USelectMenu
                 v-model="formData.type"
@@ -357,6 +374,13 @@ function getProgressPercent(kpi: Kpi): number | null {
               <USelectMenu
                 v-model="formData.lever"
                 :items="kpiLeverOptions"
+                class="w-full"
+              />
+            </UFormField>
+            <UFormField label="Objetivo" required>
+              <USelectMenu
+                v-model="formData.objective"
+                :items="kpiObjectiveOptions"
                 class="w-full"
               />
             </UFormField>

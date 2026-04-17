@@ -6,6 +6,7 @@ public sealed record KpiDto(
     string Name,
     string Type,
     string Lever,
+    string Objective,
     string? Description,
     string? Calculation,
     decimal? Target,

@@ -1,8 +1,15 @@
 <script setup lang="ts">
-import type { RoadmapDemand, RoadmapProject, DemandDependencyOption, DemandFormData, DemandType, DemandClassification, DemandStatus, Kpi, DemandKpiLink, DemandKpiLinkInput, ImpactType, ConfidenceLevel } from '~/types/roadmap'
+import type { RoadmapDemand, RoadmapProject, DemandDependencyOption, DemandFormData, DemandType, DemandClassification, DemandStatus, Kpi, DemandKpiLinkInput, ImpactType, ConfidenceLevel } from '~/types/roadmap'
 
 type DemandFormState = Omit<DemandFormData, 'classification'> & {
   classification: DemandClassification | ''
+}
+
+type ImpactDisplayType = 'Percentage' | 'Number' | 'Currency'
+
+type EditableDemandKpiLink = DemandKpiLinkInput & {
+  impactDisplayType: ImpactDisplayType
+  estimatedImpactInput: string
 }
 
 const props = defineProps<{
@@ -59,14 +66,26 @@ const statusOptions = [
   { value: 'Deprioritized', label: 'Despriorizado' }
 ]
 
-const resultTabs = [
-  { value: 'general', label: 'Geral' },
-  { value: 'result', label: 'Resultado' }
-] as const
+type DemandFormTab = 'general' | 'status' | 'result'
+
+const resultTabs = computed(() => {
+  const tabs: Array<{ value: DemandFormTab, label: string }> = [
+    { value: 'general', label: 'Geral' }
+  ]
+
+  if (isEdit.value)
+    tabs.push({ value: 'status', label: 'Status' })
+
+  tabs.push({ value: 'result', label: 'KPIs' })
+
+  return tabs
+})
 
 const customerInput = ref('')
 const dependencySearch = ref('')
-const activeTab = ref<'general' | 'result'>('general')
+const activeTab = ref<DemandFormTab>('general')
+const showSubmitHint = ref(false)
+let submitHintTimeout: ReturnType<typeof setTimeout> | null = null
 
 const observationRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
@@ -93,11 +112,12 @@ const form = reactive<DemandFormState>({
   hasNoKpi: false
 })
 
-const kpiLinkEdits = ref<DemandKpiLinkInput[]>([])
+const kpiLinkEdits = ref<EditableDemandKpiLink[]>([])
 
 const impactTypeOptions = [
-  { value: 'Increase', label: 'Aumentar' },
-  { value: 'Decrease', label: 'Reduzir' }
+  { value: 'Percentage', label: 'Percentual' },
+  { value: 'Number', label: 'Número' },
+  { value: 'Currency', label: 'Valor R$' }
 ]
 
 const confidenceLevelOptions = [
@@ -105,6 +125,33 @@ const confidenceLevelOptions = [
   { value: 'Medium', label: 'Média' },
   { value: 'Low', label: 'Baixa' }
 ]
+
+const confidenceLevelHelp = [
+  {
+    title: 'Alta confiança',
+    color: 'text-emerald-600 dark:text-emerald-400',
+    emoji: '🟢',
+    summary: 'Evidência forte',
+    signals: 'Já fez antes, benchmark claro ou dado consistente.',
+    detail: 'Ex.: Melhorar performance do PDV -> reduz tempo de atendimento.'
+  },
+  {
+    title: 'Média confiança',
+    color: 'text-amber-600 dark:text-amber-400',
+    emoji: '🟡',
+    summary: 'Hipótese razoável',
+    signals: 'Feedback de clientes, evidência indireta ou algo ainda não testado.',
+    detail: 'Ex.: Melhorar UX do upsell -> aumentar ticket médio.'
+  },
+  {
+    title: 'Baixa confiança',
+    color: 'text-rose-600 dark:text-rose-400',
+    emoji: '🔴',
+    summary: 'Alta incerteza',
+    signals: 'Ideia nova, sem dado ou muito dependente do comportamento do usuário.',
+    detail: 'Ex.: Novo modelo de recomendação inteligente.'
+  }
+] as const
 
 const selectedQuarter = computed({
   get: () => `${form.quarterNumber}-${form.quarterYear}`,
@@ -135,6 +182,7 @@ watch(() => props.open, (open) => {
   if (!open) return
 
   activeTab.value = 'general'
+  showSubmitHint.value = false
 
   if (props.demand) {
     form.title = props.demand.title
@@ -156,7 +204,7 @@ watch(() => props.open, (open) => {
     form.deliveryDate = props.demand.deliveryDate ?? ''
     form.problemClarity = props.demand.problemClarity ?? undefined
     form.hasNoKpi = props.demand.hasNoKpi ?? false
-    kpiLinkEdits.value = (props.demand.kpiLinks ?? []).map(l => ({
+    kpiLinkEdits.value = (props.demand.kpiLinks ?? []).map(l => toEditableKpiLink({
       kpiId: l.kpiId,
       impactType: l.impactType,
       estimatedImpact: l.estimatedImpact,
@@ -302,13 +350,101 @@ function updateHours(value: string | number | null | undefined) {
   form.hours = Number.isNaN(parsed) ? undefined : parsed
 }
 
+function normalizeDecimalInput(value: string) {
+  const trimmed = value.trim()
+  if (!trimmed)
+    return ''
+
+  if (trimmed.includes(',') && trimmed.includes('.'))
+    return trimmed.replace(/\./g, '').replace(',', '.')
+
+  if (trimmed.includes(','))
+    return trimmed.replace(',', '.')
+
+  return trimmed
+}
+
+function parseMaskedNumber(value: string | number | null | undefined) {
+  if (typeof value === 'number')
+    return Number.isNaN(value) ? undefined : value
+
+  if (value == null)
+    return undefined
+
+  const digitsOnly = String(value).replace(/[^\d,.-]/g, '')
+  if (!digitsOnly)
+    return undefined
+
+  const normalized = normalizeDecimalInput(digitsOnly)
+  const parsed = Number(normalized)
+  return Number.isNaN(parsed) ? undefined : parsed
+}
+
+function formatEstimatedImpact(value: number | undefined, displayType: ImpactDisplayType) {
+  if (value == null)
+    return ''
+
+  if (displayType === 'Currency') {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2
+    }).format(value)
+  }
+
+  if (displayType === 'Percentage') {
+    return `${new Intl.NumberFormat('pt-BR', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2
+    }).format(value)}%`
+  }
+
+  return new Intl.NumberFormat('pt-BR', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2
+  }).format(value)
+}
+
+function toEditableKpiLink(link?: Partial<DemandKpiLinkInput>): EditableDemandKpiLink {
+  const estimatedImpact = link?.estimatedImpact
+  const impactDisplayType: ImpactDisplayType = 'Number'
+
+  return {
+    kpiId: link?.kpiId ?? '',
+    impactType: link?.impactType ?? 'Increase',
+    estimatedImpact,
+    confidenceLevel: link?.confidenceLevel ?? 'Medium',
+    impactDisplayType,
+    estimatedImpactInput: formatEstimatedImpact(estimatedImpact, impactDisplayType)
+  }
+}
+
+function updateImpactDisplayType(index: number, value: string | undefined) {
+  const link = kpiLinkEdits.value[index]
+  if (!link)
+    return
+
+  const nextType = (value ?? 'Number') as ImpactDisplayType
+  link.impactDisplayType = nextType
+  link.estimatedImpactInput = formatEstimatedImpact(link.estimatedImpact, nextType)
+}
+
+function updateEstimatedImpactInput(index: number, value: string | number | null | undefined) {
+  const link = kpiLinkEdits.value[index]
+  if (!link)
+    return
+
+  const rawValue = typeof value === 'number' ? String(value) : (value ?? '')
+  const parsed = parseMaskedNumber(rawValue)
+  link.estimatedImpact = parsed
+  link.estimatedImpactInput = parsed == null
+    ? ''
+    : formatEstimatedImpact(parsed, link.impactDisplayType)
+}
+
 function addKpiLink() {
-  kpiLinkEdits.value.push({
-    kpiId: '',
-    impactType: 'Increase',
-    estimatedImpact: undefined,
-    confidenceLevel: 'Medium'
-  })
+  kpiLinkEdits.value.push(toEditableKpiLink())
 }
 
 function removeKpiLink(index: number) {
@@ -333,17 +469,133 @@ function getKpiOptionsForRow(selectedKpiId: string) {
   return [...selectedOption, ...availableOptions.filter(option => option.value !== selectedKpiId)]
 }
 
-const isSubmitDisabled = computed(() =>
-  !form.title
-  || !form.projectId
-  || !form.classification
-  || form.productIds.length === 0
-  || (observationRequired.value && !form.observation)
-  || (deliveryDateRequired.value && !form.deliveryDate)
-  || (form.isBlocked && !form.blockedReason)
-)
+function getKpiById(kpiId: string) {
+  return (props.availableKpis ?? []).find(kpi => kpi.id === kpiId)
+}
+
+function getKpiObjectiveLabel(kpiId: string) {
+  return getKpiById(kpiId)?.objective === 'Decrease' ? 'Reduzir' : 'Aumentar'
+}
+
+function getKpiConfidenceSummary(confidenceLevel: ConfidenceLevel) {
+  switch (confidenceLevel) {
+    case 'High':
+      return '(forte confiança)'
+    case 'Medium':
+      return '(é possível, mas não é garantido)'
+    case 'Low':
+      return '(não sabemos se é possível)'
+  }
+}
+
+function getKpiArticle(kpiName: string, includePreposition: boolean) {
+  const normalized = kpiName.trim().toLowerCase()
+  const feminineStarts = ['taxa', 'receita', 'margem', 'nota', 'média', 'quantidade', 'conversão', 'retenção']
+
+  if (feminineStarts.some(word => normalized.startsWith(word)))
+    return includePreposition ? 'da' : 'a'
+
+  return includePreposition ? 'do' : 'o'
+}
+
+function getKpiImpactSummary(link: EditableDemandKpiLink) {
+  if (!link.kpiId)
+    return null
+
+  const kpi = getKpiById(link.kpiId)
+  if (!kpi)
+    return null
+
+  const impactDefined = link.estimatedImpact != null
+  const impactValue = !impactDefined
+    ? '[NÃO DEFINIDO]'
+    : formatEstimatedImpact(link.estimatedImpact, link.impactDisplayType)
+
+  return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, impactDefined)} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
+}
+
+function isKpiLinkComplete(link: EditableDemandKpiLink) {
+  return !!link.kpiId
+}
+
+const missingSubmitReason = computed(() => {
+  if (!form.title)
+    return 'Informe o título da demanda'
+  if (!form.projectId)
+    return 'Selecione o projeto'
+  if (!form.classification)
+    return 'Selecione a classificação'
+  if (form.productIds.length === 0)
+    return 'Selecione ao menos um produto'
+  if (observationRequired.value && !form.observation)
+    return 'Preencha a observação para demanda despriorizada'
+  if (deliveryDateRequired.value && !form.deliveryDate)
+    return 'Informe a data de entrega para concluir a demanda'
+  if (form.isBlocked && !form.blockedReason)
+    return 'Preencha o motivo do impedimento'
+  if (form.problemClarity == null)
+    return 'Informe a nota de clareza do problema'
+  if (!form.hasNoKpi && kpiLinkEdits.value.length === 0)
+    return 'Adicione ao menos um KPI impactado ou marque a demanda como sem KPI'
+  if (!form.hasNoKpi && kpiLinkEdits.value.some(link => !isKpiLinkComplete(link)))
+    return 'Preencha todos os KPIs vinculados antes de salvar'
+
+  return null
+})
+
+const isSubmitDisabled = computed(() => !!missingSubmitReason.value)
+const submitButtonLabel = computed(() => isEdit.value ? 'Editar demanda' : 'Criar demanda')
 
 const isSubmitting = ref(false)
+
+function clearSubmitHintTimer() {
+  if (submitHintTimeout) {
+    clearTimeout(submitHintTimeout)
+    submitHintTimeout = null
+  }
+}
+
+function openSubmitHint() {
+  showSubmitHint.value = true
+  clearSubmitHintTimer()
+  submitHintTimeout = setTimeout(() => {
+    showSubmitHint.value = false
+    submitHintTimeout = null
+  }, 2500)
+}
+
+function focusRelevantTab() {
+  if (
+    missingSubmitReason.value === 'Preencha a observação para demanda despriorizada'
+    || missingSubmitReason.value === 'Informe a data de entrega para concluir a demanda'
+    || missingSubmitReason.value === 'Preencha o motivo do impedimento'
+  ) {
+    activeTab.value = isEdit.value ? 'status' : 'general'
+    return
+  }
+
+  if (
+    missingSubmitReason.value === 'Informe a nota de clareza do problema'
+    || missingSubmitReason.value === 'Adicione ao menos um KPI impactado ou marque a demanda como sem KPI'
+    || missingSubmitReason.value === 'Preencha todos os KPIs vinculados antes de salvar'
+  ) {
+    activeTab.value = 'result'
+    return
+  }
+
+  activeTab.value = 'general'
+}
+
+function handleSubmitClick() {
+  if (isSubmitDisabled.value) {
+    focusRelevantTab()
+    openSubmitHint()
+    return
+  }
+
+  showSubmitHint.value = false
+  handleSubmit()
+}
 
 async function handleSubmit() {
   if (isSubmitDisabled.value) return
@@ -357,7 +609,12 @@ async function handleSubmit() {
       ...form,
       hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
       classification: form.classification as DemandClassification
-    }, validLinks)
+    }, validLinks.map(link => ({
+      kpiId: link.kpiId,
+      impactType: link.impactType,
+      estimatedImpact: link.estimatedImpact,
+      confidenceLevel: link.confidenceLevel
+    })))
   }
   finally {
     isSubmitting.value = false
@@ -369,13 +626,12 @@ async function handleSubmit() {
   <UModal
     :open="open"
     :title="title"
-    :description="isEdit ? 'Edite os dados da demanda.' : 'Preencha os dados para criar uma nova demanda no roadmap.'"
     :ui="{ content: 'sm:max-w-4xl' }"
     @update:open="emit('update:open', $event)"
   >
     <template #body>
       <form
-        class="space-y-4"
+        class="min-h-[38rem] space-y-4"
         @submit.prevent="handleSubmit"
       >
         <div class="flex gap-2 border-b border-default pb-3">
@@ -392,271 +648,187 @@ async function handleSubmit() {
         </div>
 
         <template v-if="activeTab === 'general'">
-        <!-- Título -->
-        <UFormField label="Título" required>
-          <UInput
-            v-model="form.title"
-            placeholder="Descreva a demanda brevemente"
-            class="w-full"
-          />
-        </UFormField>
+        <section class="space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">Dados da demanda</h3>
+          </div>
 
-        <!-- Descrição -->
-        <UFormField label="Descrição">
-          <UTextarea
-            v-model="form.description"
-            placeholder="Detalhes adicionais (opcional)"
-            :rows="2"
-            class="w-full"
-          />
-        </UFormField>
-
-        <!-- Projeto + Quarter + Tipo + Classificação: 4 cols -->
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <UFormField label="Projeto" required>
-            <USelect
-              v-model="form.projectId"
-              :items="projects.map(p => ({ value: p.id, label: p.name }))"
-              placeholder="Selecione"
-              class="w-full"
-              :disabled="isEdit"
-            />
-          </UFormField>
-
-          <UFormField label="Quarter" required>
-            <USelect
-              v-model="selectedQuarter"
-              :items="quarters"
-              placeholder="Selecione"
-              class="w-full"
-            />
-          </UFormField>
-
-          <UFormField label="Tipo" required>
-            <USelect
-              v-model="form.type as DemandType"
-              :items="typeOptions"
-              class="w-full"
-            />
-          </UFormField>
-
-          <UFormField label="Classificação" required>
-            <USelect
-              v-model="form.classification"
-              :items="classificationOptions"
-              placeholder="Selecione"
-              class="w-full"
-            />
-          </UFormField>
-        </div>
-
-        <!-- Issue Jira + Horas -->
-        <div class="grid grid-cols-2 gap-3">
-          <UFormField label="Issue (Jira)">
+          <UFormField label="Título" required>
             <UInput
-              v-model="form.jiraIssue"
-              placeholder="Ex: PROJ-1234"
+              v-model="form.title"
+              placeholder="Descreva a demanda brevemente"
               class="w-full"
             />
           </UFormField>
 
-          <UFormField label="Horas">
-            <UInput
-              :model-value="form.hours ?? ''"
-              type="number"
-              min="0"
-              step="0.5"
-              placeholder="Ex: 8"
+          <UFormField label="Descrição">
+            <UTextarea
+              v-model="form.description"
+              placeholder="Detalhes adicionais (opcional)"
+              :rows="2"
               class="w-full"
-              @update:model-value="updateHours"
             />
           </UFormField>
-        </div>
 
-        <UFormField label="Clientes envolvidos">
-          <div class="space-y-2">
-            <div class="rounded-lg border border-default bg-elevated p-2">
-              <div class="flex min-h-10 flex-wrap items-center gap-2">
-                <span
-                  v-for="customer in customerTags"
-                  :key="customer"
-                  class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-xs text-primary"
-                >
-                  {{ customer }}
-                  <button
-                    type="button"
-                    class="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-primary/15"
-                    @click="removeCustomerTag(customer)"
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <UFormField label="Projeto" required>
+              <USelect
+                v-model="form.projectId"
+                :items="projects.map(p => ({ value: p.id, label: p.name }))"
+                placeholder="Selecione"
+                class="w-full"
+                :disabled="isEdit"
+              />
+            </UFormField>
+
+            <UFormField label="Quarter" required>
+              <USelect
+                v-model="selectedQuarter"
+                :items="quarters"
+                placeholder="Selecione"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Tipo" required>
+              <USelect
+                v-model="form.type as DemandType"
+                :items="typeOptions"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Classificação" required>
+              <USelect
+                v-model="form.classification"
+                :items="classificationOptions"
+                placeholder="Selecione"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <UFormField label="Issue (Jira)">
+              <UInput
+                v-model="form.jiraIssue"
+                placeholder="Ex: PROJ-1234"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Horas">
+              <UInput
+                :model-value="form.hours ?? ''"
+                type="number"
+                min="0"
+                step="0.5"
+                placeholder="Ex: 8"
+                class="w-full"
+                @update:model-value="updateHours"
+              />
+            </UFormField>
+          </div>
+
+          <UFormField label="Clientes envolvidos">
+            <div class="space-y-2">
+              <div class="rounded-lg border border-default bg-elevated p-2">
+                <div class="flex min-h-10 flex-wrap items-center gap-2">
+                  <span
+                    v-for="customer in customerTags"
+                    :key="customer"
+                    class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-xs text-primary"
                   >
-                    <UIcon name="i-lucide-x" class="h-3 w-3" />
-                  </button>
-                </span>
+                    {{ customer }}
+                    <button
+                      type="button"
+                      class="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-primary/15"
+                      @click="removeCustomerTag(customer)"
+                    >
+                      <UIcon name="i-lucide-x" class="h-3 w-3" />
+                    </button>
+                  </span>
 
-                <input
-                  v-model="customerInput"
-                  type="text"
-                  class="min-w-[12rem] flex-1 bg-transparent px-1 py-1 text-sm text-highlighted outline-none placeholder:text-muted"
-                  placeholder="Digite para buscar ou criar um cliente"
-                  @keydown.enter.prevent="handleCustomerEnter"
+                  <input
+                    v-model="customerInput"
+                    type="text"
+                    class="min-w-[12rem] flex-1 bg-transparent px-1 py-1 text-sm text-highlighted outline-none placeholder:text-muted"
+                    placeholder="Digite para buscar ou criar um cliente"
+                    @keydown.enter.prevent="handleCustomerEnter"
+                  >
+                </div>
+              </div>
+
+              <div
+                v-if="hasCustomerQuery && (filteredCustomerSuggestions.length || canCreateCustomerFromInput)"
+                class="rounded-lg border border-default bg-default shadow-sm"
+              >
+                <p class="border-b border-default px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
+                  Sugestões
+                </p>
+
+                <button
+                  v-for="customer in filteredCustomerSuggestions"
+                  :key="customer"
+                  type="button"
+                  class="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                  @click="addCustomerTag(customer)"
                 >
+                  <span class="truncate">{{ customer }}</span>
+                </button>
+
+                <button
+                  v-if="canCreateCustomerFromInput"
+                  type="button"
+                  class="flex w-full items-center justify-between border-t border-default px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                  @click="addCustomerTag(customerInput)"
+                >
+                  <span class="truncate"><strong>{{ customerInput.trim() }}</strong> (Novo Cliente)</span>
+                </button>
               </div>
             </div>
-
-            <div
-              v-if="hasCustomerQuery && (filteredCustomerSuggestions.length || canCreateCustomerFromInput)"
-              class="rounded-lg border border-default bg-default shadow-sm"
-            >
-              <p class="border-b border-default px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-muted">
-                Sugestões
-              </p>
-
-              <button
-                v-for="customer in filteredCustomerSuggestions"
-                :key="customer"
-                type="button"
-                class="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
-                @click="addCustomerTag(customer)"
-              >
-                <span class="truncate">{{ customer }}</span>
-              </button>
-
-              <button
-                v-if="canCreateCustomerFromInput"
-                type="button"
-                class="flex w-full items-center justify-between border-t border-default px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
-                @click="addCustomerTag(customerInput)"
-              >
-                <span class="truncate"><strong>{{ customerInput.trim() }}</strong> (Novo Cliente)</span>
-              </button>
-            </div>
-          </div>
-        </UFormField>
-
-        <!-- Produtos (obrigatório, multi-select) -->
-        <UFormField label="Produtos" required>
-          <div
-            v-if="productsForProject.length"
-            class="flex flex-wrap gap-2 p-3 rounded-lg border border-default bg-elevated"
-          >
-            <label
-              v-for="product in productsForProject"
-              :key="product.id"
-              class="flex items-center gap-2 cursor-pointer px-2.5 py-1.5 rounded-lg hover:bg-default transition-colors select-none"
-              :class="form.productIds.includes(product.id)
-                ? 'bg-primary/10 border border-primary/30'
-                : 'border border-transparent'"
-            >
-              <input
-                type="checkbox"
-                :value="product.id"
-                :checked="form.productIds.includes(product.id)"
-                class="accent-primary w-3.5 h-3.5"
-                @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
-              >
-              <span class="text-sm">{{ product.name }}</span>
-            </label>
-          </div>
-          <p
-            v-else
-            class="text-xs text-muted italic"
-          >
-            Selecione um projeto primeiro.
-          </p>
-        </UFormField>
-
-        <!-- Status + Marcação de Impedimento (somente edição) -->
-        <div
-          v-if="isEdit"
-          class="grid grid-cols-1 gap-3 items-start sm:grid-cols-3"
-        >
-          <UFormField label="Status">
-            <USelect
-              v-model="form.status as DemandStatus"
-              :items="statusOptions"
-              class="w-full"
-            />
           </UFormField>
 
-          <!-- Impedimento toggle -->
-          <UFormField label="Impedimento">
-            <div class="flex items-center gap-3 h-9">
-              <label class="flex items-center gap-2 cursor-pointer select-none">
+          <UFormField label="Produtos" required>
+            <div
+              v-if="productsForProject.length"
+              class="flex flex-wrap gap-2 p-3 rounded-lg border border-default bg-elevated"
+            >
+              <label
+                v-for="product in productsForProject"
+                :key="product.id"
+                class="flex items-center gap-2 cursor-pointer px-2.5 py-1.5 rounded-lg hover:bg-default transition-colors select-none"
+                :class="form.productIds.includes(product.id)
+                  ? 'bg-primary/10 border border-primary/30'
+                  : 'border border-transparent'"
+              >
                 <input
-                  v-model="form.isBlocked"
                   type="checkbox"
-                  class="accent-red-500 w-4 h-4"
+                  :value="product.id"
+                  :checked="form.productIds.includes(product.id)"
+                  class="accent-primary w-3.5 h-3.5"
+                  @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
                 >
-                <span class="text-sm" :class="form.isBlocked ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted'">
-                  {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
-                </span>
+                <span class="text-sm">{{ product.name }}</span>
               </label>
             </div>
+            <p
+              v-else
+              class="text-xs text-muted italic"
+            >
+              Selecione um projeto primeiro.
+            </p>
           </UFormField>
+        </section>
 
-          <UFormField
-            v-if="deliveryDateRequired"
-            label="Data de entrega *"
-          >
-            <UInput
-              v-model="form.deliveryDate"
-              type="date"
-              class="w-full"
-              :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
-            />
-          </UFormField>
+        <section class="space-y-4 border-t border-default pt-4">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">Dependências entre demandas</h3>
+            <p class="mt-1 text-xs text-muted">
+              Relacione demandas que precisam ser concluídas antes desta seguir adiante.
+            </p>
+          </div>
 
-        </div>
-
-        <!-- Motivo do impedimento -->
-        <UFormField
-          v-if="form.isBlocked"
-          label="Motivo do impedimento *"
-        >
-          <UInput
-            v-model="form.blockedReason"
-            placeholder="Descreva o motivo do impedimento"
-            class="w-full"
-            :class="!form.blockedReason ? 'ring-2 ring-red-400' : ''"
-          />
-          <p
-            v-if="!form.blockedReason"
-            class="text-xs text-red-500 mt-1"
-          >
-            Obrigatório ao marcar impedimento.
-          </p>
-        </UFormField>
-
-        <!-- Observação (obrigatória para Despriorizado) -->
-        <UFormField
-          v-if="isEdit && (observationRequired || form.observation)"
-          :label="observationRequired ? 'Observação *' : 'Observação'"
-        >
-          <UTextarea
-            v-model="form.observation"
-            :placeholder="observationRequired
-              ? 'Justifique o motivo do status (obrigatório)'
-              : 'Observação opcional'"
-            :rows="2"
-            class="w-full"
-            :class="observationRequired && !form.observation ? 'ring-2 ring-red-400' : ''"
-          />
-          <p
-            v-if="observationRequired && !form.observation"
-            class="text-xs text-red-500 mt-1"
-          >
-            Obrigatório para status Despriorizado.
-          </p>
-        </UFormField>
-
-        <!-- Data de entrega obrigatória quando Done (alerta) -->
-        <p
-          v-if="isEdit && deliveryDateRequired && !form.deliveryDate"
-          class="text-xs text-red-500"
-        >
-          Informe a data de entrega para concluir a demanda.
-        </p>
-
-        <UFormField label="Dependências entre demandas">
           <div class="space-y-2">
             <UInput
               v-model="dependencySearch"
@@ -712,48 +884,119 @@ async function handleSubmit() {
               </p>
             </div>
           </div>
-        </UFormField>
+        </section>
+        </template>
+
+        <template v-else-if="activeTab === 'status'">
+        <section v-if="isEdit" class="space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">Status e acompanhamento</h3>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+            <UFormField label="Status">
+              <USelect
+                v-model="form.status as DemandStatus"
+                :items="statusOptions"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Impedimento">
+              <label class="flex h-10 items-center gap-2 cursor-pointer select-none">
+                <input
+                  v-model="form.isBlocked"
+                  type="checkbox"
+                  class="h-4 w-4 accent-red-500"
+                >
+                <span class="text-sm" :class="form.isBlocked ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted'">
+                  {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
+                </span>
+              </label>
+            </UFormField>
+
+            <UFormField v-if="deliveryDateRequired" label="Data de entrega" required>
+              <UInput
+                v-model="form.deliveryDate"
+                type="date"
+                class="w-full"
+                :class="!form.deliveryDate ? 'ring-2 ring-red-400' : ''"
+              />
+            </UFormField>
+          </div>
+
+          <UFormField
+            v-if="form.isBlocked"
+            label="Motivo do impedimento"
+            required
+          >
+            <UInput
+              v-model="form.blockedReason"
+              placeholder="Descreva o motivo do impedimento"
+              class="w-full"
+              :class="!form.blockedReason ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
+
+          <UFormField
+            v-if="observationRequired"
+            label="Motivo despriorização"
+            required
+          >
+            <UTextarea
+              v-model="form.observation"
+              placeholder="Justifique o motivo da despriorização"
+              :rows="2"
+              class="w-full"
+              :class="!form.observation ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
+        </section>
         </template>
 
         <template v-else>
-        <UCard :ui="{ body: 'p-4 space-y-4' }">
+        <section class="space-y-4">
           <div>
             <h3 class="text-sm font-semibold text-highlighted">Clareza do problema</h3>
-            <p class="mt-1 text-xs text-muted">
-              Sabemos qual problema estamos resolvendo - ou só estamos construindo alguma coisa?
-            </p>
           </div>
 
-          <div class="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-            <UFormField label="Nota de clareza (0 a 10)">
+          <div class="grid grid-cols-1 gap-3">
+            <div class="space-y-2">
+              <div class="flex items-center gap-1">
+                <label class="text-sm font-medium text-highlighted">
+                  Nota da clareza <span class="text-error-500">*</span>
+                </label>
+                <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                  <UButton
+                    type="button"
+                    icon="i-lucide-circle-help"
+                    variant="ghost"
+                    color="neutral"
+                    size="xs"
+                    aria-label="Explicar clareza do problema"
+                  />
+                  <template #content>
+                    <div class="max-w-sm p-4 text-sm text-highlighted">
+                      Clareza do Problema: Sabemos qual problema estamos resolvendo - ou só estamos construindo alguma coisa?
+                    </div>
+                  </template>
+                </UPopover>
+              </div>
               <UInput
                 :model-value="form.problemClarity ?? ''"
                 type="number"
                 min="0"
                 max="10"
                 step="1"
-                placeholder="0 = vago, 10 = validado"
-                class="w-full"
+                placeholder="0 = Vago, 10 = validado"
+                class="w-full max-w-40"
                 @update:model-value="(v: string | number | null | undefined) => form.problemClarity = v === '' || v == null ? undefined : Number(v)"
               />
-            </UFormField>
-
-            <UFormField label="Opção de exceção">
-              <label class="flex h-10 items-center gap-2 cursor-pointer select-none">
-                <input
-                  v-model="form.hasNoKpi"
-                  type="checkbox"
-                  class="accent-primary w-4 h-4"
-                >
-                <span class="text-sm" :class="form.hasNoKpi ? 'text-warning font-medium' : 'text-muted'">
-                  Marcar demanda como sem KPI
-                </span>
-              </label>
-            </UFormField>
+            </div>
           </div>
-        </UCard>
+        </section>
 
-        <UCard :ui="{ body: 'p-4 space-y-4' }">
+        <section class="space-y-4 border-t border-default pt-4">
           <div>
             <h3 class="text-sm font-semibold text-highlighted">KPIs impactados</h3>
             <p class="mt-1 text-xs text-muted">
@@ -761,63 +1004,127 @@ async function handleSubmit() {
             </p>
           </div>
 
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              v-model="form.hasNoKpi"
+              type="checkbox"
+              class="h-4 w-4 accent-primary"
+            >
+            <span class="text-sm" :class="form.hasNoKpi ? 'text-warning font-medium' : 'text-muted'">
+              Marcar demanda como sem KPI
+            </span>
+          </label>
+
           <div v-if="form.hasNoKpi" class="rounded-lg border border-dashed border-warning/40 bg-warning/5 p-3 text-sm text-muted">
             Esta demanda foi marcada como sem KPI vinculado.
           </div>
 
           <div v-else class="space-y-3">
-            <div
-              v-for="(link, idx) in kpiLinkEdits"
-              :key="idx"
-              class="rounded-lg border border-default bg-elevated p-3"
-            >
-              <div class="mb-3 flex items-center justify-between gap-3">
-                <span class="text-xs font-semibold uppercase tracking-[0.08em] text-muted">Vínculo {{ idx + 1 }}</span>
-                <UButton
-                  icon="i-lucide-trash-2"
-                  variant="ghost"
-                  size="xs"
-                  color="error"
-                  @click="removeKpiLink(idx)"
-                />
-              </div>
-
-              <div class="grid grid-cols-1 gap-3 md:grid-cols-12">
-                <UFormField label="KPI relacionado" class="md:col-span-5">
-                  <USelect
-                    v-model="link.kpiId"
-                    :items="getKpiOptionsForRow(link.kpiId)"
-                    placeholder="Selecione um KPI"
-                    class="w-full"
-                  />
-                </UFormField>
-
-                <UFormField label="Tipo de impacto" class="md:col-span-3">
-                  <USelect
-                    v-model="link.impactType"
-                    :items="impactTypeOptions"
-                    class="w-full"
-                  />
-                </UFormField>
-
-                <UFormField label="Impacto estimado" class="md:col-span-2">
-                  <UInput
-                    v-model.number="link.estimatedImpact"
-                    type="number"
-                    step="0.1"
-                    placeholder="Ex: 3"
-                    class="w-full"
-                  />
-                </UFormField>
-
-                <UFormField label="Nível de confiança" class="md:col-span-2">
-                  <USelect
-                    v-model="link.confidenceLevel"
-                    :items="confidenceLevelOptions"
-                    class="w-full"
-                  />
-                </UFormField>
-              </div>
+            <div class="overflow-x-auto rounded-lg border border-default bg-elevated">
+              <table class="min-w-full table-fixed">
+                <thead class="border-b border-default bg-default/80">
+                  <tr>
+                    <th class="w-[18rem] px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">KPI relacionado</th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">Tipo de impacto</th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">Impacto estimado</th>
+                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">
+                      <div class="flex items-center gap-1">
+                        <span>Nível de confiança</span>
+                        <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
+                          <UButton
+                            type="button"
+                            icon="i-lucide-circle-help"
+                            variant="ghost"
+                            color="neutral"
+                            size="xs"
+                            aria-label="Explicar níveis de confiança"
+                          />
+                          <template #content>
+                            <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
+                              <p class="font-medium text-highlighted">
+                                Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI
+                              </p>
+                              <div
+                                v-for="item in confidenceLevelHelp"
+                                :key="item.title"
+                                class="space-y-1 rounded-lg border border-default p-2.5"
+                              >
+                                <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
+                                <p>👉 {{ item.summary }}</p>
+                                <p class="text-muted">{{ item.signals }}</p>
+                                <p class="text-muted">{{ item.detail }}</p>
+                              </div>
+                            </div>
+                          </template>
+                        </UPopover>
+                      </div>
+                    </th>
+                    <th class="w-14 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-muted">Ação</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <template
+                    v-for="(link, idx) in kpiLinkEdits"
+                    :key="idx"
+                  >
+                    <tr>
+                      <td class="w-[18rem] px-3 py-3 align-top">
+                        <USelect
+                          v-model="link.kpiId"
+                          :items="getKpiOptionsForRow(link.kpiId)"
+                          placeholder="Selecione um KPI"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="px-3 py-3 align-top">
+                        <USelect
+                          :model-value="link.impactDisplayType"
+                          :items="impactTypeOptions"
+                          class="w-full"
+                          @update:model-value="(value) => updateImpactDisplayType(idx, value as string | undefined)"
+                        />
+                      </td>
+                      <td class="px-3 py-3 align-top">
+                        <UInput
+                          :model-value="link.estimatedImpactInput"
+                          :placeholder="link.impactDisplayType === 'Percentage'
+                            ? 'Ex: 12,5%'
+                            : link.impactDisplayType === 'Currency'
+                              ? 'Ex: R$ 1.500,00'
+                              : 'Ex: 1500'"
+                          class="w-full"
+                          @update:model-value="(value) => updateEstimatedImpactInput(idx, value)"
+                        />
+                      </td>
+                      <td class="px-3 py-3 align-top">
+                        <USelect
+                          v-model="link.confidenceLevel"
+                          :items="confidenceLevelOptions"
+                          class="w-full"
+                        />
+                      </td>
+                      <td class="px-3 py-3 align-top text-right">
+                        <UButton
+                          icon="i-lucide-trash-2"
+                          variant="ghost"
+                          size="xs"
+                          color="error"
+                          @click="removeKpiLink(idx)"
+                        />
+                      </td>
+                    </tr>
+                    <tr
+                      v-if="getKpiImpactSummary(link)"
+                      class="border-b border-default last:border-b-0"
+                    >
+                      <td colspan="5" class="px-3 pb-3 pt-0 text-xs leading-relaxed text-muted">
+                        {{ getKpiImpactSummary(link) }}
+                      </td>
+                    </tr>
+                    <tr v-else class="border-b border-default last:border-b-0" />
+                  </template>
+                </tbody>
+              </table>
             </div>
 
             <UButton
@@ -834,7 +1141,7 @@ async function handleSubmit() {
               Nenhum KPI cadastrado para este projeto. Cadastre na página de KPIs.
             </p>
           </div>
-        </UCard>
+        </section>
         </template>
       </form>
     </template>
@@ -847,13 +1154,23 @@ async function handleSubmit() {
           label="Cancelar"
           @click="emit('update:open', false)"
         />
-        <UButton
-          :loading="isSubmitting"
-          :disabled="isSubmitDisabled"
-          :label="isEdit ? 'Salvar' : 'Criar Demanda'"
-          icon="i-lucide-check"
-          @click="handleSubmit"
-        />
+        <div class="relative flex items-center">
+          <div
+            v-if="showSubmitHint && missingSubmitReason"
+            class="absolute left-full top-1/2 z-10 ml-2 w-72 -translate-y-1/2 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs text-red-600 shadow-lg dark:border-red-800 dark:bg-neutral-900 dark:text-red-300"
+          >
+            {{ missingSubmitReason }}
+          </div>
+
+          <UButton
+            :loading="isSubmitting"
+            :label="submitButtonLabel"
+            icon="i-lucide-check"
+            :color="isSubmitDisabled ? 'neutral' : 'primary'"
+            :class="isSubmitDisabled ? 'opacity-60 cursor-not-allowed' : ''"
+            @click="handleSubmitClick"
+          />
+        </div>
       </div>
     </template>
   </UModal>

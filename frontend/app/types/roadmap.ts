@@ -10,6 +10,7 @@ export type DemandClassification =
 
 export type KpiType = 'Business' | 'Product' | 'Quality' | 'Usability'
 export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
+export type KpiObjective = 'Increase' | 'Decrease'
 export type ImpactType = 'Increase' | 'Decrease'
 export type ConfidenceLevel = 'High' | 'Medium' | 'Low'
 
@@ -134,6 +135,7 @@ export interface Kpi {
   name: string
   type: KpiType
   lever: KpiLever
+  objective: KpiObjective
   description?: string
   calculation?: string
   target?: number
@@ -148,6 +150,7 @@ export interface KpiFormData {
   name: string
   type: KpiType
   lever: KpiLever
+  objective: KpiObjective
   description?: string
   calculation?: string
   target?: number

@@ -9,6 +9,7 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
     public string Name { get; private set; } = default!;
     public KpiType Type { get; private set; }
     public KpiLever Lever { get; private set; }
+    public KpiObjective Objective { get; private set; }
     public string? Description { get; private set; }
     public string? Calculation { get; private set; }
     public decimal? Target { get; private set; }
@@ -23,6 +24,7 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
         string name,
         KpiType type,
         KpiLever lever,
+        KpiObjective objective,
         string? description = null,
         string? calculation = null,
         decimal? target = null,
@@ -34,6 +36,7 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
             Name = name,
             Type = type,
             Lever = lever,
+            Objective = objective,
             Description = description,
             Calculation = calculation,
             Target = target,
@@ -45,6 +48,7 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
         string name,
         KpiType type,
         KpiLever lever,
+        KpiObjective objective,
         string? description = null,
         string? calculation = null,
         decimal? target = null,
@@ -53,6 +57,7 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
         Name = name;
         Type = type;
         Lever = lever;
+        Objective = objective;
         Description = description;
         Calculation = calculation;
         Target = target;
