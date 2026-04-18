@@ -9,19 +9,12 @@ const kpiStore = useKpiStore()
 const toast = useToast()
 const productKpiName = 'Taxa de Adoção da Funcionalidade'
 
-const { projects, selectedProjectId } = storeToRefs(roadmapStore)
 const { kpis, isLoading } = storeToRefs(kpiStore)
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 onMounted(async () => {
-  if (!projects.value.length) await roadmapStore.fetchProjects()
-  if (!selectedProjectId.value && projects.value.length)
-    selectedProjectId.value = projects.value[0]!.id
-  if (selectedProjectId.value) await kpiStore.fetchKpis(selectedProjectId.value)
-})
-
-watch(selectedProjectId, async (id) => {
-  if (id) await kpiStore.fetchKpis(id)
+  await roadmapStore.fetchProjects()
+  await kpiStore.fetchKpis()
 })
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -87,7 +80,6 @@ const formData = ref<KpiFormData>(emptyForm())
 
 function emptyForm(): KpiFormData {
   return {
-    projectId: selectedProjectId.value ?? '',
     name: '',
     type: 'Business',
     lever: 'Growth',
@@ -109,7 +101,6 @@ function openCreate() {
 function openEdit(kpi: Kpi) {
   editingKpi.value = kpi
   formData.value = {
-    projectId: kpi.projectId,
     name: kpi.name,
     type: kpi.type,
     lever: kpi.lever,
@@ -144,7 +135,6 @@ async function submitForm() {
       toast.add({ title: 'KPI atualizado', color: 'success' })
     }
     else {
-      formData.value.projectId = selectedProjectId.value ?? ''
       await kpiStore.createKpi(formData.value)
       toast.add({ title: 'KPI criado', color: 'success' })
     }
@@ -222,12 +212,6 @@ function getProgressPercent(kpi: Kpi): number | null {
         </p>
       </div>
       <div class="flex items-center gap-3">
-        <USelectMenu
-          v-model="selectedProjectId"
-          :items="projects.map(p => ({ value: p.id, label: p.name }))"
-          placeholder="Selecionar projeto"
-          class="w-48"
-        />
         <UButton icon="i-lucide-plus" label="Novo KPI" @click="openCreate" />
       </div>
     </div>

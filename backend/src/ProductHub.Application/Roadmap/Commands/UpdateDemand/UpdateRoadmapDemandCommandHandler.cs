@@ -58,6 +58,12 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         Enum.TryParse<DemandStatus>(request.Status, true, out var status);
         Enum.TryParse<DemandType>(request.Type, true, out var type);
         Enum.TryParse<DemandClassification>(request.Classification, true, out var classification);
+        NoKpiClassification? noKpiClassification = null;
+        if (!string.IsNullOrWhiteSpace(request.NoKpiClassification))
+        {
+            Enum.TryParse<NoKpiClassification>(request.NoKpiClassification, true, out var parsedNoKpiClassification);
+            noKpiClassification = parsedNoKpiClassification;
+        }
 
         int? nextSortOrder = null;
         if (originalQuarterYear != request.QuarterYear || originalQuarterNumber != request.QuarterNumber)
@@ -87,7 +93,8 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.PromisedDate,
             request.DeliveryDate,
             request.ProblemClarity,
-            request.HasNoKpi);
+            request.HasNoKpi,
+            noKpiClassification);
 
         demandRepository.Update(demand);
         await demandRepository.ReplaceProductsAsync(demand.Id, request.ProductIds, cancellationToken);

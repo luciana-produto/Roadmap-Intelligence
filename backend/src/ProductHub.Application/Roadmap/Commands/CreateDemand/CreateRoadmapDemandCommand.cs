@@ -20,4 +20,5 @@ public sealed record CreateRoadmapDemandCommand(
     bool IsBlocked = false,
     string? BlockedReason = null,
     int? ProblemClarity = null,
-    bool HasNoKpi = false) : IRequest<RoadmapDemandDto>;
+    bool HasNoKpi = false,
+    string? NoKpiClassification = null) : IRequest<RoadmapDemandDto>;

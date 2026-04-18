@@ -4,14 +4,16 @@ using ProductHub.Domain.Roadmap.Interfaces;
 
 namespace ProductHub.Application.Roadmap.Queries.GetKpis;
 
-public sealed class GetKpisByProjectQueryHandler(IKpiRepository kpiRepository)
-    : IRequestHandler<GetKpisByProjectQuery, IEnumerable<KpiDto>>
+public sealed class GetKpisQueryHandler(IKpiRepository kpiRepository)
+    : IRequestHandler<GetKpisQuery, IEnumerable<KpiDto>>
 {
     public async Task<IEnumerable<KpiDto>> Handle(
-        GetKpisByProjectQuery request,
+        GetKpisQuery request,
         CancellationToken cancellationToken)
     {
-        var kpis = await kpiRepository.GetByProjectAsync(request.ProjectId, cancellationToken);
+        var kpis = (await kpiRepository.GetAllAsync(cancellationToken))
+            .OrderBy(kpi => kpi.Name)
+            .ToArray();
         var kpiIds = kpis.Select(k => k.Id).ToArray();
 
         var allLinks = new List<Domain.Roadmap.DemandKpiLink>();

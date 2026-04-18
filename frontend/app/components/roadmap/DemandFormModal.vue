@@ -56,7 +56,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  submit: [data: DemandFormData, links: DemandKpiLinkInput[]]
+  submit: [data: DemandFormData]
 }>()
 
 const isEdit = computed(() => !!props.demand)
@@ -86,7 +86,8 @@ const classificationOptions = [
   { value: 'Evolution',     label: 'Evolução' },
   { value: 'ImprovementGap', label: 'Melhoria/Gap' },
   { value: 'Mandatory',     label: 'Mandatório' },
-  { value: 'Homologation',  label: 'Homologação' }
+  { value: 'Homologation',  label: 'Homologação' },
+  { value: 'Customizacao',  label: 'Customização' }
 ]
 
 const statusOptions = [
@@ -96,7 +97,7 @@ const statusOptions = [
   { value: 'Deprioritized', label: 'Despriorizado' }
 ]
 
-type DemandFormTab = 'general' | 'status' | 'result'
+type DemandFormTab = 'general' | 'status'
 
 const resultTabs = computed(() => {
   const tabs: Array<{ value: DemandFormTab, label: string }> = [
@@ -105,8 +106,6 @@ const resultTabs = computed(() => {
 
   if (isEdit.value)
     tabs.push({ value: 'status', label: 'Status' })
-
-  tabs.push({ value: 'result', label: 'KPIs' })
 
   return tabs
 })
@@ -140,7 +139,8 @@ const form = reactive<DemandFormState>({
   promisedDate: '',
   deliveryDate: '',
   problemClarity: undefined,
-  hasNoKpi: false
+  hasNoKpi: false,
+  noKpiClassification: undefined
 })
 
 const kpiLinkEdits = ref<EditableDemandKpiLink[]>([])
@@ -246,6 +246,7 @@ watch(() => props.open, (open) => {
     form.deliveryDate = props.demand.deliveryDate ?? ''
     form.problemClarity = props.demand.problemClarity ?? undefined
     form.hasNoKpi = props.demand.hasNoKpi ?? false
+    form.noKpiClassification = props.demand.noKpiClassification ?? undefined
     kpiLinkEdits.value = (props.demand.kpiLinks ?? []).map(l => toEditableKpiLink({
       kpiId: l.kpiId,
       impactType: l.impactType,
@@ -277,6 +278,7 @@ watch(() => props.open, (open) => {
     form.deliveryDate = ''
     form.problemClarity = undefined
     form.hasNoKpi = false
+    form.noKpiClassification = undefined
     kpiLinkEdits.value = []
     kpiMeasurements.value = []
     measurementDrafts.value = {}
@@ -788,12 +790,6 @@ const missingSubmitReason = computed(() => {
     return 'Informe a data de entrega para concluir a demanda'
   if (form.isBlocked && !form.blockedReason)
     return 'Preencha o motivo do impedimento'
-  if (form.problemClarity == null)
-    return 'Informe a nota de clareza do problema'
-  if (!form.hasNoKpi && kpiLinkEdits.value.length === 0)
-    return 'Adicione ao menos um KPI impactado ou marque a demanda como sem KPI'
-  if (!form.hasNoKpi && kpiLinkEdits.value.some(link => !isKpiLinkComplete(link)))
-    return 'Preencha todos os KPIs vinculados antes de salvar'
 
   return null
 })
@@ -829,15 +825,6 @@ function focusRelevantTab() {
     return
   }
 
-  if (
-    missingSubmitReason.value === 'Informe a nota de clareza do problema'
-    || missingSubmitReason.value === 'Adicione ao menos um KPI impactado ou marque a demanda como sem KPI'
-    || missingSubmitReason.value === 'Preencha todos os KPIs vinculados antes de salvar'
-  ) {
-    activeTab.value = 'result'
-    return
-  }
-
   activeTab.value = 'general'
 }
 
@@ -856,20 +843,11 @@ async function handleSubmit() {
   if (isSubmitDisabled.value) return
   isSubmitting.value = true
   try {
-    const validLinks = form.hasNoKpi
-      ? []
-      : kpiLinkEdits.value.filter(link => link.kpiId)
-
     emit('submit', {
       ...form,
       hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
       classification: form.classification as DemandClassification
-    }, validLinks.map(link => ({
-      kpiId: link.kpiId,
-      impactType: link.impactType,
-      estimatedImpact: link.estimatedImpact,
-      confidenceLevel: link.confidenceLevel
-    })))
+    })
   }
   finally {
     isSubmitting.value = false
@@ -963,7 +941,40 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-3">
+          <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <UFormField label="">
+              <div class="space-y-1.5">
+                <div class="flex items-center gap-1.5">
+                  <span class="text-sm text-highlighted">Nota da clareza</span>
+                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <UButton
+                      type="button"
+                      icon="i-lucide-circle-help"
+                      variant="ghost"
+                      color="neutral"
+                      size="xs"
+                      aria-label="Explicar clareza do problema"
+                    />
+                    <template #content>
+                      <div class="max-w-sm p-4 text-sm text-highlighted">
+                        Clareza do Problema: Sabemos qual problema estamos resolvendo - ou só estamos construindo alguma coisa?
+                      </div>
+                    </template>
+                  </UPopover>
+                </div>
+                <UInput
+                  :model-value="form.problemClarity ?? ''"
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="1"
+                  placeholder="0 a 10"
+                  class="w-full"
+                  @update:model-value="updateProblemClarity"
+                />
+              </div>
+            </UFormField>
+
             <UFormField label="Issue (Jira)">
               <UInput
                 v-model="form.jiraIssue"
@@ -1225,376 +1236,6 @@ async function handleSubmit() {
         </section>
         </template>
 
-        <template v-else>
-        <section class="space-y-4">
-          <div>
-            <h3 class="text-sm font-semibold text-highlighted">Clareza do problema</h3>
-          </div>
-
-          <div class="grid grid-cols-1 gap-3">
-            <div class="space-y-2">
-              <div class="flex items-center gap-1">
-                <label class="text-sm font-medium text-highlighted">
-                  Nota da clareza <span class="text-error-500">*</span>
-                </label>
-                <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                  <UButton
-                    type="button"
-                    icon="i-lucide-circle-help"
-                    variant="ghost"
-                    color="neutral"
-                    size="xs"
-                    aria-label="Explicar clareza do problema"
-                  />
-                  <template #content>
-                    <div class="max-w-sm p-4 text-sm text-highlighted">
-                      Clareza do Problema: Sabemos qual problema estamos resolvendo - ou só estamos construindo alguma coisa?
-                    </div>
-                  </template>
-                </UPopover>
-              </div>
-              <UInput
-                :model-value="form.problemClarity ?? ''"
-                type="number"
-                min="0"
-                max="10"
-                step="1"
-                placeholder="0 = Vago, 10 = validado"
-                class="w-full max-w-40"
-                @update:model-value="updateProblemClarity"
-              />
-            </div>
-          </div>
-        </section>
-
-        <section class="space-y-4 border-t border-default pt-4">
-          <div>
-            <h3 class="text-sm font-semibold text-highlighted">KPIs impactados</h3>
-            <p class="mt-1 text-xs text-muted">
-              Relacione a demanda aos indicadores que devem ser influenciados pela entrega.
-            </p>
-          </div>
-
-          <label class="flex items-center gap-2 cursor-pointer select-none">
-            <input
-              v-model="form.hasNoKpi"
-              type="checkbox"
-              class="h-4 w-4 accent-primary"
-            >
-            <span class="text-sm" :class="form.hasNoKpi ? 'text-warning font-medium' : 'text-muted'">
-              Marcar demanda como sem KPI
-            </span>
-          </label>
-
-          <div v-if="form.hasNoKpi" class="rounded-lg border border-dashed border-warning/40 bg-warning/5 p-3 text-sm text-muted">
-            Esta demanda foi marcada como sem KPI vinculado.
-          </div>
-
-          <div v-else class="space-y-3">
-            <div class="overflow-x-auto rounded-lg border border-default bg-elevated">
-              <table class="min-w-full table-fixed">
-                <thead class="border-b border-default bg-default/80">
-                  <tr>
-                    <th class="w-[18rem] px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">KPI relacionado</th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">Tipo de impacto</th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">Impacto estimado</th>
-                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.08em] text-muted">
-                      <div class="flex items-center gap-1">
-                        <span>Nível de confiança</span>
-                        <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
-                          <UButton
-                            type="button"
-                            icon="i-lucide-circle-help"
-                            variant="ghost"
-                            color="neutral"
-                            size="xs"
-                            aria-label="Explicar níveis de confiança"
-                          />
-                          <template #content>
-                            <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
-                              <p class="font-medium text-highlighted">
-                                Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI
-                              </p>
-                              <div
-                                v-for="item in confidenceLevelHelp"
-                                :key="item.title"
-                                class="space-y-1 rounded-lg border border-default p-2.5"
-                              >
-                                <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
-                                <p>👉 {{ item.summary }}</p>
-                                <p class="text-muted">{{ item.signals }}</p>
-                                <p class="text-muted">{{ item.detail }}</p>
-                              </div>
-                            </div>
-                          </template>
-                        </UPopover>
-                      </div>
-                    </th>
-                    <th class="w-14 px-3 py-2 text-right text-xs font-semibold uppercase tracking-[0.08em] text-muted">Ação</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <template
-                    v-for="(link, idx) in kpiLinkEdits"
-                    :key="idx"
-                  >
-                    <tr>
-                      <td class="w-[18rem] px-3 py-3 align-top">
-                        <USelect
-                          v-model="link.kpiId"
-                          :items="getKpiOptionsForRow(link.kpiId)"
-                          placeholder="Selecione um KPI"
-                          class="w-full"
-                        />
-                      </td>
-                      <td class="px-3 py-3 align-top">
-                        <USelect
-                          :model-value="link.impactDisplayType"
-                          :items="impactTypeOptions"
-                          class="w-full"
-                          @update:model-value="(value) => updateImpactDisplayType(idx, value as string | undefined)"
-                        />
-                      </td>
-                      <td class="px-3 py-3 align-top">
-                        <UInput
-                          :model-value="link.estimatedImpactInput"
-                          :placeholder="link.impactDisplayType === 'Percentage'
-                            ? 'Ex: 12,5%'
-                            : link.impactDisplayType === 'Currency'
-                              ? 'Ex: R$ 1.500,00'
-                              : 'Ex: 1500'"
-                          class="w-full"
-                          @update:model-value="(value) => updateEstimatedImpactInput(idx, value)"
-                        />
-                      </td>
-                      <td class="px-3 py-3 align-top">
-                        <USelect
-                          v-model="link.confidenceLevel"
-                          :items="confidenceLevelOptions"
-                          class="w-full"
-                        />
-                      </td>
-                      <td class="px-3 py-3 align-top text-right">
-                        <UButton
-                          icon="i-lucide-trash-2"
-                          variant="ghost"
-                          size="xs"
-                          color="error"
-                          @click="removeKpiLink(idx)"
-                        />
-                      </td>
-                    </tr>
-                    <tr
-                      v-if="getKpiImpactSummary(link)"
-                      class="border-b border-default last:border-b-0"
-                    >
-                      <td colspan="5" class="px-3 pb-3 pt-0 text-xs leading-relaxed text-muted">
-                        {{ getKpiImpactSummary(link) }}
-                      </td>
-                    </tr>
-                    <tr v-else class="border-b border-default last:border-b-0" />
-                  </template>
-                </tbody>
-              </table>
-            </div>
-
-            <UButton
-              v-if="availableKpisForLink.length || !kpiLinkEdits.length"
-              type="button"
-              icon="i-lucide-plus"
-              label="Adicionar KPI impactado"
-              variant="soft"
-              size="sm"
-              @click="addKpiLink"
-            />
-
-            <p v-if="!(props.availableKpis ?? []).length" class="text-xs text-muted italic">
-              Nenhum KPI cadastrado para este projeto. Cadastre na página de KPIs.
-            </p>
-          </div>
-        </section>
-
-        <section class="space-y-4 border-t border-default pt-4">
-          <div>
-            <h3 class="text-sm font-semibold text-highlighted">Apuração pós-entrega</h3>
-            <p class="mt-1 text-xs text-muted">
-              Registre as apurações dos KPIs vinculados. A mais recente passa a ser considerada a apuração atual.
-            </p>
-          </div>
-
-          <div
-            v-if="!measurementSectionState.enabled"
-            class="rounded-lg border border-dashed border-default bg-elevated p-3 text-sm text-muted"
-          >
-            {{ measurementSectionState.message }}
-          </div>
-
-          <div v-else class="space-y-4">
-            <article
-              v-for="link in persistedKpiLinks"
-              :key="link.id"
-              class="rounded-xl border border-default bg-elevated p-4"
-            >
-              <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                <div class="space-y-1">
-                  <p class="text-sm font-semibold text-highlighted">{{ link.kpiName }}</p>
-                  <p v-if="getPersistedKpiImpactSummary(link)" class="text-xs text-muted">
-                    Impacto esperado: {{ getPersistedKpiImpactSummary(link) }}
-                  </p>
-                  <p class="text-xs text-muted">
-                    Confiança: {{ confidenceLevelOptions.find(option => option.value === link.confidenceLevel)?.label ?? link.confidenceLevel }}
-                  </p>
-                </div>
-
-                <div class="flex flex-wrap items-center gap-2">
-                  <span
-                    v-if="getCurrentMeasurement(link.kpiId)"
-                    class="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
-                  >
-                    Atual: {{ formatMeasurementValue(getCurrentMeasurement(link.kpiId)!.measuredValue) }} em {{ formatMeasurementDate(getCurrentMeasurement(link.kpiId)!.measurementDate) }}
-                  </span>
-                  <UButton
-                    type="button"
-                    size="xs"
-                    variant="soft"
-                    icon="i-lucide-plus"
-                    label="Nova apuração"
-                    @click="openMeasurementDraft(link.kpiId)"
-                  />
-                </div>
-              </div>
-
-              <div
-                v-if="getMeasurementDraft(link.kpiId)"
-                class="mt-4 grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1fr)_12rem_11rem]"
-              >
-                <UFormField label="Impacto apurado" required>
-                  <UInput
-                    :model-value="getMeasurementDraft(link.kpiId)?.measuredValueInput ?? ''"
-                    placeholder="Ex: 12,5"
-                    class="w-full"
-                    @update:model-value="(value) => {
-                      const draft = getMeasurementDraft(link.kpiId)
-                      if (draft) draft.measuredValueInput = String(value ?? '')
-                    }"
-                  />
-                </UFormField>
-
-                <UFormField label="Data de apuração" required>
-                  <UInput
-                    :model-value="getMeasurementDraft(link.kpiId)?.measurementDate ?? ''"
-                    type="date"
-                    class="w-full"
-                    @update:model-value="(value) => {
-                      const draft = getMeasurementDraft(link.kpiId)
-                      if (draft) draft.measurementDate = String(value ?? '')
-                    }"
-                  />
-                </UFormField>
-
-                <UFormField label="Classificação do resultado" required>
-                  <USelect
-                    :model-value="getMeasurementDraft(link.kpiId)?.result ?? 'Neutral'"
-                    :items="measurementResultOptions"
-                    class="w-full"
-                    @update:model-value="(value) => {
-                      const draft = getMeasurementDraft(link.kpiId)
-                      if (draft) draft.result = (value ?? 'Neutral') as MeasurementResult
-                    }"
-                  />
-                </UFormField>
-
-                <UFormField label="Observação" class="md:col-span-3">
-                  <UTextarea
-                    :model-value="getMeasurementDraft(link.kpiId)?.observation ?? ''"
-                    :rows="2"
-                    placeholder="Contexto da apuração (opcional)"
-                    class="w-full"
-                    @update:model-value="(value) => {
-                      const draft = getMeasurementDraft(link.kpiId)
-                      if (draft) draft.observation = String(value ?? '')
-                    }"
-                  />
-                </UFormField>
-
-                <div class="md:col-span-3 flex justify-end gap-2">
-                  <UButton
-                    type="button"
-                    variant="ghost"
-                    color="neutral"
-                    label="Cancelar"
-                    @click="cancelMeasurementDraft(link.kpiId)"
-                  />
-                  <UButton
-                    type="button"
-                    :loading="measurementSavingKpiId === link.kpiId"
-                    icon="i-lucide-save"
-                    :label="getMeasurementDraft(link.kpiId)?.id ? 'Atualizar apuração' : 'Salvar apuração'"
-                    @click="saveMeasurement(link.kpiId)"
-                  />
-                </div>
-              </div>
-
-              <div v-if="getMeasurementsForKpi(link.kpiId).length" class="mt-4 space-y-2">
-                <article
-                  v-for="(measurement, measurementIndex) in getMeasurementsForKpi(link.kpiId)"
-                  :key="measurement.id"
-                  class="rounded-lg border border-default bg-default p-3"
-                >
-                  <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                    <div class="space-y-2">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <span
-                          v-if="measurementIndex === 0"
-                          class="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-primary"
-                        >
-                          Atual
-                        </span>
-                        <span
-                          class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
-                          :class="getMeasurementResultTone(measurement.result)"
-                        >
-                          {{ getMeasurementResultLabel(measurement.result) }}
-                        </span>
-                      </div>
-                      <p class="text-sm font-medium text-highlighted">
-                        {{ formatMeasurementValue(measurement.measuredValue) }} em {{ formatMeasurementDate(measurement.measurementDate) }}
-                      </p>
-                      <p v-if="measurement.observation" class="text-xs leading-relaxed text-muted">
-                        {{ measurement.observation }}
-                      </p>
-                    </div>
-
-                    <div class="flex items-center gap-1 self-end md:self-start">
-                      <UButton
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        color="neutral"
-                        icon="i-lucide-pencil"
-                        @click="openMeasurementDraft(link.kpiId, measurement)"
-                      />
-                      <UButton
-                        type="button"
-                        size="xs"
-                        variant="ghost"
-                        color="error"
-                        icon="i-lucide-trash-2"
-                        :loading="measurementDeletingId === measurement.id"
-                        @click="deleteMeasurement(measurement.id)"
-                      />
-                    </div>
-                  </div>
-                </article>
-              </div>
-
-              <p v-else class="mt-4 text-xs italic text-muted">
-                Nenhuma apuração registrada para este KPI.
-              </p>
-            </article>
-          </div>
-        </section>
-        </template>
       </form>
     </template>
 

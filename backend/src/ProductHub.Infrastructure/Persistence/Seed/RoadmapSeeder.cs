@@ -23,7 +23,9 @@ public static class RoadmapSeeder
         string? BlockedReason = null,
         int? ProblemClarity = null,
         DateOnly? PromisedDate = null,
-        DateOnly? DeliveryDate = null);
+        DateOnly? DeliveryDate = null,
+        bool HasNoKpi = false,
+        NoKpiClassification? NoKpiClassification = null);
 
     private sealed record MockDependencySeed(string DemandKey, string DependsOnDemandKey);
 
@@ -116,7 +118,9 @@ public static class RoadmapSeeder
             JiraIssue: "CROSS-231",
             Customers: ["Comercial"],
             ProblemClarity: 5,
-            PromisedDate: new DateOnly(2026, 6, 12)),
+            PromisedDate: new DateOnly(2026, 6, 12),
+            HasNoKpi: true,
+            NoKpiClassification: NoKpiClassification.Mandatory),
         new(
             2026,
             2,
@@ -149,7 +153,9 @@ public static class RoadmapSeeder
             Observation: "Aguardando refinamento final com produto e operações.",
             JiraIssue: "CROSS-245",
             Customers: ["Produto", "Operações"],
-            ProblemClarity: 4),
+            ProblemClarity: 4,
+            HasNoKpi: true,
+            NoKpiClassification: NoKpiClassification.Relationship),
         new(
             Quarter.BacklogYear,
             Quarter.BacklogNumber,
@@ -329,7 +335,19 @@ public static class RoadmapSeeder
             Kpi.Create(projectId, "Taxa de Adoção da Funcionalidade", KpiType.Product, KpiLever.Customer, KpiObjective.Increase,
                 "Percentual de usuários elegíveis que utilizam a funcionalidade lançada",
                 "(Usuários ativos da funcionalidade / Usuários elegíveis) x 100",
-                45m, 18m)
+                45m, 18m),
+            Kpi.Create(projectId, "Tempo Médio de Onboarding", KpiType.Product, KpiLever.Efficiency, KpiObjective.Decrease,
+                "Tempo médio para concluir o onboarding de novos clientes",
+                "Média de dias entre assinatura e ativação completa",
+                12m, 18m),
+            Kpi.Create(projectId, "Taxa de Compliance Fiscal", KpiType.Business, KpiLever.Efficiency, KpiObjective.Increase,
+                "Percentual de rotinas fiscais executadas sem inconsistências",
+                "(Rotinas fiscais sem erro / Rotinas fiscais totais) x 100",
+                98.5m, 96.9m),
+            Kpi.Create(projectId, "NPS do Produto", KpiType.Product, KpiLever.Customer, KpiObjective.Increase,
+                "Nível de satisfação dos clientes com a experiência do produto",
+                "% promotores - % detratores",
+                62m, 54m)
         };
 
         foreach (var kpi in kpis)
@@ -340,18 +358,19 @@ public static class RoadmapSeeder
         // Seed demand-KPI links
         var kpiByName = kpis.ToDictionary(k => k.Name, StringComparer.OrdinalIgnoreCase);
 
-        var linkSeeds = new (string DemandKey, string KpiName, ImpactType Impact, decimal? EstimatedImpact, ConfidenceLevel Confidence)[]
+        var linkSeeds = new (string DemandKey, string KpiName, ImpactType Impact, decimal? EstimatedImpact, ConfidenceLevel Confidence, string? Observation)[]
         {
-            ("CROSS-201", "Taxa de Churn Mensal", ImpactType.Decrease, 0.3m, ConfidenceLevel.Medium),
-            ("CROSS-201", "Tempo Médio de Onboarding", ImpactType.Decrease, 5m, ConfidenceLevel.High),
-            ("CROSS-214", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.5m, ConfidenceLevel.High),
-            ("CROSS-176", "NPS do Produto", ImpactType.Increase, 3m, ConfidenceLevel.Medium),
-            ("CROSS-223", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.2m, ConfidenceLevel.Low),
-            ("RET-101", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.7m, ConfidenceLevel.High),
-            ("RET-101", "Receita Recorrente Mensal (MRR)", ImpactType.Increase, 15000m, ConfidenceLevel.Medium)
+            ("CROSS-201", "Taxa de Churn Mensal", ImpactType.Decrease, 0.3m, ConfidenceLevel.Medium, "Redução esperada com a padronização do SSO."),
+            ("CROSS-201", "Tempo Médio de Onboarding", ImpactType.Decrease, 5m, ConfidenceLevel.High, "Fluxo mais simples reduz o tempo de ativação."),
+            ("CROSS-214", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.5m, ConfidenceLevel.High, null),
+            ("CROSS-176", "NPS do Produto", ImpactType.Increase, 3m, ConfidenceLevel.Medium, "Entrega concluída com expectativa de melhoria percebida pelo cliente."),
+            ("CROSS-176", "Taxa de Churn Mensal", ImpactType.Decrease, 0.2m, ConfidenceLevel.Low, "Há risco de impacto operacional nas primeiras semanas."),
+            ("CROSS-223", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.2m, ConfidenceLevel.Low, null),
+            ("RET-101", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.7m, ConfidenceLevel.High, null),
+            ("RET-101", "Receita Recorrente Mensal (MRR)", ImpactType.Increase, 15000m, ConfidenceLevel.Medium, null)
         };
 
-        foreach (var (demandKey, kpiName, impact, estimated, confidence) in linkSeeds)
+        foreach (var (demandKey, kpiName, impact, estimated, confidence, observation) in linkSeeds)
         {
             if (!demandIdsByKey.TryGetValue(demandKey, out var demandId))
                 continue;
@@ -359,7 +378,26 @@ public static class RoadmapSeeder
                 continue;
 
             await context.DemandKpiLinks.AddAsync(
-                DemandKpiLink.FromRepository(demandId, kpi.Id, impact, estimated, confidence));
+                DemandKpiLink.FromRepository(demandId, kpi.Id, impact, estimated, confidence, observation));
+        }
+
+        await context.SaveChangesAsync();
+
+        var measurementSeeds = new (string DemandKey, string KpiName, decimal MeasuredValue, DateOnly MeasurementDate, MeasurementResult Result, string? Observation)[]
+        {
+            ("CROSS-176", "NPS do Produto", 4.2m, new DateOnly(2026, 5, 25), MeasurementResult.Positive, "Clientes perceberam melhora no fluxo após a entrega."),
+            ("CROSS-176", "Taxa de Churn Mensal", 0.15m, new DateOnly(2026, 5, 25), MeasurementResult.Negative, "O churn subiu temporariamente por ajustes operacionais no rollout.")
+        };
+
+        foreach (var (demandKey, kpiName, measuredValue, measurementDate, result, observation) in measurementSeeds)
+        {
+            if (!demandIdsByKey.TryGetValue(demandKey, out var demandId))
+                continue;
+            if (!kpiByName.TryGetValue(kpiName, out var kpi))
+                continue;
+
+            await context.KpiMeasurements.AddAsync(
+                KpiMeasurement.Create(kpi.Id, demandId, measuredValue, measurementDate, result, observation));
         }
 
         await context.SaveChangesAsync();
@@ -411,7 +449,9 @@ public static class RoadmapSeeder
                 seed.IsBlocked,
                 seed.BlockedReason,
                 seed.PromisedDate,
-                seed.ProblemClarity);
+                seed.ProblemClarity,
+                hasNoKpi: seed.HasNoKpi,
+                noKpiClassification: seed.NoKpiClassification);
 
             demand.Update(
                 seed.Title,
@@ -430,7 +470,9 @@ public static class RoadmapSeeder
                 blockedReason: seed.BlockedReason,
                 promisedDate: seed.PromisedDate,
                 deliveryDate: seed.DeliveryDate,
-                problemClarity: seed.ProblemClarity);
+                problemClarity: seed.ProblemClarity,
+                hasNoKpi: seed.HasNoKpi,
+                noKpiClassification: seed.NoKpiClassification);
 
             await context.RoadmapDemands.AddAsync(demand);
             existingDemandKeySet[demandKey] = demand.Id;

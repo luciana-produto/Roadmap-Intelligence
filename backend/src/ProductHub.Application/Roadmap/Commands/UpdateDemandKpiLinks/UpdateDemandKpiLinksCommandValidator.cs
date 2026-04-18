@@ -21,6 +21,8 @@ public sealed class UpdateDemandKpiLinksCommandValidator
                 .NotEmpty()
                 .Must(c => Enum.TryParse<ConfidenceLevel>(c, true, out _))
                 .WithMessage("ConfidenceLevel must be High, Medium or Low.");
+            link.RuleFor(l => l.Observation)
+                .MaximumLength(1000);
         });
         RuleFor(x => x.Links)
             .Must(links => links.Select(l => l.KpiId).Distinct().Count() == links.Count)

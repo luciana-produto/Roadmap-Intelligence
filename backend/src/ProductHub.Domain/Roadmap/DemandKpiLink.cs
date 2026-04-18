@@ -9,6 +9,7 @@ public sealed class DemandKpiLink : BaseEntity
     public ImpactType ImpactType { get; private set; }
     public decimal? EstimatedImpact { get; private set; }
     public ConfidenceLevel ConfidenceLevel { get; private set; }
+    public string? Observation { get; private set; }
 
     private DemandKpiLink() { }
 
@@ -17,14 +18,16 @@ public sealed class DemandKpiLink : BaseEntity
         Guid kpiId,
         ImpactType impactType,
         decimal? estimatedImpact,
-        ConfidenceLevel confidenceLevel) =>
+        ConfidenceLevel confidenceLevel,
+        string? observation) =>
         new()
         {
             DemandId = demandId,
             KpiId = kpiId,
             ImpactType = impactType,
             EstimatedImpact = estimatedImpact,
-            ConfidenceLevel = confidenceLevel
+            ConfidenceLevel = confidenceLevel,
+            Observation = observation
         };
 
     public static DemandKpiLink FromRepository(
@@ -32,16 +35,19 @@ public sealed class DemandKpiLink : BaseEntity
         Guid kpiId,
         ImpactType impactType,
         decimal? estimatedImpact,
-        ConfidenceLevel confidenceLevel) =>
-        Create(demandId, kpiId, impactType, estimatedImpact, confidenceLevel);
+        ConfidenceLevel confidenceLevel,
+        string? observation) =>
+        Create(demandId, kpiId, impactType, estimatedImpact, confidenceLevel, observation);
 
     public void Update(
         ImpactType impactType,
         decimal? estimatedImpact,
-        ConfidenceLevel confidenceLevel)
+        ConfidenceLevel confidenceLevel,
+        string? observation)
     {
         ImpactType = impactType;
         EstimatedImpact = estimatedImpact;
         ConfidenceLevel = confidenceLevel;
+        Observation = observation;
     }
 }

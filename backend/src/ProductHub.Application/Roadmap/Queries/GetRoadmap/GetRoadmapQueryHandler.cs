@@ -45,7 +45,7 @@ public sealed class GetDemandsQueryHandler(
         var kpiMeasurements = await kpiRepository.GetMeasurementsByDemandIdsAsync(demandIds, cancellationToken);
         var kpiIds = kpiLinks.Select(l => l.KpiId).Distinct().ToArray();
         var kpis = kpiIds.Length > 0
-            ? (await kpiRepository.GetByProjectAsync(request.ProjectId, cancellationToken))
+            ? (await kpiRepository.GetAllAsync(cancellationToken))
                 .Where(k => kpiIds.Contains(k.Id))
                 .ToDictionary(k => k.Id, k => k.Name)
             : new Dictionary<Guid, string>();

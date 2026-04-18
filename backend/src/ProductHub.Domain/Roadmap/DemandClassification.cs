@@ -7,5 +7,6 @@ public enum DemandClassification
     Evolution = 2,
     ImprovementGap = 3,
     Mandatory = 4,
-    Homologation = 5
+    Homologation = 5,
+    Customizacao = 6
 }

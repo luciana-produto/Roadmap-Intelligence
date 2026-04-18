@@ -58,6 +58,7 @@ public sealed record RoadmapDemandDto(
     bool IsDeliveredLate,
     int? ProblemClarity,
     bool HasNoKpi,
+    string? NoKpiClassification,
     IReadOnlyList<DemandKpiLinkDto> KpiLinks,
     IReadOnlyList<KpiMeasurementDto> KpiMeasurements,
     DateTime CreatedAt,

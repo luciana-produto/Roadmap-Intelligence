@@ -4,10 +4,11 @@ import Sortable from 'sortablejs'
 import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
-import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, DemandKpiLinkInput } from '~/types/roadmap'
+import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification } from '~/types/roadmap'
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
+const route = useRoute()
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
 const toast = useToast()
@@ -84,6 +85,69 @@ function formatDemandDate(value?: string) {
 
   return new Intl.DateTimeFormat('pt-BR').format(new Date(year, month - 1, day))
 }
+
+function openDemandKpiWorkspace(demand: RoadmapDemand) {
+  navigateTo({
+    path: '/roadmap',
+    query: {
+      projectId: demand.projectId,
+      kpiDemandId: demand.id
+    }
+  })
+}
+
+function closeDemandKpiWorkspace() {
+  navigateTo({
+    path: '/roadmap',
+    query: selectedProjectId.value ? { projectId: selectedProjectId.value } : undefined
+  })
+}
+
+function getDemandKpiSummary(demand: RoadmapDemand) {
+  if (demand.hasNoKpi) {
+    return {
+      label: 'SEM KPI',
+      tone: 'border-warning/40 bg-warning/10 text-warning',
+      actionLabel: 'Editar registro de KPI'
+    }
+  }
+
+  if (demand.kpiLinks.length > 0) {
+    return {
+      label: `${demand.kpiLinks.length} KPI${demand.kpiLinks.length > 1 ? 's' : ''}`,
+      tone: 'border-primary/20 bg-primary/10 text-primary',
+      actionLabel: 'Abrir registro de KPI'
+    }
+  }
+
+  return {
+    label: 'Incluir KPI',
+    tone: 'border-default bg-elevated text-highlighted',
+    actionLabel: 'Incluir KPI'
+  }
+}
+
+function getNoKpiClassificationLabel(value: NoKpiClassification | undefined) {
+  switch (value) {
+    case 'Relationship':
+      return 'Relacionamento'
+    case 'Mandatory':
+      return 'Mandatório'
+    case 'Technical':
+      return 'Técnico'
+    default:
+      return ''
+  }
+}
+
+const activeDemandKpiId = computed(() => {
+  const value = route.query.kpiDemandId
+  return typeof value === 'string' ? value : ''
+})
+
+const activeDemandKpi = computed(() =>
+  demands.value.find(demand => demand.id === activeDemandKpiId.value) ?? null
+)
 
 function getDisplayedDemandStatus(demand: RoadmapDemand) {
   return {
@@ -215,7 +279,7 @@ const filterProducts = ref<string[]>([])
 
 const demandTypes: DemandType[] = ['Planned', 'Spillover', 'Unplanned', 'Additional']
 const demandClassifications: DemandClassification[] = [
-  'TechnicalDebtSecurity', 'Strategic', 'Evolution', 'ImprovementGap', 'Mandatory', 'Homologation'
+  'TechnicalDebtSecurity', 'Strategic', 'Evolution', 'ImprovementGap', 'Mandatory', 'Homologation', 'Customizacao'
 ]
 
 const selectedProjectProducts = computed(() =>
@@ -743,14 +807,18 @@ function syncListSectionDividers() {
   if (!tbody) return
 
   const table = tbody.closest('table')
+  const headerTable = listHeaderRowRef.value?.closest('table')
 
-  // Inject <colgroup> to lock column widths (prevents colSpan dividers from breaking table-fixed)
-  if (table) {
-    let colgroup = table.querySelector('colgroup')
+  const syncColgroup = (targetTable: HTMLTableElement | null) => {
+    if (!targetTable)
+      return
+
+    let colgroup = targetTable.querySelector('colgroup')
     if (!colgroup) {
       colgroup = document.createElement('colgroup')
-      table.insertBefore(colgroup, table.firstChild)
+      targetTable.insertBefore(colgroup, targetTable.firstChild)
     }
+
     colgroup.innerHTML = ''
     for (const col of listOrderedCols.value) {
       const colEl = document.createElement('col')
@@ -758,6 +826,9 @@ function syncListSectionDividers() {
       colgroup.appendChild(colEl)
     }
   }
+
+  syncColgroup(table)
+  syncColgroup(headerTable as HTMLTableElement | null)
 
   tbody.querySelectorAll('.list-section-divider').forEach(node => node.remove())
 
@@ -864,6 +935,15 @@ watch(
   { flush: 'post' }
 )
 
+watch(
+  () => `${JSON.stringify(listColumnSizing.value)}|${listOrderedCols.value.map(col => col.id).join('|')}`,
+  async () => {
+    await nextTick()
+    syncListSectionDividers()
+  },
+  { flush: 'post' }
+)
+
 // ─── Modal ────────────────────────────────────────────────────────────────────
 const modalOpen = ref(false)
 const capacityModalOpen = ref(false)
@@ -912,6 +992,9 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     isBlocked: demand.isBlocked,
     blockedReason: demand.blockedReason ?? '',
     deliveryDate: demand.deliveryDate ?? '',
+    problemClarity: demand.problemClarity ?? undefined,
+    hasNoKpi: demand.hasNoKpi,
+    noKpiClassification: demand.noKpiClassification ?? undefined,
     ...overrides
   }
 }
@@ -944,18 +1027,14 @@ async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) 
   }
 }
 
-async function handleSubmit(data: DemandFormData, links: DemandKpiLinkInput[] = []) {
+async function handleSubmit(data: DemandFormData) {
   try {
     if (editingDemand.value) {
-      const updatedDemand = await roadmapStore.updateDemand(editingDemand.value.id, data)
-      await kpiStore.updateDemandKpiLinks(updatedDemand.id, links)
-      await roadmapStore.fetchDemands()
+      await roadmapStore.updateDemand(editingDemand.value.id, data)
       toast.add({ title: 'Demanda atualizada', color: 'success' })
     }
     else {
-      const createdDemand = await roadmapStore.createDemand(data)
-      await kpiStore.updateDemandKpiLinks(createdDemand.id, links)
-      await roadmapStore.fetchDemands()
+      await roadmapStore.createDemand(data)
       toast.add({ title: 'Demanda criada', color: 'success' })
     }
     modalOpen.value = false
@@ -1028,7 +1107,7 @@ const typeLabels: Record<DemandType, string> = {
 }
 const classificationLabels: Record<DemandClassification, string> = {
   TechnicalDebtSecurity: 'Débito Técnico', Strategic: 'Estratégico', Evolution: 'Evolução',
-  ImprovementGap: 'Melhoria/Gap', Mandatory: 'Mandatório', Homologation: 'Homologação'
+  ImprovementGap: 'Melhoria/Gap', Mandatory: 'Mandatório', Homologation: 'Homologação', Customizacao: 'Customização'
 }
 
 // ─── List view — TanStack table ──────────────────────────────────────────────────────────────────
@@ -1121,6 +1200,7 @@ const CLASSIFICATION_SELECT_OPTIONS = [
   { label: 'Melhoria/Gap',   value: 'ImprovementGap' },
   { label: 'Mandatório',     value: 'Mandatory' },
   { label: 'Homologação',    value: 'Homologation' },
+  { label: 'Customização',   value: 'Customizacao' },
 ]
 
 const classificationBadgeClass: Record<DemandClassification, string> = {
@@ -1130,19 +1210,21 @@ const classificationBadgeClass: Record<DemandClassification, string> = {
   ImprovementGap: 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800',
   Mandatory: 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800',
   Homologation: 'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800',
+  Customizacao: 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800',
 }
 
 const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'select',         label: '',             defaultWidth: 42, disableFilter: true, disableSorting: true },
-  { id: 'priority',       label: 'Prioridade',   defaultWidth: 92, disableFilter: true },
-  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 126, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
-  { id: 'classification', label: 'Classificação', defaultWidth: 148, filterType: 'multi-select', selectOptions: CLASSIFICATION_SELECT_OPTIONS, allLabel: 'Todas as classificações', itemLabelPlural: 'classificações' },
-  { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text' },
-  { id: 'products',       label: 'Produtos',      defaultWidth: 136, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
+  { id: 'priority',       label: 'Prioridade',   defaultWidth: 76, disableFilter: true },
+  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
+  { id: 'classification', label: 'Classificação', defaultWidth: 126, filterType: 'multi-select', selectOptions: CLASSIFICATION_SELECT_OPTIONS, allLabel: 'Todas as classificações', itemLabelPlural: 'classificações' },
+  { id: 'title',          label: 'Demanda',       defaultWidth: 344, filterType: 'text' },
+  { id: 'kpis',           label: 'KPI',           defaultWidth: 156, disableFilter: true },
+  { id: 'products',       label: 'Produtos',      defaultWidth: 118, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Horas',         defaultWidth: 60, disableFilter: true, alignRight: true },
-  { id: 'status',         label: 'Status',        defaultWidth: 140, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
-  { id: 'customers',      label: 'Clientes',      defaultWidth: 150, filterType: 'text' },
-  { id: '_actions',       label: '',              defaultWidth: 80,  disableFilter: true, disableSorting: true, alignRight: true },
+  { id: 'status',         label: 'Status',        defaultWidth: 110, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
+  { id: 'customers',      label: 'Clientes',      defaultWidth: 120, filterType: 'text' },
+  { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
 ]
 
 listColumnOrder.value = LIST_COL_DEFS.map(column => column.id)
@@ -1305,6 +1387,7 @@ function startListResize(colId: string, e: MouseEvent) {
   const startWidth = listColumnSizing.value[colId] ?? col?.defaultWidth ?? 100
   const onMove = (ev: MouseEvent) => {
     listColumnSizing.value = { ...listColumnSizing.value, [colId]: Math.max(LIST_COL_MIN, startWidth + (ev.clientX - startX)) }
+    requestAnimationFrame(() => syncListSectionDividers())
   }
   const onUp = () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
   document.addEventListener('mousemove', onMove)
@@ -1313,6 +1396,10 @@ function startListResize(colId: string, e: MouseEvent) {
 function listColWidth(colId: string, fallback: number): string {
   return `${listColumnSizing.value[colId] ?? fallback}px`
 }
+
+const listTableWidth = computed(() => `${listOrderedCols.value.reduce((total, col) => {
+  return total + (listColumnSizing.value[col.id] ?? col.defaultWidth)
+}, 0)}px`)
 
 // Pre-resolve components for use inside cell h() renderers
 const UButtonComp = resolveComponent('UButton')
@@ -1381,8 +1468,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => left.sortOrder - right.sortOrder),
     enableColumnFilter: false,
-    size: 92,
-    meta: { style: { td: () => ({ width: listColWidth('priority', 92) }), th: () => ({ width: listColWidth('priority', 92) }) } },
+    size: 76,
+    meta: { style: { td: () => ({ width: listColWidth('priority', 76) }), th: () => ({ width: listColWidth('priority', 76) }) } },
     cell: ({ row }) => {
       const priority = priorityRankByDemandId.value[row.original.id] ?? 0
       return h('div', { class: 'flex items-center gap-2' }, [
@@ -1410,8 +1497,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         || (d.description?.toLowerCase().includes(q) ?? false)
         || (d.jiraIssue?.toLowerCase().includes(q) ?? false)
     },
-    size: 360,
-    meta: { style: { td: () => ({ width: listColWidth('title', 360) }), th: () => ({ width: listColWidth('title', 360) }) } },
+    size: 300,
+    meta: { style: { td: () => ({ width: listColWidth('title', 300) }), th: () => ({ width: listColWidth('title', 300) }) } },
     cell: ({ row }) => {
       const d = row.original
       const isDeprioritized = d.status === 'Deprioritized'
@@ -1441,6 +1528,41 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     },
   },
   {
+    id: 'kpis',
+    header: 'KPI',
+    accessorFn: row => row.hasNoKpi ? -1 : row.kpiLinks.length,
+    enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => {
+      const leftValue = left.hasNoKpi ? -1 : left.kpiLinks.length
+      const rightValue = right.hasNoKpi ? -1 : right.kpiLinks.length
+      return leftValue - rightValue
+    }),
+    enableColumnFilter: false,
+    size: 132,
+    meta: { style: { td: () => ({ width: listColWidth('kpis', 132) }), th: () => ({ width: listColWidth('kpis', 132) }) } },
+    cell: ({ row }) => {
+      const demand = row.original
+      const summary = getDemandKpiSummary(demand)
+
+      return h('button', {
+        type: 'button',
+        class: 'flex max-w-full min-w-0 flex-col items-start gap-1 rounded-lg px-1 py-1 text-left transition-colors hover:opacity-80',
+        title: summary.actionLabel,
+        onClick: (event: Event) => {
+          event.stopPropagation()
+          openDemandKpiWorkspace(demand)
+        }
+      }, [
+        h('span', {
+          class: `inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${summary.tone}`
+        }, summary.label),
+        demand.hasNoKpi && demand.noKpiClassification
+          ? h('span', { class: 'text-[11px] text-muted' }, getNoKpiClassificationLabel(demand.noKpiClassification))
+          : null
+      ])
+    }
+  },
+  {
     accessorKey: 'quarterLabel',
     header: 'Quarter / Tipo',
     enableSorting: true,
@@ -1458,8 +1580,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.includes(`${row.original.quarterNumber}-${row.original.quarterYear}`)
     },
-    size: 126,
-    meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 126) }), th: () => ({ width: listColWidth('quarterLabel', 126) }) } },
+    size: 96,
+    meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 96) }), th: () => ({ width: listColWidth('quarterLabel', 96) }) } },
     cell: ({ row }) => {
       const demand = row.original
       const quarterNode = demand.quarterYear === 0 && demand.quarterNumber === 0
@@ -1484,8 +1606,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.includes(row.original.status)
     },
-    size: 140,
-    meta: { style: { td: () => ({ width: listColWidth('status', 140) }), th: () => ({ width: listColWidth('status', 140) }) } },
+    size: 110,
+    meta: { style: { td: () => ({ width: listColWidth('status', 110) }), th: () => ({ width: listColWidth('status', 110) }) } },
   },
   {
     accessorKey: 'classification',
@@ -1497,8 +1619,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.includes(row.original.classification)
     },
-    size: 148,
-    meta: { style: { td: () => ({ width: listColWidth('classification', 148) }), th: () => ({ width: listColWidth('classification', 148) }) } },
+    size: 126,
+    meta: { style: { td: () => ({ width: listColWidth('classification', 126) }), th: () => ({ width: listColWidth('classification', 126) }) } },
     cell: ({ row }) => h('span', { class: `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${classificationBadgeClass[row.original.classification]}` }, classificationLabels[row.original.classification]),
   },
   {
@@ -1510,8 +1632,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.some(productId => row.original.products.some(product => product.productId === productId))
     },
-    size: 136,
-    meta: { style: { td: () => ({ width: listColWidth('products', 136) }), th: () => ({ width: listColWidth('products', 136) }) } },
+    size: 118,
+    meta: { style: { td: () => ({ width: listColWidth('products', 118) }), th: () => ({ width: listColWidth('products', 118) }) } },
     cell: ({ row }) => {
       const prods = row.original.products
       if (!prods.length) return h('span', { class: 'text-xs text-muted' }, '—')
@@ -1530,12 +1652,12 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const query = filterValue.toLowerCase()
       return !query || row.original.customers?.some(customer => customer.toLowerCase().includes(query)) || false
     },
-    size: 140,
-    meta: { style: { td: () => ({ width: listColWidth('customers', 150) }), th: () => ({ width: listColWidth('customers', 150) }) } },
+    size: 120,
+    meta: { style: { td: () => ({ width: listColWidth('customers', 120) }), th: () => ({ width: listColWidth('customers', 120) }) } },
     cell: ({ row }) => {
       const customers = row.original.customers
       if (!customers?.length) return h('span', { class: 'text-xs text-muted' }, '—')
-      return h('div', { class: 'flex flex-wrap gap-1 max-w-[170px]' },
+      return h('div', { class: 'flex flex-wrap gap-1 max-w-[130px]' },
         customers.map(customer => h('span', { class: 'rounded-full border border-default bg-elevated px-2 py-0.5 text-xs text-muted' }, customer))
       )
     },
@@ -1615,6 +1737,7 @@ function buildListBlobUrl(rows: RoadmapDemand[]): string {
   const header = cols.map(c => c.label)
   const data = rows.map(row => cols.map(c => {
     if (c.id === 'priority') return priorityRankByDemandId.value[row.id] ? `#${priorityRankByDemandId.value[row.id]}` : ''
+    if (c.id === 'kpis') return getDemandKpiSummary(row).label
     if (c.id === 'status') return getDisplayedDemandStatus(row).label
     if (c.id === 'type') return typeLabels[row.type]
     if (c.id === 'classification') return classificationLabels[row.classification]
@@ -1654,24 +1777,107 @@ onUnmounted(() => {
 filterQuarters.value = [`${currentQuarterNumber}-${currentYear}`]
 
 // Load data
+await roadmapStore.fetchProjects()
+
+const queryProjectId = typeof route.query.projectId === 'string'
+  ? route.query.projectId
+  : null
+
+if (queryProjectId && projects.value.some(project => project.id === queryProjectId))
+  selectedProjectId.value = queryProjectId
+
 await Promise.all([
-  roadmapStore.fetchProjects(),
   roadmapStore.fetchDemands(),
   roadmapStore.fetchDependencyOptions(),
   roadmapStore.fetchCustomerSuggestions()
 ])
 
-// Load KPIs for the selected project
-if (selectedProjectId.value) {
-  kpiStore.fetchKpis(selectedProjectId.value)
-}
-watch(selectedProjectId, (id) => {
-  if (id) kpiStore.fetchKpis(id)
+if (activeDemandKpiId.value)
+  await kpiStore.fetchKpis()
+
+watch(activeDemandKpiId, async (value) => {
+  if (!value)
+    return
+
+  await kpiStore.fetchKpis()
 })
+
 </script>
 
 <template>
   <div class="space-y-4">
+    <template v-if="activeDemandKpiId">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div class="space-y-2">
+          <UButton
+            type="button"
+            variant="ghost"
+            color="neutral"
+            size="sm"
+            icon="i-lucide-arrow-left"
+            label="Voltar para roadmap"
+            @click="closeDemandKpiWorkspace"
+          />
+
+          <div>
+            <h1 class="text-2xl font-bold text-highlighted">KPIs da demanda</h1>
+            <p class="mt-1 text-sm text-muted">
+              Tela dedicada para vínculo de indicadores e apuração pós-entrega.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <template v-if="activeDemandKpi">
+        <UCard :ui="{ body: 'p-5 sm:p-6' }">
+          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div class="space-y-1">
+              <p class="text-xs font-semibold uppercase tracking-[0.08em] text-primary/70">Demanda</p>
+              <h2 class="text-xl font-semibold text-highlighted">{{ activeDemandKpi.title }}</h2>
+              <p class="text-sm text-muted">
+                {{ selectedProject?.name ?? 'Projeto' }} · {{ activeDemandKpi.quarterLabel }}
+              </p>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <UBadge variant="subtle" color="neutral">{{ statusLabels[activeDemandKpi.status] }}</UBadge>
+              <UBadge variant="subtle" color="primary">{{ classificationLabels[activeDemandKpi.classification] }}</UBadge>
+              <UBadge v-if="activeDemandKpi.hasNoKpi" variant="subtle" color="warning">
+                {{ activeDemandKpi.noKpiClassification
+                  ? `Sem KPI · ${getNoKpiClassificationLabel(activeDemandKpi.noKpiClassification)}`
+                  : 'Sem KPI' }}
+              </UBadge>
+              <UBadge v-else variant="subtle" color="info">{{ activeDemandKpi.kpiLinks.length }} KPI(s)</UBadge>
+            </div>
+          </div>
+        </UCard>
+
+        <RoadmapDemandKpiWorkspace
+          :demand="activeDemandKpi"
+          :available-kpis="availableKpis"
+        />
+      </template>
+
+      <UCard v-else :ui="{ body: 'p-8' }">
+        <div class="space-y-3 text-center">
+          <UIcon name="i-lucide-search-x" class="mx-auto h-10 w-10 text-muted" />
+          <div>
+            <h2 class="text-lg font-semibold text-highlighted">Demanda não encontrada</h2>
+            <p class="mt-1 text-sm text-muted">
+              Não foi possível localizar a demanda para abrir o registro de KPIs.
+            </p>
+          </div>
+          <UButton
+            type="button"
+            label="Voltar para roadmap"
+            icon="i-lucide-arrow-left"
+            @click="closeDemandKpiWorkspace"
+          />
+        </div>
+      </UCard>
+    </template>
+
+    <template v-else>
     <!-- Header -->
     <div class="flex items-center justify-between flex-wrap gap-2">
       <div>
@@ -1940,7 +2146,7 @@ watch(selectedProjectId, (id) => {
         <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'">
           <!-- Header externo fixo -->
           <div class="sticky top-0 z-10 border-b border-accented bg-default overflow-hidden">
-            <table class="table-fixed text-sm" style="width: 100%">
+            <table class="table-fixed text-sm" :style="{ width: listTableWidth }">
               <thead>
                 <tr ref="listHeaderRowRef">
                   <th
@@ -2027,7 +2233,7 @@ watch(selectedProjectId, (id) => {
             </table>
           </div>
 
-          <div ref="listTableRootRef">
+          <div ref="listTableRootRef" :style="{ width: listTableWidth }">
             <UTable
               :key="listTableKey"
               ref="listTable"
@@ -2243,7 +2449,6 @@ watch(selectedProjectId, (id) => {
       :dependency-options="dependencyOptions"
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
-      :available-kpis="availableKpis"
       :default-project-id="selectedProjectId ?? undefined"
       :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? selectedQuarterYear ?? undefined"
       :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? selectedQuarterNumber ?? undefined"
@@ -2282,5 +2487,6 @@ watch(selectedProjectId, (id) => {
         </div>
       </template>
     </UModal>
+    </template>
   </div>
 </template>

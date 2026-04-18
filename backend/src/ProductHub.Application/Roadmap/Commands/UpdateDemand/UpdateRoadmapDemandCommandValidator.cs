@@ -71,5 +71,14 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.ProblemClarity)
             .InclusiveBetween(0, 10).When(x => x.ProblemClarity.HasValue)
             .WithMessage("Problem clarity must be between 0 and 10.");
+        RuleFor(x => x.NoKpiClassification)
+            .NotEmpty().WithMessage("No KPI classification is required when the demand is marked without KPI.")
+            .When(x => x.HasNoKpi);
+        RuleFor(x => x.NoKpiClassification)
+            .Must(value => string.IsNullOrWhiteSpace(value) || Enum.TryParse<NoKpiClassification>(value, true, out _))
+            .WithMessage("No KPI classification must be Relationship, Mandatory or Technical.");
+        RuleFor(x => x.NoKpiClassification)
+            .Empty().WithMessage("No KPI classification must be empty when the demand has KPI.")
+            .When(x => !x.HasNoKpi);
     }
 }

@@ -23,6 +23,9 @@ public sealed class DemandKpiLinkConfiguration : IEntityTypeConfiguration<Demand
         builder.Property(x => x.EstimatedImpact)
             .HasPrecision(18, 4);
 
+        builder.Property(x => x.Observation)
+            .HasMaxLength(1000);
+
         builder.HasIndex(x => new { x.DemandId, x.KpiId }).IsUnique();
 
         builder.HasOne<RoadmapDemand>()

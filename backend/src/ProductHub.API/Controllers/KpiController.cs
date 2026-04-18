@@ -18,11 +18,9 @@ namespace ProductHub.API.Controllers;
 public sealed class KpiController(ISender sender) : ApiControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> GetByProject(
-        [FromQuery] Guid projectId,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
     {
-        var result = await sender.Send(new GetKpisByProjectQuery(projectId), cancellationToken);
+        var result = await sender.Send(new GetKpisQuery(), cancellationToken);
         return Ok(ApiResponse<IEnumerable<KpiDto>>.Ok(result, CorrelationId));
     }
 

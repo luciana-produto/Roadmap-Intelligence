@@ -66,6 +66,10 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
 
         builder.Property(x => x.ProblemClarity);
         builder.Property(x => x.HasNoKpi).IsRequired();
+        builder.Property(x => x.NoKpiClassification)
+            .HasConversion<string>()
+            .HasMaxLength(50)
+            .IsRequired(false);
 
         builder.Ignore(x => x.Quarter);
 

@@ -26,6 +26,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public DateOnly? DeliveryDate { get; private set; }
     public int? ProblemClarity { get; private set; }
     public bool HasNoKpi { get; private set; }
+    public NoKpiClassification? NoKpiClassification { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -51,7 +52,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         string? blockedReason = null,
         DateOnly? promisedDate = null,
         int? problemClarity = null,
-        bool hasNoKpi = false)
+        bool hasNoKpi = false,
+        NoKpiClassification? noKpiClassification = null)
     {
         Quarter.Create(quarterYear, quarterNumber);
 
@@ -76,7 +78,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             BlockedReason = isBlocked ? blockedReason : null,
             PromisedDate = promisedDate,
             ProblemClarity = problemClarity,
-            HasNoKpi = hasNoKpi
+            HasNoKpi = hasNoKpi,
+            NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification)
         };
         demand._products = productIds
             .Distinct()
@@ -103,7 +106,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DateOnly? promisedDate = null,
         DateOnly? deliveryDate = null,
         int? problemClarity = null,
-        bool hasNoKpi = false)
+        bool hasNoKpi = false,
+        NoKpiClassification? noKpiClassification = null)
     {
         Quarter.Create(quarterYear, quarterNumber);
 
@@ -129,6 +133,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DeliveryDate = deliveryDate;
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;
+        NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
     }
 
     public void SetSortOrder(int sortOrder) =>
@@ -136,6 +141,19 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
 
     public void SetStatus(DemandStatus status) =>
         Status = status;
+
+    private static NoKpiClassification? NormalizeNoKpiClassification(
+        bool hasNoKpi,
+        NoKpiClassification? noKpiClassification)
+    {
+        if (!hasNoKpi)
+            return null;
+
+        if (!noKpiClassification.HasValue)
+            throw new ArgumentException("No KPI classification is required when the demand has no KPI.", nameof(noKpiClassification));
+
+        return noKpiClassification.Value;
+    }
 
     private static IReadOnlyList<string> NormalizeCustomers(IEnumerable<string>? customers) =>
         customers?

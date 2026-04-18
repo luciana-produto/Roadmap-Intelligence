@@ -38,6 +38,13 @@ public sealed class CreateRoadmapDemandCommandHandler(
 
         Enum.TryParse<DemandType>(request.Type, true, out var type);
         Enum.TryParse<DemandClassification>(request.Classification, true, out var classification);
+        NoKpiClassification? noKpiClassification = null;
+        if (!string.IsNullOrWhiteSpace(request.NoKpiClassification))
+        {
+            Enum.TryParse<NoKpiClassification>(request.NoKpiClassification, true, out var parsedNoKpiClassification);
+            noKpiClassification = parsedNoKpiClassification;
+        }
+
         var nextSortOrder = await demandRepository.GetNextSortOrderAsync(
             request.ProjectId,
             request.QuarterYear,
@@ -61,7 +68,8 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.BlockedReason,
             request.PromisedDate,
             request.ProblemClarity,
-            request.HasNoKpi);
+            request.HasNoKpi,
+            noKpiClassification);
 
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);

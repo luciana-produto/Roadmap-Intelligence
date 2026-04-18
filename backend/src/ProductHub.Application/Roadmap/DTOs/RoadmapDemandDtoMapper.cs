@@ -49,7 +49,8 @@ internal static class RoadmapDemandDtoMapper
                 kpiNamesById != null && kpiNamesById.TryGetValue(link.KpiId, out var kpiName) ? kpiName : string.Empty,
                 link.ImpactType.ToString(),
                 link.EstimatedImpact,
-                link.ConfidenceLevel.ToString()))
+                link.ConfidenceLevel.ToString(),
+                link.Observation))
             .ToList()
             .AsReadOnly();
 
@@ -104,8 +105,9 @@ internal static class RoadmapDemandDtoMapper
             isDeliveredLate,
             demand.ProblemClarity,
             demand.HasNoKpi,
+            demand.NoKpiClassification?.ToString(),
             kpiLinkDtos,
-                demandMeasurementDtos,
+            demandMeasurementDtos,
             demand.CreatedAt,
             demand.UpdatedAt);
     }

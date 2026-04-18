@@ -16,10 +16,10 @@ export const useKpiStore = defineStore('kpi', () => {
   const kpis = ref<Kpi[]>([])
   const isLoading = ref(false)
 
-  async function fetchKpis(projectId: string) {
+  async function fetchKpis() {
     isLoading.value = true
     try {
-      const response = await api.get<ApiResponse<Kpi[]>>(`/api/kpis?projectId=${projectId}`)
+      const response = await api.get<ApiResponse<Kpi[]>>('/api/kpis')
       kpis.value = response.data ?? []
     }
     finally {

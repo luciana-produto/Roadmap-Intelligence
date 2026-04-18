@@ -38,7 +38,8 @@ public sealed class UpdateDemandKpiLinksCommandHandler(
                 input.KpiId,
                 impactType,
                 input.EstimatedImpact,
-                confidence);
+                confidence,
+                input.Observation);
         }).ToList();
 
         await kpiRepository.ReplaceDemandKpiLinksAsync(request.DemandId, links, cancellationToken);
@@ -54,6 +55,7 @@ public sealed class UpdateDemandKpiLinksCommandHandler(
             kpiNamesById.GetValueOrDefault(link.KpiId, string.Empty),
             link.ImpactType.ToString(),
             link.EstimatedImpact,
-            link.ConfidenceLevel.ToString())).ToList().AsReadOnly();
+            link.ConfidenceLevel.ToString(),
+            link.Observation)).ToList().AsReadOnly();
     }
 }

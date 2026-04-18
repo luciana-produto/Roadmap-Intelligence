@@ -9,7 +9,6 @@ namespace ProductHub.Application.Roadmap.Commands.CreateKpi;
 
 public sealed class CreateKpiCommandHandler(
     IKpiRepository kpiRepository,
-    IRoadmapProjectRepository projectRepository,
     IUnitOfWork unitOfWork)
     : IRequestHandler<CreateKpiCommand, KpiDto>
 {
@@ -17,15 +16,12 @@ public sealed class CreateKpiCommandHandler(
         CreateKpiCommand request,
         CancellationToken cancellationToken)
     {
-        _ = await projectRepository.GetByIdAsync(request.ProjectId, cancellationToken)
-            ?? throw new NotFoundException("RoadmapProject", request.ProjectId);
-
         Enum.TryParse<KpiType>(request.Type, true, out var type);
         Enum.TryParse<KpiLever>(request.Lever, true, out var lever);
         Enum.TryParse<KpiObjective>(request.Objective, true, out var objective);
 
         var kpi = Kpi.Create(
-            request.ProjectId,
+            Guid.Empty,
             request.Name,
             type,
             lever,

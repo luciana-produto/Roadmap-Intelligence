@@ -213,7 +213,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       isBlocked: payload.isBlocked ?? false,
       blockedReason: payload.blockedReason || undefined,
       problemClarity: payload.problemClarity ?? undefined,
-      hasNoKpi: payload.hasNoKpi ?? false
+      hasNoKpi: payload.hasNoKpi ?? false,
+      noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
     }
     const res = await api.post<ApiResponse<RoadmapDemand>>(
       '/api/roadmap/demands',
@@ -253,7 +254,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       blockedReason: payload.blockedReason || undefined,
       deliveryDate: payload.deliveryDate || undefined,
       problemClarity: payload.problemClarity ?? undefined,
-      hasNoKpi: payload.hasNoKpi ?? false
+      hasNoKpi: payload.hasNoKpi ?? false,
+      noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
     }
     const res = await api.put<ApiResponse<RoadmapDemand>>(
       `/api/roadmap/demands/${id}`,
@@ -310,7 +312,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       blockedReason: demand.blockedReason || undefined,
       deliveryDate: demand.deliveryDate || undefined,
       problemClarity: demand.problemClarity ?? undefined,
-      hasNoKpi: demand.hasNoKpi ?? false
+      hasNoKpi: demand.hasNoKpi ?? false,
+      noKpiClassification: demand.hasNoKpi ? demand.noKpiClassification ?? undefined : undefined
     }
     await api.put<ApiResponse<RoadmapDemand>>(
       `/api/roadmap/demands/${id}`,

@@ -7,6 +7,8 @@ export type DemandClassification =
   | 'ImprovementGap'
   | 'Mandatory'
   | 'Homologation'
+  | 'Customizacao'
+export type NoKpiClassification = 'Relationship' | 'Mandatory' | 'Technical'
 
 export type KpiType = 'Business' | 'Product'
 export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
@@ -83,6 +85,7 @@ export interface RoadmapDemand {
   isDeliveredLate: boolean
   problemClarity?: number
   hasNoKpi: boolean
+  noKpiClassification?: NoKpiClassification
   kpiLinks: DemandKpiLink[]
   kpiMeasurements: KpiMeasurement[]
   createdAt: string
@@ -126,6 +129,7 @@ export interface DemandFormData {
   deliveryDate?: string
   problemClarity?: number
   hasNoKpi?: boolean
+  noKpiClassification?: NoKpiClassification
 }
 
 export interface CapacityFormData {
@@ -153,7 +157,6 @@ export interface Kpi {
 }
 
 export interface KpiFormData {
-  projectId: string
   name: string
   type: KpiType
   lever: KpiLever
@@ -172,6 +175,7 @@ export interface DemandKpiLink {
   impactType: ImpactType
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
+  observation?: string
 }
 
 export interface DemandKpiLinkInput {
@@ -179,6 +183,7 @@ export interface DemandKpiLinkInput {
   impactType: ImpactType
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
+  observation?: string
 }
 
 export interface KpiMeasurement {
