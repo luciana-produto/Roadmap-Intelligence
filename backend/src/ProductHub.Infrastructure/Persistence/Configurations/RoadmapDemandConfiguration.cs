@@ -38,6 +38,12 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
             .IsRequired();
 
         builder.Property(x => x.Observation).HasMaxLength(2000);
+        builder.Property(x => x.DeprioritizationReason)
+            .HasConversion<string>()
+            .HasMaxLength(50)
+            .IsRequired(false);
+        builder.Property(x => x.ReplacementDemandId)
+            .IsRequired(false);
         builder.Property(x => x.JiraIssue).HasMaxLength(100);
         builder.Property(x => x.Hours);
 

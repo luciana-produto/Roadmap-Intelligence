@@ -16,6 +16,8 @@ public sealed record UpdateRoadmapDemandCommand(
     IReadOnlyList<Guid> ProductIds,
     IReadOnlyList<Guid>? DependencyDemandIds = null,
     string? Observation = null,
+    string? DeprioritizationReason = null,
+    Guid? ReplacementDemandId = null,
     string? JiraIssue = null,
     decimal? Hours = null,
     DateOnly? PromisedDate = null,

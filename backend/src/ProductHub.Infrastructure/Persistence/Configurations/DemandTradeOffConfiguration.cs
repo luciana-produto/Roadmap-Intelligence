@@ -12,6 +12,15 @@ public sealed class DemandTradeOffConfiguration : IEntityTypeConfiguration<Deman
 
         builder.HasKey(x => x.Id);
 
+        builder.Property(x => x.ProjectId)
+            .IsRequired();
+
+        builder.Property(x => x.QuarterYear)
+            .IsRequired();
+
+        builder.Property(x => x.QuarterNumber)
+            .IsRequired();
+
         builder.Property(x => x.Reason)
             .HasConversion<string>()
             .IsRequired();
@@ -20,6 +29,7 @@ public sealed class DemandTradeOffConfiguration : IEntityTypeConfiguration<Deman
             .HasMaxLength(2000);
 
         builder.HasIndex(x => x.DeprioritizedDemandId);
+        builder.HasIndex(x => new { x.ProjectId, x.QuarterYear, x.QuarterNumber });
 
         builder.HasOne<RoadmapDemand>()
             .WithMany()

@@ -36,6 +36,15 @@ public sealed class UpdateRoadmapDemandCommandValidator
             .NotEmpty().WithMessage("Observation is required when status is Deprioritized.")
             .When(x => x.Status is "Deprioritized");
         RuleFor(x => x.Observation).MaximumLength(2000);
+        RuleFor(x => x.DeprioritizationReason)
+            .NotEmpty().WithMessage("Deprioritization reason is required when status is Deprioritized.")
+            .When(x => x.Status is "Deprioritized");
+        RuleFor(x => x.DeprioritizationReason)
+            .Must(value => string.IsNullOrWhiteSpace(value) || Enum.TryParse<DeprioritizationReason>(value, true, out _))
+            .WithMessage("Invalid deprioritization reason.");
+        RuleFor(x => x.DeprioritizationReason)
+            .Empty().WithMessage("Deprioritization reason must be empty when status is not Deprioritized.")
+            .When(x => x.Status is not "Deprioritized");
         RuleFor(x => x.BlockedReason)
             .NotEmpty().WithMessage("Blocked reason is required when demand is blocked.")
             .When(x => x.IsBlocked);
@@ -68,6 +77,9 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.DependencyDemandIds)
             .Must((command, ids) => ids == null || !ids.Contains(command.Id))
             .WithMessage("A demand cannot depend on itself.");
+        RuleFor(x => x.ReplacementDemandId)
+            .Must((command, id) => !id.HasValue || id.Value != command.Id)
+            .WithMessage("A demand cannot reference itself as replacement.");
         RuleFor(x => x.ProblemClarity)
             .InclusiveBetween(0, 10).When(x => x.ProblemClarity.HasValue)
             .WithMessage("Problem clarity must be between 0 and 10.");

@@ -25,7 +25,8 @@ public static class RoadmapSeeder
         DateOnly? PromisedDate = null,
         DateOnly? DeliveryDate = null,
         bool HasNoKpi = false,
-        NoKpiClassification? NoKpiClassification = null);
+        NoKpiClassification? NoKpiClassification = null,
+        DeprioritizationReason? DeprioritizationReason = null);
 
     private sealed record MockDependencySeed(string DemandKey, string DependsOnDemandKey);
 
@@ -120,7 +121,8 @@ public static class RoadmapSeeder
             ProblemClarity: 5,
             PromisedDate: new DateOnly(2026, 6, 12),
             HasNoKpi: true,
-            NoKpiClassification: NoKpiClassification.Mandatory),
+            NoKpiClassification: NoKpiClassification.Mandatory,
+            DeprioritizationReason: DeprioritizationReason.MandatoryUrgent),
         new(
             2026,
             2,
@@ -472,9 +474,24 @@ public static class RoadmapSeeder
                 deliveryDate: seed.DeliveryDate,
                 problemClarity: seed.ProblemClarity,
                 hasNoKpi: seed.HasNoKpi,
-                noKpiClassification: seed.NoKpiClassification);
+                noKpiClassification: seed.NoKpiClassification,
+                deprioritizationReason: seed.DeprioritizationReason);
 
             await context.RoadmapDemands.AddAsync(demand);
+
+            if (seed.Status == DemandStatus.Deprioritized && seed.DeprioritizationReason.HasValue)
+            {
+                await context.DemandTradeOffs.AddAsync(
+                    DemandTradeOff.Create(
+                        project.Id,
+                        seed.QuarterYear,
+                        seed.QuarterNumber,
+                        demand.Id,
+                        null,
+                        seed.DeprioritizationReason.Value,
+                        seed.Observation));
+            }
+
             existingDemandKeySet[demandKey] = demand.Id;
             seededDemandIdsByKey[demandKey] = demand.Id;
             hasDemandChanges = true;

@@ -43,10 +43,11 @@ public sealed class ReorderRoadmapDemandCommandHandler(
             ]);
         }
 
-        if (status == DemandStatus.Deprioritized && string.IsNullOrWhiteSpace(targetDemand.Observation))
+        if (status == DemandStatus.Deprioritized
+            && (string.IsNullOrWhiteSpace(targetDemand.Observation) || !targetDemand.DeprioritizationReason.HasValue))
         {
             throw new ValidationException([
-                new ValidationFailure(nameof(request.Status), "Observation is required when status is Deprioritized.")
+                new ValidationFailure(nameof(request.Status), "Deprioritization reason and observation are required when status is Deprioritized.")
             ]);
         }
 

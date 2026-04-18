@@ -5,6 +5,9 @@ namespace ProductHub.Domain.Roadmap;
 
 public sealed class DemandTradeOff : BaseEntity, IAuditableEntity
 {
+    public Guid ProjectId { get; private set; }
+    public int QuarterYear { get; private set; }
+    public int QuarterNumber { get; private set; }
     public Guid DeprioritizedDemandId { get; private set; }
     public Guid? ReplacementDemandId { get; private set; }
     public DeprioritizationReason Reason { get; private set; }
@@ -15,6 +18,9 @@ public sealed class DemandTradeOff : BaseEntity, IAuditableEntity
     private DemandTradeOff() { }
 
     public static DemandTradeOff Create(
+        Guid projectId,
+        int quarterYear,
+        int quarterNumber,
         Guid deprioritizedDemandId,
         Guid? replacementDemandId,
         DeprioritizationReason reason,
@@ -22,6 +28,9 @@ public sealed class DemandTradeOff : BaseEntity, IAuditableEntity
     {
         return new DemandTradeOff
         {
+            ProjectId = projectId,
+            QuarterYear = quarterYear,
+            QuarterNumber = quarterNumber,
             DeprioritizedDemandId = deprioritizedDemandId,
             ReplacementDemandId = replacementDemandId,
             Reason = reason,

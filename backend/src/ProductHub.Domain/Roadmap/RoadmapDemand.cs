@@ -17,6 +17,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public DemandClassification Classification { get; private set; }
     public int SortOrder { get; private set; }
     public string? Observation { get; private set; }
+    public DeprioritizationReason? DeprioritizationReason { get; private set; }
+    public Guid? ReplacementDemandId { get; private set; }
     public string? JiraIssue { get; private set; }
     public decimal? Hours { get; private set; }
     public IReadOnlyList<string> Customers { get; private set; } = [];
@@ -98,6 +100,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DemandClassification classification,
         int? sortOrder = null,
         string? observation = null,
+        DeprioritizationReason? deprioritizationReason = null,
+        Guid? replacementDemandId = null,
         string? jiraIssue = null,
         decimal? hours = null,
         IEnumerable<string>? customers = null,
@@ -124,6 +128,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         if (sortOrder.HasValue)
             SortOrder = sortOrder.Value;
         Observation = observation;
+        DeprioritizationReason = NormalizeDeprioritizationReason(status, deprioritizationReason);
+        ReplacementDemandId = status == DemandStatus.Deprioritized ? replacementDemandId : null;
         JiraIssue = jiraIssue;
         Hours = hours;
         Customers = NormalizeCustomers(customers);
@@ -153,6 +159,19 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             throw new ArgumentException("No KPI classification is required when the demand has no KPI.", nameof(noKpiClassification));
 
         return noKpiClassification.Value;
+    }
+
+    private static DeprioritizationReason? NormalizeDeprioritizationReason(
+        DemandStatus status,
+        DeprioritizationReason? deprioritizationReason)
+    {
+        if (status != DemandStatus.Deprioritized)
+            return null;
+
+        if (!deprioritizationReason.HasValue)
+            throw new ArgumentException("Deprioritization reason is required when the demand is deprioritized.", nameof(deprioritizationReason));
+
+        return deprioritizationReason.Value;
     }
 
     private static IReadOnlyList<string> NormalizeCustomers(IEnumerable<string>? customers) =>

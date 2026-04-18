@@ -2,8 +2,10 @@ namespace ProductHub.Domain.Roadmap;
 
 public enum DeprioritizationReason
 {
-    Cancellation = 0,
-    CustomerRequest = 1,
-    StrategicChange = 2,
-    MandatoryReplacement = 3
+    Strategic = 0,
+    MandatoryUrgent = 1,
+    LowImpact = 2,
+    LackOfCapacity = 3,
+    ContextChange = 4,
+    Customizacao = 5
 }

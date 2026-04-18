@@ -78,6 +78,20 @@ public sealed class KpiRepository(AppDbContext context)
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<DemandTradeOff>> GetTradeOffsByDemandIdsAsync(
+        IEnumerable<Guid> demandIds,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = demandIds.Distinct().ToArray();
+        if (ids.Length == 0) return [];
+
+        return await context.DemandTradeOffs
+            .AsNoTracking()
+            .Where(t => ids.Contains(t.DeprioritizedDemandId))
+            .OrderByDescending(t => t.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<DemandTradeOff>> GetTradeOffsByDemandIdAsync(
         Guid demandId,
         CancellationToken cancellationToken = default) =>
@@ -89,17 +103,10 @@ public sealed class KpiRepository(AppDbContext context)
     public async Task<IReadOnlyList<DemandTradeOff>> GetTradeOffsByProjectAsync(
         Guid projectId,
         CancellationToken cancellationToken = default)
-    {
-        var demandIds = await context.RoadmapDemands
-            .Where(d => d.ProjectId == projectId)
-            .Select(d => d.Id)
-            .ToListAsync(cancellationToken);
-
-        return await context.DemandTradeOffs
+        => await context.DemandTradeOffs
             .AsNoTracking()
-            .Where(t => demandIds.Contains(t.DeprioritizedDemandId))
+            .Where(t => t.ProjectId == projectId)
             .ToListAsync(cancellationToken);
-    }
 
     public async Task ReplaceDemandKpiLinksAsync(
         Guid demandId,

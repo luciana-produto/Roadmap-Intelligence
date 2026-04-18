@@ -12,7 +12,8 @@ internal static class RoadmapDemandDtoMapper
         IEnumerable<RoadmapDemandDependency> dependencyLinks,
         IReadOnlyDictionary<Guid, string>? kpiNamesById = null,
         IEnumerable<DemandKpiLink>? kpiLinks = null,
-        IEnumerable<KpiMeasurement>? kpiMeasurements = null)
+        IEnumerable<KpiMeasurement>? kpiMeasurements = null,
+        IEnumerable<DemandTradeOff>? tradeOffs = null)
     {
         var effectivePromisedDate = GetEffectivePromisedDate(demand);
         var today = DateOnly.FromDateTime(DateTime.Today);
@@ -72,6 +73,28 @@ internal static class RoadmapDemandDtoMapper
             .ToList()
             .AsReadOnly();
 
+        var tradeOffHistoryDtos = (tradeOffs ?? [])
+            .Where(tradeOff => tradeOff.DeprioritizedDemandId == demand.Id)
+            .OrderByDescending(tradeOff => tradeOff.CreatedAt)
+            .Select(tradeOff => new DemandTradeOffDto(
+                tradeOff.Id,
+                tradeOff.ProjectId,
+                projectNamesById.TryGetValue(tradeOff.ProjectId, out var tradeOffProjectName) ? tradeOffProjectName : string.Empty,
+                FormatQuarterLabel(tradeOff.QuarterYear, tradeOff.QuarterNumber),
+                tradeOff.QuarterYear,
+                tradeOff.QuarterNumber,
+                tradeOff.DeprioritizedDemandId,
+                demand.Title,
+                tradeOff.ReplacementDemandId,
+                tradeOff.ReplacementDemandId.HasValue && demandsById.TryGetValue(tradeOff.ReplacementDemandId.Value, out var replacementDemand)
+                    ? replacementDemand.Title
+                    : null,
+                tradeOff.Reason.ToString(),
+                tradeOff.Observation,
+                tradeOff.CreatedAt))
+            .ToList()
+            .AsReadOnly();
+
         return new RoadmapDemandDto(
             demand.Id,
             demand.Title,
@@ -91,6 +114,8 @@ internal static class RoadmapDemandDtoMapper
                 .ToList()
                 .AsReadOnly(),
             demand.Observation,
+            demand.DeprioritizationReason?.ToString(),
+            demand.ReplacementDemandId,
             demand.JiraIssue,
             demand.Hours,
             demand.Customers,
@@ -106,10 +131,19 @@ internal static class RoadmapDemandDtoMapper
             demand.ProblemClarity,
             demand.HasNoKpi,
             demand.NoKpiClassification?.ToString(),
+            tradeOffHistoryDtos,
             kpiLinkDtos,
             demandMeasurementDtos,
             demand.CreatedAt,
             demand.UpdatedAt);
+    }
+
+    private static string FormatQuarterLabel(int quarterYear, int quarterNumber)
+    {
+        if (quarterYear <= 0 || quarterNumber <= 0)
+            return Quarter.Create(Quarter.BacklogYear, Quarter.BacklogNumber).Label;
+
+        return Quarter.Create(quarterYear, quarterNumber).Label;
     }
 
     private static DateOnly? GetEffectivePromisedDate(RoadmapDemand demand)

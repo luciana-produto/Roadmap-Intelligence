@@ -41,6 +41,9 @@ public sealed class CreateRoadmapDemandCommandValidator
         RuleFor(x => x.DependencyDemandIds)
             .Must(ids => ids == null || ids.Where(id => id != Guid.Empty).Distinct().Count() == ids.Count)
             .WithMessage("Dependency demands must be unique.");
+        RuleFor(x => x.ReplacementDemandId)
+            .NotEmpty().When(x => x.ReplacementDemandId.HasValue)
+            .WithMessage("Replacement demand must be valid.");
         RuleFor(x => x.JiraIssue).MaximumLength(100);
         RuleFor(x => x.Hours).GreaterThan(0).When(x => x.Hours.HasValue);
         RuleFor(x => x.PromisedDate)

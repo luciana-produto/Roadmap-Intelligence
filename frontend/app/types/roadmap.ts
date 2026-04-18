@@ -9,6 +9,13 @@ export type DemandClassification =
   | 'Homologation'
   | 'Customizacao'
 export type NoKpiClassification = 'Relationship' | 'Mandatory' | 'Technical'
+export type DeprioritizationReason =
+  | 'Strategic'
+  | 'MandatoryUrgent'
+  | 'LowImpact'
+  | 'LackOfCapacity'
+  | 'ContextChange'
+  | 'Customizacao'
 
 export type KpiType = 'Business' | 'Product'
 export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
@@ -57,6 +64,22 @@ export interface DemandDependencyOption {
   status: DemandStatus
 }
 
+export interface DemandTradeOffHistory {
+  id: string
+  projectId: string
+  projectName: string
+  quarterLabel: string
+  quarterYear: number
+  quarterNumber: number
+  deprioritizedDemandId: string
+  deprioritizedDemandTitle: string
+  replacementDemandId?: string
+  replacementDemandTitle?: string
+  reason: DeprioritizationReason
+  observation?: string
+  createdAt: string
+}
+
 export interface RoadmapDemand {
   id: string
   title: string
@@ -71,6 +94,8 @@ export interface RoadmapDemand {
   classification: DemandClassification
   products: DemandProduct[]
   observation?: string
+  deprioritizationReason?: DeprioritizationReason
+  replacementDemandId?: string
   jiraIssue?: string
   hours?: number
   customers?: string[]
@@ -86,6 +111,7 @@ export interface RoadmapDemand {
   problemClarity?: number
   hasNoKpi: boolean
   noKpiClassification?: NoKpiClassification
+  tradeOffHistory: DemandTradeOffHistory[]
   kpiLinks: DemandKpiLink[]
   kpiMeasurements: KpiMeasurement[]
   createdAt: string
@@ -119,6 +145,8 @@ export interface DemandFormData {
   productIds: string[]
   status?: DemandStatus
   observation?: string
+  deprioritizationReason?: DeprioritizationReason
+  replacementDemandId?: string
   jiraIssue?: string
   hours?: number
   customers?: string[]

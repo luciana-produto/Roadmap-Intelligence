@@ -7,6 +7,7 @@ import type {
   DemandType,
   DemandClassification,
   DemandStatus,
+  DeprioritizationReason,
   Kpi,
   DemandKpiLink,
   DemandKpiLinkInput,
@@ -97,6 +98,33 @@ const statusOptions = [
   { value: 'Deprioritized', label: 'Despriorizado' }
 ]
 
+const deprioritizationReasonOptions = [
+  { value: 'Strategic', label: 'Estratégico' },
+  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
+  { value: 'LowImpact', label: 'Baixo impacto' },
+  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
+  { value: 'ContextChange', label: 'Mudança de contexto' },
+  { value: 'Customizacao', label: 'Customização' }
+] as const
+
+const deprioritizationReasonExamples: Record<DeprioritizationReason, string> = {
+  Strategic: 'vamos dar foco em algo mais estratégico',
+  MandatoryUrgent: 'precisamos encaixar uma demanda fiscal ou urgente',
+  LowImpact: 'a demanda não justificativa o esforço neste momento',
+  LackOfCapacity: 'erro de planejamento',
+  ContextChange: 'Cliente desistiu / Legislação revogada',
+  Customizacao: 'Será substituída por uma demanda de customização de outro cliente'
+}
+
+const deprioritizationReasonLabels: Record<DeprioritizationReason, string> = {
+  Strategic: 'Estratégico',
+  MandatoryUrgent: 'Mandatório/Urgente',
+  LowImpact: 'Baixo impacto',
+  LackOfCapacity: 'Falta de capacidade',
+  ContextChange: 'Mudança de contexto',
+  Customizacao: 'Customização'
+}
+
 type DemandFormTab = 'general' | 'status'
 
 const resultTabs = computed(() => {
@@ -117,6 +145,7 @@ const showSubmitHint = ref(false)
 let submitHintTimeout: ReturnType<typeof setTimeout> | null = null
 
 const observationRequired = computed(() => form.status === 'Deprioritized')
+const deprioritizationReasonRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
 
 const form = reactive<DemandFormState>({
@@ -130,6 +159,8 @@ const form = reactive<DemandFormState>({
   productIds: [],
   status: 'Backlog',
   observation: '',
+  deprioritizationReason: undefined,
+  replacementDemandId: undefined,
   jiraIssue: '',
   hours: undefined,
   customers: [],
@@ -148,6 +179,24 @@ const kpiMeasurements = ref<KpiMeasurement[]>([])
 const measurementDrafts = ref<Record<string, MeasurementEditorState>>({})
 const measurementSavingKpiId = ref<string | null>(null)
 const measurementDeletingId = ref<string | null>(null)
+
+const selectedDeprioritizationExample = computed(() => {
+  const reason = form.deprioritizationReason
+  return reason ? deprioritizationReasonExamples[reason] : ''
+})
+
+const replacementDemandOptions = computed(() => {
+  const currentDemandId = props.demand?.id
+
+  return props.dependencyOptions
+    .filter(option => option.demandId !== currentDemandId)
+    .map(option => ({
+      value: option.demandId,
+      label: `${option.projectName} · ${option.title}`
+    }))
+})
+
+  const tradeOffHistory = computed(() => props.demand?.tradeOffHistory ?? [])
 
 const impactTypeOptions = [
   { value: 'Percentage', label: 'Percentual' },
@@ -236,6 +285,8 @@ watch(() => props.open, (open) => {
     form.productIds = props.demand.products.map(p => p.productId)
     form.status = props.demand.status
     form.observation = props.demand.observation ?? ''
+    form.deprioritizationReason = props.demand.deprioritizationReason ?? undefined
+    form.replacementDemandId = props.demand.replacementDemandId ?? undefined
     form.jiraIssue = props.demand.jiraIssue ?? ''
     form.hours = props.demand.hours ?? undefined
     form.customers = props.demand.customers ?? []
@@ -268,6 +319,8 @@ watch(() => props.open, (open) => {
     form.productIds = []
     form.status = 'Backlog'
     form.observation = ''
+    form.deprioritizationReason = undefined
+    form.replacementDemandId = undefined
     form.jiraIssue = ''
     form.hours = undefined
     form.customers = []
@@ -299,6 +352,12 @@ watch(() => form.status, (status) => {
   if (status === 'Done') {
     form.isBlocked = false
     form.blockedReason = ''
+  }
+
+  if (status !== 'Deprioritized') {
+    form.deprioritizationReason = undefined
+    form.observation = ''
+    form.replacementDemandId = undefined
   }
 })
 
@@ -784,8 +843,10 @@ const missingSubmitReason = computed(() => {
     return 'Selecione a classificação'
   if (form.productIds.length === 0)
     return 'Selecione ao menos um produto'
+  if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
+    return 'Selecione o motivo da despriorização'
   if (observationRequired.value && !form.observation)
-    return 'Preencha a observação para demanda despriorizada'
+    return 'Preencha a observação da despriorização'
   if (deliveryDateRequired.value && !form.deliveryDate)
     return 'Informe a data de entrega para concluir a demanda'
   if (form.isBlocked && !form.blockedReason)
@@ -817,7 +878,8 @@ function openSubmitHint() {
 
 function focusRelevantTab() {
   if (
-    missingSubmitReason.value === 'Preencha a observação para demanda despriorizada'
+    missingSubmitReason.value === 'Selecione o motivo da despriorização'
+    || missingSubmitReason.value === 'Preencha a observação da despriorização'
     || missingSubmitReason.value === 'Informe a data de entrega para concluir a demanda'
     || missingSubmitReason.value === 'Preencha o motivo do impedimento'
   ) {
@@ -1221,18 +1283,86 @@ async function handleSubmit() {
           </UFormField>
 
           <UFormField
+            v-if="deprioritizationReasonRequired"
+            label="Motivo da despriorização"
+            required
+          >
+            <USelect
+              v-model="form.deprioritizationReason"
+              :items="deprioritizationReasonOptions"
+              placeholder="Selecione o motivo"
+              class="w-full"
+              :class="!form.deprioritizationReason ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
+
+          <div
+            v-if="selectedDeprioritizationExample"
+            class="text-sm text-muted"
+          >
+            <span class="font-medium text-highlighted">Exemplo:</span>
+            {{ selectedDeprioritizationExample }}
+          </div>
+
+          <UFormField
             v-if="observationRequired"
-            label="Motivo despriorização"
+            label="Demanda priorizada no lugar"
+            hint="Opcional"
+          >
+            <USelect
+              v-model="form.replacementDemandId"
+              :items="replacementDemandOptions"
+              placeholder="Selecione uma demanda"
+              class="w-full"
+            />
+          </UFormField>
+
+          <UFormField
+            v-if="observationRequired"
+            label="Observação despriorização"
             required
           >
             <UTextarea
               v-model="form.observation"
-              placeholder="Justifique o motivo da despriorização"
+              placeholder="Detalhe o contexto da despriorização"
               :rows="2"
               class="w-full"
               :class="!form.observation ? 'ring-2 ring-red-400' : ''"
             />
           </UFormField>
+
+          <section v-if="tradeOffHistory.length" class="space-y-3 border-t border-default pt-4">
+            <div>
+              <h4 class="text-sm font-semibold text-highlighted">Histórico de trade-offs de despriorização</h4>
+              <p class="mt-1 text-xs text-muted">
+                Estes registros permanecem vinculados ao projeto e ao quarter em que a despriorização aconteceu.
+              </p>
+            </div>
+
+            <article
+              v-for="tradeOff in tradeOffHistory"
+              :key="tradeOff.id"
+              class="rounded-lg border border-default bg-elevated p-3 space-y-2"
+            >
+              <div class="flex flex-wrap items-center gap-2">
+                <UBadge variant="subtle" color="neutral">{{ tradeOff.projectName }}</UBadge>
+                <UBadge variant="subtle" color="primary">{{ tradeOff.quarterLabel }}</UBadge>
+                <UBadge variant="subtle" color="warning">{{ deprioritizationReasonLabels[tradeOff.reason] }}</UBadge>
+              </div>
+
+              <p v-if="tradeOff.replacementDemandTitle" class="text-sm text-highlighted">
+                Priorizada no lugar: {{ tradeOff.replacementDemandTitle }}
+              </p>
+
+              <p v-if="tradeOff.observation" class="text-sm text-muted">
+                {{ tradeOff.observation }}
+              </p>
+
+              <p class="text-xs text-muted">
+                Registrado em {{ new Intl.DateTimeFormat('pt-BR').format(new Date(tradeOff.createdAt)) }}
+              </p>
+            </article>
+          </section>
         </section>
         </template>
 

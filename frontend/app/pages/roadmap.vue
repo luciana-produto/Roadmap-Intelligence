@@ -140,6 +140,25 @@ function getNoKpiClassificationLabel(value: NoKpiClassification | undefined) {
   }
 }
 
+function getDeprioritizationReasonLabel(value: string | undefined) {
+  switch (value) {
+    case 'Strategic':
+      return 'Estratégico'
+    case 'MandatoryUrgent':
+      return 'Mandatório/Urgente'
+    case 'LowImpact':
+      return 'Baixo impacto'
+    case 'LackOfCapacity':
+      return 'Falta de capacidade'
+    case 'ContextChange':
+      return 'Mudança de contexto'
+    case 'Customizacao':
+      return 'Customização'
+    default:
+      return ''
+  }
+}
+
 const activeDemandKpiId = computed(() => {
   const value = route.query.kpiDemandId
   return typeof value === 'string' ? value : ''
@@ -170,7 +189,7 @@ function getDemandNotesTooltip(demand: RoadmapDemand): string {
   if (demand.isBlocked && demand.blockedReason)
     notes.push(`Impedimento\n${demand.blockedReason}`)
   if (demand.status === 'Deprioritized' && demand.observation)
-    notes.push(`Despriorização\n${demand.observation}`)
+    notes.push(`Despriorização${demand.deprioritizationReason ? ` · ${getDeprioritizationReasonLabel(demand.deprioritizationReason)}` : ''}\n${demand.observation}`)
   return notes.join('\n\n')
 }
 
@@ -632,7 +651,13 @@ function ensureDemandCanMoveToStatus(demand: RoadmapDemand, status: DemandStatus
   }
 
   if (status === 'Deprioritized' && !demand.observation) {
-    toast.add({ title: 'Informe o motivo da despriorização', color: 'warning' })
+    toast.add({ title: 'Informe o motivo e a observação da despriorização', color: 'warning' })
+    openEditModal(demand, status)
+    return false
+  }
+
+  if (status === 'Deprioritized' && !demand.deprioritizationReason) {
+    toast.add({ title: 'Informe o motivo e a observação da despriorização', color: 'warning' })
     openEditModal(demand, status)
     return false
   }
@@ -984,6 +1009,8 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     productIds: demand.products.map(product => product.productId),
     status: demand.status,
     observation: demand.observation ?? '',
+    deprioritizationReason: demand.deprioritizationReason ?? undefined,
+    replacementDemandId: demand.replacementDemandId ?? undefined,
     jiraIssue: demand.jiraIssue ?? '',
     hours: demand.hours,
     promisedDate: demand.promisedDate ?? '',

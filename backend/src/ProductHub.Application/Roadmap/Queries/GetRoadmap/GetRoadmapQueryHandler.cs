@@ -43,6 +43,7 @@ public sealed class GetDemandsQueryHandler(
 
         var kpiLinks = await kpiRepository.GetKpiLinksByDemandIdsAsync(demandIds, cancellationToken);
         var kpiMeasurements = await kpiRepository.GetMeasurementsByDemandIdsAsync(demandIds, cancellationToken);
+        var tradeOffs = await kpiRepository.GetTradeOffsByDemandIdsAsync(demandIds, cancellationToken);
         var kpiIds = kpiLinks.Select(l => l.KpiId).Distinct().ToArray();
         var kpis = kpiIds.Length > 0
             ? (await kpiRepository.GetAllAsync(cancellationToken))
@@ -51,6 +52,6 @@ public sealed class GetDemandsQueryHandler(
             : new Dictionary<Guid, string>();
 
         return demands.Select(demand =>
-            RoadmapDemandDtoMapper.Map(demand, productMap, demandsById, projectNamesById, dependencyLinks, kpis, kpiLinks, kpiMeasurements));
+            RoadmapDemandDtoMapper.Map(demand, productMap, demandsById, projectNamesById, dependencyLinks, kpis, kpiLinks, kpiMeasurements, tradeOffs));
     }
 }

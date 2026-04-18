@@ -39,6 +39,11 @@ public sealed record KpiMeasurementDto(
 
 public sealed record DemandTradeOffDto(
     Guid Id,
+    Guid ProjectId,
+    string ProjectName,
+    string QuarterLabel,
+    int QuarterYear,
+    int QuarterNumber,
     Guid DeprioritizedDemandId,
     string DeprioritizedDemandTitle,
     Guid? ReplacementDemandId,

@@ -21,6 +21,9 @@ public sealed class CreateRoadmapDemandCommandHandler(
             .Where(id => id != Guid.Empty)
             .Distinct()
             .ToArray();
+        var relatedDemandIds = request.ReplacementDemandId.HasValue
+            ? [.. dependencyDemandIds, request.ReplacementDemandId.Value]
+            : dependencyDemandIds;
 
         var project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId, cancellationToken)
             ?? throw new NotFoundException("RoadmapProject", request.ProjectId);
@@ -30,11 +33,13 @@ public sealed class CreateRoadmapDemandCommandHandler(
             if (!projectProductIds.Contains(pid))
                 throw new NotFoundException("RoadmapProduct", pid);
 
-        var dependencyDemands = await demandRepository.GetByIdsAsync(dependencyDemandIds, cancellationToken);
+        var dependencyDemands = await demandRepository.GetByIdsAsync(relatedDemandIds, cancellationToken);
         var dependencyDemandMap = dependencyDemands.ToDictionary(demand => demand.Id);
         foreach (var dependencyDemandId in dependencyDemandIds)
             if (!dependencyDemandMap.ContainsKey(dependencyDemandId))
                 throw new NotFoundException("RoadmapDemand", dependencyDemandId);
+        if (request.ReplacementDemandId.HasValue && !dependencyDemandMap.ContainsKey(request.ReplacementDemandId.Value))
+            throw new NotFoundException("RoadmapDemand", request.ReplacementDemandId.Value);
 
         Enum.TryParse<DemandType>(request.Type, true, out var type);
         Enum.TryParse<DemandClassification>(request.Classification, true, out var classification);
