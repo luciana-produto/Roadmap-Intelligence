@@ -1219,10 +1219,10 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
   { id: 'classification', label: 'Classificação', defaultWidth: 126, filterType: 'multi-select', selectOptions: CLASSIFICATION_SELECT_OPTIONS, allLabel: 'Todas as classificações', itemLabelPlural: 'classificações' },
   { id: 'title',          label: 'Demanda',       defaultWidth: 344, filterType: 'text' },
-  { id: 'kpis',           label: 'KPI',           defaultWidth: 156, disableFilter: true },
+  { id: 'kpis',           label: 'KPI',           defaultWidth: 148, disableFilter: true },
   { id: 'products',       label: 'Produtos',      defaultWidth: 118, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Horas',         defaultWidth: 60, disableFilter: true, alignRight: true },
-  { id: 'status',         label: 'Status',        defaultWidth: 110, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
+  { id: 'status',         label: 'Status',        defaultWidth: 118, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 120, filterType: 'text' },
   { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
 ]
@@ -1796,8 +1796,12 @@ if (activeDemandKpiId.value)
   await kpiStore.fetchKpis()
 
 watch(activeDemandKpiId, async (value) => {
-  if (!value)
+  if (!value) {
+    await nextTick()
+    syncListSectionDividers()
+    initListSortable()
     return
+  }
 
   await kpiStore.fetchKpis()
 })

@@ -789,7 +789,7 @@ async function deleteMeasurement(measurementId: string) {
           </p>
         </div>
 
-        <div class="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,18rem)] md:items-start">
+        <div class="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,29rem)] md:items-start">
           <UFormField label="Registro de KPI">
             <label class="flex min-h-9 items-center gap-2 cursor-pointer select-none">
               <input
@@ -803,7 +803,7 @@ async function deleteMeasurement(measurementId: string) {
             </label>
           </UFormField>
 
-          <div v-if="formState.hasNoKpi" class="flex flex-col items-start gap-2">
+          <div v-if="formState.hasNoKpi" class="grid gap-3 md:grid-cols-[minmax(0,29rem)_auto] md:items-end">
             <UFormField
               label="Classificação da demanda sem KPI"
               required
@@ -817,7 +817,7 @@ async function deleteMeasurement(measurementId: string) {
               />
             </UFormField>
 
-            <div class="flex justify-start pt-0.5">
+            <div class="flex items-end pb-0.5">
               <UButton
                 type="button"
                 icon="i-lucide-save"
