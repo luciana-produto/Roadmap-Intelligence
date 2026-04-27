@@ -17,8 +17,15 @@ public sealed class UpdateDemandKpiLinksCommandHandler(
         UpdateDemandKpiLinksCommand request,
         CancellationToken cancellationToken)
     {
-        _ = await demandRepository.GetByIdAsync(request.DemandId, cancellationToken)
+        var demand = await demandRepository.GetByIdAsync(request.DemandId, cancellationToken)
             ?? throw new NotFoundException("RoadmapDemand", request.DemandId);
+
+        if (demand.ItemType != RoadmapItemType.Epic)
+        {
+            throw new ValidationException([
+                new ValidationFailure(nameof(request.DemandId), "KPIs can only be linked to epic items.")
+            ]);
+        }
 
         var kpiIds = request.Links.Select(l => l.KpiId).Distinct().ToArray();
         var kpis = (await kpiRepository.GetAllAsync(cancellationToken))

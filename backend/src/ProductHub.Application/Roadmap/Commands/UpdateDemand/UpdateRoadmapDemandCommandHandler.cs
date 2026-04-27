@@ -18,6 +18,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         UpdateRoadmapDemandCommand request,
         CancellationToken cancellationToken)
     {
+        Enum.TryParse<RoadmapItemType>(request.ItemType, true, out var itemType);
         var dependencyDemandIds = (request.DependencyDemandIds ?? [])
             .Where(id => id != Guid.Empty)
             .Distinct()
@@ -32,20 +33,39 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         var originalQuarterYear = demand.QuarterYear;
         var originalQuarterNumber = demand.QuarterNumber;
 
-        if (request.ProjectId != demand.ProjectId)
+        if (request.ProjectId != demand.ProjectId && itemType == RoadmapItemType.Demand)
         {
             throw new ValidationException([
                 new ValidationFailure(nameof(request.ProjectId), "Changing the project of an existing demand is not supported.")
             ]);
         }
 
-        var project = await projectRepository.GetByIdWithProductsAsync(demand.ProjectId, cancellationToken)
-            ?? throw new NotFoundException("RoadmapProject", demand.ProjectId);
+        RoadmapProject? project = null;
+        Dictionary<Guid, string> productMap = [];
+        if (request.ProjectId.HasValue)
+        {
+            project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId.Value, cancellationToken)
+                ?? throw new NotFoundException("RoadmapProject", request.ProjectId.Value);
 
-        var projectProductIds = project.Products.Select(p => p.Id).ToHashSet();
-        foreach (var pid in request.ProductIds)
-            if (!projectProductIds.Contains(pid))
-                throw new NotFoundException("RoadmapProduct", pid);
+            var projectProductIds = project.Products.Select(p => p.Id).ToHashSet();
+            foreach (var pid in request.ProductIds)
+                if (!projectProductIds.Contains(pid))
+                    throw new NotFoundException("RoadmapProduct", pid);
+
+            productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
+        }
+
+        if (request.ParentDemandId.HasValue)
+        {
+            var parent = await demandRepository.GetByIdAsync(request.ParentDemandId.Value, cancellationToken)
+                ?? throw new NotFoundException("RoadmapDemand", request.ParentDemandId.Value);
+
+            if (itemType == RoadmapItemType.Epic && parent.ItemType != RoadmapItemType.Roadmap)
+                throw new ValidationException([new ValidationFailure(nameof(request.ParentDemandId), "An epic must be linked to a roadmap item.")]);
+
+            if (itemType == RoadmapItemType.Demand && parent.ItemType != RoadmapItemType.Epic)
+                throw new ValidationException([new ValidationFailure(nameof(request.ParentDemandId), "A demand must be linked to an epic item.")]);
+        }
 
         if (dependencyDemandIds.Contains(request.Id))
         {
@@ -79,18 +99,23 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         }
 
         int? nextSortOrder = null;
-        if (originalQuarterYear != request.QuarterYear || originalQuarterNumber != request.QuarterNumber)
+        if (itemType == RoadmapItemType.Demand
+            && request.ProjectId.HasValue
+            && (originalQuarterYear != request.QuarterYear || originalQuarterNumber != request.QuarterNumber))
         {
             nextSortOrder = await demandRepository.GetNextSortOrderAsync(
-                demand.ProjectId,
+                request.ProjectId.Value,
                 request.QuarterYear,
                 request.QuarterNumber,
                 cancellationToken);
         }
 
         demand.Update(
+            itemType,
+            request.ParentDemandId,
             request.Title,
             request.Description,
+            request.ProjectId,
             request.QuarterYear,
             request.QuarterNumber,
             status,
@@ -111,12 +136,12 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.HasNoKpi,
             noKpiClassification);
 
-        if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
+        if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue && demand.ProjectId.HasValue)
         {
             var existingTradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(demand.Id, cancellationToken);
             var matchingTradeOffId = existingTradeOffs
                 .Where(tradeOff => tradeOff.DeprioritizedDemandId == demand.Id)
-                .Where(tradeOff => tradeOff.ProjectId == demand.ProjectId)
+            .Where(tradeOff => tradeOff.ProjectId == demand.ProjectId.Value)
                 .Where(tradeOff => tradeOff.QuarterYear == request.QuarterYear)
                 .Where(tradeOff => tradeOff.QuarterNumber == request.QuarterNumber)
                 .OrderByDescending(tradeOff => tradeOff.CreatedAt)
@@ -137,7 +162,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             {
                 await kpiRepository.AddTradeOffAsync(
                     DemandTradeOff.Create(
-                        demand.ProjectId,
+                        demand.ProjectId.Value,
                         request.QuarterYear,
                         request.QuarterNumber,
                         demand.Id,
@@ -153,7 +178,6 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
         var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
             .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync([demand.Id, .. dependencyDemandIds], cancellationToken);

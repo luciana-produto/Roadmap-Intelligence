@@ -23,6 +23,14 @@ public sealed class UpdateDemandKpiMeasurementCommandHandler(
         var demand = measurement.DemandId.HasValue
             ? await demandRepository.GetByIdAsync(measurement.DemandId.Value, cancellationToken)
             : null;
+
+        if (demand is not null && demand.ItemType != RoadmapItemType.Epic)
+        {
+            throw new ValidationException([
+                new ValidationFailure(nameof(request.Id), "KPI measurements are only available for epic items.")
+            ]);
+        }
+
         var kpi = await kpiRepository.GetByIdAsync(measurement.KpiId, cancellationToken)
             ?? throw new NotFoundException("Kpi", measurement.KpiId);
 

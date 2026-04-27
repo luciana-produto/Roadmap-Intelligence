@@ -4,7 +4,7 @@ import Sortable from 'sortablejs'
 import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
-import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification } from '~/types/roadmap'
+import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType } from '~/types/roadmap'
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
@@ -15,6 +15,10 @@ const toast = useToast()
 
 const { projects, demands, dependencyOptions, customerSuggestions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
 const { kpis: availableKpis } = storeToRefs(kpiStore)
+const roadmapItems = computed(() => demands.value.filter(item => item.itemType === 'Roadmap'))
+const epicItems = computed(() => demands.value.filter(item => item.itemType === 'Epic'))
+const demandItems = computed(() => demands.value.filter(item => item.itemType === 'Demand'))
+const itemsById = computed(() => new Map(demands.value.map(item => [item.id, item] as const)))
 
 // ─── View mode ───────────────────────────────────────────────────────────────
 const viewMode = ref<'list'>('list')
@@ -75,6 +79,22 @@ function formatDemandCustomers(customers?: string[]): string {
   return customers?.join(', ') ?? ''
 }
 
+function normalizeCustomerList(customers?: string[]): string[] {
+  return (customers ?? []).map(customer => customer.trim()).filter(Boolean)
+}
+
+function getEffectiveDemandCustomers(demand: Pick<RoadmapDemand, 'customers' | 'epicId'>): string[] {
+  const ownCustomers = normalizeCustomerList(demand.customers)
+  if (ownCustomers.length)
+    return ownCustomers
+
+  const epic = demand.epicId ? itemsById.value.get(demand.epicId) ?? null : null
+  if (!epic || epic.itemType !== 'Epic')
+    return []
+
+  return normalizeCustomerList(epic.customers)
+}
+
 function formatDemandDate(value?: string) {
   if (!value)
     return ''
@@ -87,11 +107,15 @@ function formatDemandDate(value?: string) {
 }
 
 function openDemandKpiWorkspace(demand: RoadmapDemand) {
+  const targetEpicId = demand.itemType === 'Epic' ? demand.id : demand.epicId
+  if (!targetEpicId)
+    return
+
   navigateTo({
     path: '/roadmap',
     query: {
-      projectId: demand.projectId,
-      kpiDemandId: demand.id
+      projectId: selectedProjectId.value ?? demand.projectId,
+      kpiDemandId: targetEpicId
     }
   })
 }
@@ -104,26 +128,92 @@ function closeDemandKpiWorkspace() {
 }
 
 function getDemandKpiSummary(demand: RoadmapDemand) {
-  if (demand.hasNoKpi) {
+  const targetEpic = demand.itemType === 'Epic'
+    ? demand
+    : (demand.epicId ? itemsById.value.get(demand.epicId) ?? null : null)
+
+  if (!targetEpic || targetEpic.itemType !== 'Epic') {
     return {
-      label: 'SEM KPI',
-      tone: 'border-warning/40 bg-warning/10 text-warning',
-      actionLabel: 'Editar registro de KPI'
+      label: 'Sem épico',
+      tone: 'border-default bg-elevated text-muted',
+      actionLabel: 'Associe a demanda a um épico'
     }
   }
 
-  if (demand.kpiLinks.length > 0) {
+  if (targetEpic.hasNoKpi) {
     return {
-      label: `${demand.kpiLinks.length} KPI${demand.kpiLinks.length > 1 ? 's' : ''}`,
+      label: 'SEM KPI',
+      tone: 'border-warning/40 bg-warning/10 text-warning',
+      actionLabel: 'Editar registro de KPI do épico'
+    }
+  }
+
+  if (targetEpic.kpiLinks.length > 0) {
+    return {
+      label: `${targetEpic.kpiLinks.length} KPI${targetEpic.kpiLinks.length > 1 ? 's' : ''}`,
       tone: 'border-primary/20 bg-primary/10 text-primary',
-      actionLabel: 'Abrir registro de KPI'
+      actionLabel: 'Abrir registro de KPI do épico'
     }
   }
 
   return {
     label: 'Incluir KPI',
-    tone: 'border-default bg-elevated text-highlighted',
+    tone: 'border-error/40 bg-error/10 text-error',
     actionLabel: 'Incluir KPI'
+  }
+}
+
+function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
+  return [
+    demand.roadmapId ?? 'none',
+    demand.epicId ?? 'none',
+    demand.quarterYear,
+    demand.quarterNumber,
+    getDemandGroupKey(demand)
+  ].join(':')
+}
+
+function getVisibleEpicDemandCluster(anchorDemand?: RoadmapDemand) {
+  if (!anchorDemand)
+    return []
+
+  const anchorIndex = visibleListRows.value.findIndex(demand => demand.id === anchorDemand.id)
+  if (anchorIndex < 0)
+    return []
+
+  const groupKey = getEpicDisplayGroupKey(anchorDemand)
+  const cluster: RoadmapDemand[] = []
+
+  for (let index = anchorIndex; index < visibleListRows.value.length; index++) {
+    const demand = visibleListRows.value[index]!
+    if (getEpicDisplayGroupKey(demand) !== groupKey)
+      break
+
+    cluster.push(demand)
+  }
+
+  return cluster
+}
+
+function getEpicHeaderMeta(anchorDemand?: RoadmapDemand) {
+  const epicId = anchorDemand?.epicId
+  const epic = epicId ? itemsById.value.get(epicId) ?? null : null
+  if (!epic || epic.itemType !== 'Epic')
+    return null
+
+  const groupedDemands = getVisibleEpicDemandCluster(anchorDemand)
+  const totalHours = groupedDemands.reduce((sum, demand) => {
+    return sum + (typeof demand.hours === 'number' ? demand.hours : 0)
+  }, 0)
+  const groupedProductNames = Array.from(new Set(groupedDemands.flatMap(demand => demand.products.map(product => product.name))))
+  const groupedCustomers = Array.from(new Set(groupedDemands.flatMap(demand => getEffectiveDemandCustomers(demand))))
+
+  return {
+    epic,
+    kpiSummary: getDemandKpiSummary(epic),
+    productsLabel: groupedProductNames.join(' · '),
+    customersLabel: formatDemandCustomers(groupedCustomers),
+    totalHours
   }
 }
 
@@ -165,7 +255,7 @@ const activeDemandKpiId = computed(() => {
 })
 
 const activeDemandKpi = computed(() =>
-  demands.value.find(demand => demand.id === activeDemandKpiId.value) ?? null
+  epicItems.value.find(demand => demand.id === activeDemandKpiId.value) ?? null
 )
 
 function getDisplayedDemandStatus(demand: RoadmapDemand) {
@@ -194,11 +284,11 @@ function getDemandNotesTooltip(demand: RoadmapDemand): string {
 }
 
 function formatDependencySummaryLine(dependency: DemandDependency) {
-  return `${dependency.projectName} · ${dependency.title}`
+  return dependency.projectName ? `${dependency.projectName} · ${dependency.title}` : dependency.title
 }
 
 function formatDependencyBadgeLabel(prefix: 'Bloqueado por' | 'Bloqueia', dependency: DemandDependency) {
-  return `${prefix} ${dependency.projectName}`
+  return dependency.projectName ? `${prefix} ${dependency.projectName}` : `${prefix} ${dependency.itemType === 'Epic' ? 'épico' : 'demanda'}`
 }
 
 function compareQuarterPosition(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber'>, right: Pick<DemandDependency, 'quarterYear' | 'quarterNumber'>) {
@@ -232,7 +322,8 @@ async function openDependencyDemand(dependency: DemandDependency) {
   let targetDemand = demands.value.find(demand => demand.id === dependency.demandId)
 
   if (!targetDemand) {
-    selectedProjectId.value = dependency.projectId
+    if (dependency.projectId)
+      selectedProjectId.value = dependency.projectId
     selectedQuarterYear.value = null
     selectedQuarterNumber.value = null
     await roadmapStore.fetchDemands()
@@ -248,7 +339,7 @@ async function openDependencyDemand(dependency: DemandDependency) {
 }
 
 function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependency: DemandDependency) {
-  return `${prefix} ${dependency.projectName}: ${dependency.title}`
+  return dependency.projectName ? `${prefix} ${dependency.projectName}: ${dependency.title}` : `${prefix}: ${dependency.title}`
 }
 
 function toggleQuarterFilter(val: string) {
@@ -333,7 +424,7 @@ const selectedDemandScope = computed(() => {
 const quarterScopedDemands = computed(() => {
   if (!activeCapacityScope.value) return []
 
-  return demands.value.filter(demand =>
+  return demandItems.value.filter(demand =>
     demand.projectId === activeCapacityScope.value!.projectId
     && demand.quarterYear === activeCapacityScope.value!.quarterYear
     && demand.quarterNumber === activeCapacityScope.value!.quarterNumber
@@ -551,7 +642,7 @@ watch(selectedProjectId, () => {
 })
 
 const quarterFilteredDemands = computed(() => {
-  const orderedDemands = [...demands.value].sort((left, right) => {
+  const orderedDemands = [...demandItems.value].sort((left, right) => {
     const groupComparison = compareListDemandGroups(left, right)
     if (groupComparison !== 0)
       return groupComparison
@@ -633,7 +724,7 @@ function isSameDemandGroup(
 }
 
 function getScopedDemandIds(demand: RoadmapDemand) {
-  return demands.value
+  return demandItems.value
     .filter(item => isSameDemandScope(item, demand))
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .map(item => item.id)
@@ -703,7 +794,7 @@ async function persistDemandPriority(
 }
 
 async function handleListSortEnd(oldIndex: number, newIndex: number) {
-  const visibleRows = listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? quarterFilteredDemands.value
+  const visibleRows = visibleSortableRows.value
   const demand = visibleRows[oldIndex]
   if (!demand) {
     await roadmapStore.fetchDemands()
@@ -858,23 +949,40 @@ function syncListSectionDividers() {
   tbody.querySelectorAll('.list-section-divider').forEach(node => node.remove())
 
   const rows = Array.from(tbody.querySelectorAll('tr')) as HTMLTableRowElement[]
-  const visibleRows = listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? quarterFilteredDemands.value
+  const visibleRows = listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? tableDemands.value
 
   rows.forEach((row, index) => {
     const demand = visibleRows[index]
     if (!demand) {
       row.classList.remove('list-demand-row')
       row.classList.remove('bg-red-50/70', 'dark:bg-red-950/20')
+      row.style.display = ''
+      row.hidden = false
       delete row.dataset.demandId
       delete row.dataset.scopeKey
       delete row.dataset.quarterKey
       return
     }
 
-    row.classList.add('list-demand-row')
+    const isCollapsedRow = !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
     row.dataset.demandId = demand.id
-    row.dataset.scopeKey = getDemandScopeKey(demand)
-    row.dataset.quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
+    if (isCollapsedRow)
+      row.style.setProperty('display', 'none', 'important')
+    else
+      row.style.removeProperty('display')
+    row.hidden = isCollapsedRow
+    row.classList.toggle('hidden', isCollapsedRow)
+
+    if (isCollapsedRow) {
+      row.classList.remove('list-demand-row')
+      delete row.dataset.scopeKey
+      delete row.dataset.quarterKey
+    }
+    else {
+      row.classList.add('list-demand-row')
+      row.dataset.scopeKey = getDemandScopeKey(demand)
+      row.dataset.quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
+    }
 
     const inconsistent = hasInconsistentDependency(demand)
     row.classList.toggle('bg-red-50/70', inconsistent)
@@ -889,7 +997,10 @@ function syncListSectionDividers() {
   const distinctQuarters = new Set(visibleRows.map(d => `${d.quarterYear}:${d.quarterNumber}`))
   const multipleQuarters = distinctQuarters.size > 1
 
-  const dividerConfigs: { demandId: string; label: string; kind: 'quarter' | 'additional' }[] = []
+  const dividerConfigs: Array<
+    { rowIndex: number, label: string, kind: 'quarter' | 'additional' }
+    | { rowIndex: number, kind: 'epic', count: number, epicId?: string, roadmapTitle?: string | null, epicTitle?: string | null, collapsed: boolean }
+  > = []
   let prevQuarterKey = ''
 
   for (let i = 0; i < visibleRows.length; i++) {
@@ -897,13 +1008,14 @@ function syncListSectionDividers() {
     const quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
     const groupKey = getDemandGroupKey(demand)
     const isNewQuarter = quarterKey !== prevQuarterKey
+    const epicHeader = visibleEpicHeaderByDemandId.value[demand.id]
 
     if (isNewQuarter) {
       prevQuarterKey = quarterKey
 
       if (multipleQuarters) {
         const label = isBacklogDemand(demand) ? 'Backlog' : demand.quarterLabel
-        dividerConfigs.push({ demandId: demand.id, label, kind: 'quarter' })
+        dividerConfigs.push({ rowIndex: i, label, kind: 'quarter' })
       }
     }
 
@@ -920,14 +1032,27 @@ function syncListSectionDividers() {
           const label = multipleQuarters
             ? `${quarterLabel} — Adicionais - Não comprometidas`
             : 'Adicionais - Não comprometidas'
-          dividerConfigs.push({ demandId: demand.id, label, kind: 'additional' })
+          dividerConfigs.push({ rowIndex: i, label, kind: 'additional' })
         }
       }
     }
+
+    if (epicHeader?.showHeader) {
+      dividerConfigs.push({
+        rowIndex: i,
+        kind: 'epic',
+        count: epicHeader.count,
+        epicId: epicHeader.epicId,
+        roadmapTitle: epicHeader.roadmapTitle,
+        epicTitle: epicHeader.epicTitle,
+        collapsed: epicHeader.collapsed
+      })
+    }
   }
 
-  dividerConfigs.forEach(({ demandId, label, kind }) => {
-    const targetRow = rows.find(row => row.dataset.demandId === demandId)
+  dividerConfigs.forEach((config) => {
+    const { kind } = config
+    const targetRow = rows[config.rowIndex]
     if (!targetRow) return
 
     const dividerRow = document.createElement('tr')
@@ -938,12 +1063,189 @@ function syncListSectionDividers() {
 
     if (kind === 'quarter') {
       dividerCell.className = 'border-y-2 border-indigo-300 bg-indigo-100 px-3 py-2.5 text-center text-xs font-extrabold uppercase tracking-[0.2em] text-indigo-800 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200'
+      dividerCell.textContent = config.label
+    }
+    else if (kind === 'additional') {
+      dividerCell.className = 'border-y border-default bg-gray-100 px-3 py-1.5 text-center text-[11px] font-bold uppercase tracking-[0.15em] text-gray-500 dark:bg-gray-800/60 dark:text-gray-400'
+      dividerCell.textContent = config.label
     }
     else {
-      dividerCell.className = 'border-y border-default bg-gray-100 px-3 py-1.5 text-center text-[11px] font-bold uppercase tracking-[0.15em] text-gray-500 dark:bg-gray-800/60 dark:text-gray-400'
-    }
+      const headerMeta = getEpicHeaderMeta(visibleRows[config.rowIndex])
+      dividerRow.className = 'list-section-divider border-y border-default bg-primary/5'
 
-    dividerCell.textContent = label
+      const mainStartIndex = listOrderedCols.value.findIndex(column => column.id === 'priority')
+      const mainEndIndex = listOrderedCols.value.findIndex(column => column.id === 'title')
+      const spanStart = mainStartIndex >= 0 ? mainStartIndex : 1
+      const spanEnd = mainEndIndex >= mainStartIndex ? mainEndIndex : mainStartIndex
+
+      const appendDefaultCell = (className = 'px-3 py-2 align-middle') => {
+        const cell = document.createElement('td')
+        cell.className = className
+        dividerRow.appendChild(cell)
+        return cell
+      }
+
+      for (let index = 0; index < listOrderedCols.value.length; index++) {
+        const column = listOrderedCols.value[index]!
+
+        if (index === spanStart) {
+          const cell = document.createElement('td')
+          cell.className = 'px-3 py-2 align-middle'
+          cell.colSpan = spanEnd - spanStart + 1
+
+          const titleWrap = document.createElement('div')
+          titleWrap.className = 'flex min-w-0 flex-wrap items-center gap-2'
+
+          if (headerMeta) {
+            const classificationBadge = document.createElement('span')
+            classificationBadge.className = `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
+            classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
+            titleWrap.appendChild(classificationBadge)
+
+            const counter = document.createElement('span')
+            counter.className = 'inline-flex items-center rounded-full border border-default bg-default px-2 py-0.5 text-[11px] font-medium text-muted'
+            counter.textContent = `${config.count} demanda${config.count === 1 ? '' : 's'}`
+            titleWrap.appendChild(counter)
+          }
+
+          const toggleButton = document.createElement('button')
+          toggleButton.type = 'button'
+          toggleButton.className = 'inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-default bg-default px-3 py-1 text-left text-xs font-semibold text-highlighted transition-colors hover:border-primary/40'
+          toggleButton.addEventListener('click', (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            toggleEpicCollapse(config.epicId)
+          })
+
+          const icon = document.createElement('span')
+          icon.textContent = config.collapsed ? '▸' : '▾'
+          icon.className = 'text-muted'
+
+          const title = document.createElement('span')
+          title.className = 'truncate'
+          title.textContent = `${config.roadmapTitle ?? 'Sem roadmap'} › ${config.epicTitle ?? 'Sem épico'}`
+
+          toggleButton.append(icon, title)
+          titleWrap.append(toggleButton)
+          cell.appendChild(titleWrap)
+          dividerRow.appendChild(cell)
+          index = spanEnd
+          continue
+        }
+
+        if (headerMeta && column.id === 'kpis') {
+          const cell = appendDefaultCell()
+          const container = document.createElement('div')
+          container.className = 'flex min-w-0 flex-col items-start gap-1'
+
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.className = `inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors hover:opacity-80 ${headerMeta.kpiSummary.tone}`
+          button.textContent = headerMeta.kpiSummary.label
+          button.title = headerMeta.kpiSummary.actionLabel
+          button.addEventListener('click', (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            openDemandKpiWorkspace(headerMeta.epic)
+          })
+          container.appendChild(button)
+
+          if (headerMeta.epic.hasNoKpi && headerMeta.epic.noKpiClassification) {
+            const note = document.createElement('span')
+            note.className = 'text-[11px] text-muted'
+            note.textContent = getNoKpiClassificationLabel(headerMeta.epic.noKpiClassification)
+            container.appendChild(note)
+          }
+
+          cell.appendChild(container)
+          continue
+        }
+
+        if (headerMeta && column.id === 'products') {
+          const cell = appendDefaultCell()
+          if (headerMeta.productsLabel) {
+            const text = document.createElement('div')
+            text.className = 'truncate text-xs text-muted'
+            text.textContent = headerMeta.productsLabel
+            cell.appendChild(text)
+          }
+          continue
+        }
+
+        if (headerMeta && column.id === 'hours') {
+          const cell = appendDefaultCell('px-3 py-2 text-right align-middle')
+          const text = document.createElement('div')
+          text.className = 'text-xs font-semibold text-highlighted'
+          text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
+          cell.appendChild(text)
+          continue
+        }
+
+        if (headerMeta && column.id === 'status') {
+          const cell = appendDefaultCell()
+          const badge = document.createElement('span')
+          badge.className = `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${headerMeta.epic.status === 'Done'
+            ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300'
+            : headerMeta.epic.status === 'InProgress'
+              ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+              : headerMeta.epic.status === 'Deprioritized'
+                ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'
+                : 'border-default bg-default text-muted'}`
+          badge.textContent = statusLabels[headerMeta.epic.status]
+          cell.appendChild(badge)
+          continue
+        }
+
+        if (headerMeta && column.id === 'customers') {
+          const cell = appendDefaultCell()
+          if (headerMeta.customersLabel) {
+            const text = document.createElement('div')
+            text.className = 'truncate text-xs text-muted'
+            text.textContent = headerMeta.customersLabel
+            cell.appendChild(text)
+          }
+          continue
+        }
+
+        if (headerMeta && column.id === '_actions') {
+          const cell = appendDefaultCell('px-3 py-2 text-right align-middle')
+          const button = document.createElement('button')
+          button.type = 'button'
+          button.className = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
+          button.title = 'Editar épico'
+          button.addEventListener('click', (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            openEditModal(headerMeta.epic)
+          })
+
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+          svg.setAttribute('viewBox', '0 0 24 24')
+          svg.setAttribute('fill', 'none')
+          svg.setAttribute('stroke', 'currentColor')
+          svg.setAttribute('stroke-width', '2')
+          svg.setAttribute('stroke-linecap', 'round')
+          svg.setAttribute('stroke-linejoin', 'round')
+          svg.setAttribute('class', 'h-4 w-4')
+
+          const pathBody = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+          pathBody.setAttribute('d', 'M12 20h9')
+
+          const pathTip = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+          pathTip.setAttribute('d', 'M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z')
+
+          svg.append(pathBody, pathTip)
+          button.appendChild(svg)
+          cell.appendChild(button)
+          continue
+        }
+
+        appendDefaultCell(column.id === '_actions' ? 'px-3 py-2 text-right align-middle' : 'px-3 py-2 align-middle')
+      }
+
+      tbody.insertBefore(dividerRow, targetRow)
+      return
+    }
 
     dividerRow.appendChild(dividerCell)
     tbody.insertBefore(dividerRow, targetRow)
@@ -951,7 +1253,7 @@ function syncListSectionDividers() {
 }
 
 watch(
-  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}`,
+  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${collapsedEpicIds.value.join('|')}`,
   async () => {
     await nextTick()
     syncListSectionDividers()
@@ -974,12 +1276,27 @@ const modalOpen = ref(false)
 const capacityModalOpen = ref(false)
 const isSavingCapacity = ref(false)
 const editingDemand = ref<RoadmapDemand | null>(null)
+const createItemType = ref<RoadmapItemType | undefined>()
 const deleteId = ref<string | null>(null)
 const confirmDeleteOpen = ref(false)
+const roadmapParentOptions = computed(() =>
+  roadmapItems.value.map(item => ({ id: item.id, title: item.title }))
+)
+const epicParentOptions = computed(() =>
+  epicItems.value.map(item => ({ id: item.id, title: item.title, roadmapTitle: item.roadmapTitle }))
+)
 
-function openCreateModal() {
+function openCreateModal(itemType?: RoadmapItemType) {
+  createItemType.value = itemType
   editingDemand.value = null
   modalOpen.value = true
+}
+
+function openHierarchyView() {
+  navigateTo({
+    path: '/roadmap-hierarquia',
+    query: selectedProjectId.value ? { projectId: selectedProjectId.value } : undefined
+  })
 }
 
 function openCapacityModal() {
@@ -999,6 +1316,8 @@ function promptDelete(id: string) {
 
 function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFormData>): DemandFormData {
   return {
+    itemType: demand.itemType,
+    parentDemandId: demand.parentDemandId,
     title: demand.title,
     description: demand.description ?? '',
     projectId: demand.projectId,
@@ -1058,11 +1377,11 @@ async function handleSubmit(data: DemandFormData) {
   try {
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
-      toast.add({ title: 'Demanda atualizada', color: 'success' })
+      toast.add({ title: 'Item atualizado', color: 'success' })
     }
     else {
       await roadmapStore.createDemand(data)
-      toast.add({ title: 'Demanda criada', color: 'success' })
+      toast.add({ title: 'Item criado', color: 'success' })
     }
     modalOpen.value = false
   }
@@ -1152,30 +1471,113 @@ const listTableRef = useTemplateRef<{
   }
 }>('listTable')
 
+const collapsedEpicIds = ref<string[]>([])
+const hasInitializedCollapsedEpicIds = ref(false)
+
+const visibleEpicIds = computed(() => {
+  return Array.from(new Set(
+    quarterFilteredDemands.value
+      .map(demand => demand.epicId)
+      .filter((value): value is string => !!value)
+  ))
+})
+
+const tableDemands = computed(() => quarterFilteredDemands.value)
+
+function isCollapsedRepresentative(demand: RoadmapDemand) {
+  return !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+}
+
+function toggleEpicCollapse(epicId?: string) {
+  if (!epicId)
+    return
+
+  if (collapsedEpicIds.value.includes(epicId)) {
+    collapsedEpicIds.value = collapsedEpicIds.value.filter(id => id !== epicId)
+    return
+  }
+
+  collapsedEpicIds.value = [...collapsedEpicIds.value, epicId]
+}
+
+function collapseAllEpicGroups() {
+  collapsedEpicIds.value = [...visibleEpicIds.value]
+}
+
+function expandAllEpicGroups() {
+  collapsedEpicIds.value = []
+}
+
+const areAllEpicGroupsCollapsed = computed(() => {
+  return visibleEpicIds.value.length > 0 && visibleEpicIds.value.every(epicId => collapsedEpicIds.value.includes(epicId))
+})
+
+watch(quarterFilteredDemands, (demands) => {
+  const availableEpicIds = new Set(demands.map(demand => demand.epicId).filter((value): value is string => !!value))
+  if (!hasInitializedCollapsedEpicIds.value) {
+    collapsedEpicIds.value = Array.from(availableEpicIds)
+    hasInitializedCollapsedEpicIds.value = true
+    return
+  }
+
+  collapsedEpicIds.value = collapsedEpicIds.value.filter(id => availableEpicIds.has(id))
+}, { immediate: true })
+
 const listFilteredCount = computed(() => {
   void listColumnFilters.value
-  return listTableRef.value?.tableApi?.getFilteredRowModel().rows.length ?? quarterFilteredDemands.value.length
+  return listTableRef.value?.tableApi?.getFilteredRowModel().rows.length ?? tableDemands.value.length
 })
 const visibleListRows = computed(() => {
   void listSorting.value
   void listColumnFilters.value
-  return listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? quarterFilteredDemands.value
+  return listTableRef.value?.tableApi?.getSortedRowModel().rows.map(row => row.original) ?? tableDemands.value
 })
+const visibleSortableRows = computed(() => visibleListRows.value.filter(demand => !isCollapsedRepresentative(demand)))
 const visibleListDemandCount = computed(() => {
   return visibleListRows.value.length
 })
+const visibleEpicHeaderByDemandId = computed(() => {
+  const result: Record<string, { showHeader: boolean, count: number, epicId?: string, roadmapTitle?: string | null, epicTitle?: string | null, collapsed: boolean }> = {}
+
+  for (let index = 0; index < visibleListRows.value.length; index++) {
+    const demand = visibleListRows.value[index]!
+    const previous = index > 0 ? visibleListRows.value[index - 1]! : null
+    const groupKey = getEpicDisplayGroupKey(demand)
+    const previousGroupKey = previous ? getEpicDisplayGroupKey(previous) : null
+    const showHeader = groupKey !== previousGroupKey
+
+    if (!showHeader) {
+      result[demand.id] = { showHeader: false, count: 0, collapsed: false }
+      continue
+    }
+
+    const count = getVisibleEpicDemandCluster(demand).length
+
+    result[demand.id] = {
+      showHeader: true,
+      count,
+      epicId: demand.epicId,
+      roadmapTitle: demand.roadmapTitle,
+      epicTitle: demand.epicTitle,
+      collapsed: !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+    }
+  }
+
+  return result
+})
+
 const listHasActiveFilters = computed(() => listColumnFilters.value.length > 0)
 const shouldConstrainListHeight = computed(() => visibleListDemandCount.value > 20)
 const listTableKey = computed(() =>
-  quarterFilteredDemands.value
+  tableDemands.value
     .map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`)
-    .join('|')
+    .join('|') + `::${collapsedEpicIds.value.join('|')}`
 )
 const priorityRankByDemandId = computed(() => {
   const result: Record<string, number> = {}
   const counterByQuarter: Record<string, number> = {}
 
-  for (const demand of quarterFilteredDemands.value) {
+  for (const demand of tableDemands.value) {
     const quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
     const counter = (counterByQuarter[quarterKey] ?? 0) + 1
     counterByQuarter[quarterKey] = counter
@@ -1189,7 +1591,7 @@ const isBulkPlanning = ref(false)
 const visibleListDemandIds = computed(() => visibleListRows.value.map(demand => demand.id))
 const selectedDemands = computed(() => {
   const selectedIds = new Set(selectedDemandIds.value)
-  return demands.value.filter(demand => selectedIds.has(demand.id))
+  return demandItems.value.filter(demand => selectedIds.has(demand.id))
 })
 const selectedDemandCount = computed(() => selectedDemands.value.length)
 
@@ -1220,16 +1622,6 @@ const TYPE_SELECT_OPTIONS = [
   { label: 'Não Planejado', value: 'Unplanned' },
   { label: 'Adicional',     value: 'Additional' },
 ]
-const CLASSIFICATION_SELECT_OPTIONS = [
-  { label: 'Débito Técnico', value: 'TechnicalDebtSecurity' },
-  { label: 'Estratégico',    value: 'Strategic' },
-  { label: 'Evolução',       value: 'Evolution' },
-  { label: 'Melhoria/Gap',   value: 'ImprovementGap' },
-  { label: 'Mandatório',     value: 'Mandatory' },
-  { label: 'Homologação',    value: 'Homologation' },
-  { label: 'Customização',   value: 'Customizacao' },
-]
-
 const classificationBadgeClass: Record<DemandClassification, string> = {
   TechnicalDebtSecurity: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700',
   Strategic: 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800',
@@ -1244,12 +1636,11 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'select',         label: '',             defaultWidth: 42, disableFilter: true, disableSorting: true },
   { id: 'priority',       label: 'Prioridade',   defaultWidth: 76, disableFilter: true },
   { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
-  { id: 'classification', label: 'Classificação', defaultWidth: 126, filterType: 'multi-select', selectOptions: CLASSIFICATION_SELECT_OPTIONS, allLabel: 'Todas as classificações', itemLabelPlural: 'classificações' },
-  { id: 'title',          label: 'Demanda',       defaultWidth: 344, filterType: 'text' },
+  { id: 'title',          label: 'Demanda',       defaultWidth: 440, filterType: 'text' },
   { id: 'kpis',           label: 'KPI',           defaultWidth: 148, disableFilter: true },
   { id: 'products',       label: 'Produtos',      defaultWidth: 118, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Horas',         defaultWidth: 60, disableFilter: true, alignRight: true },
-  { id: 'status',         label: 'Status',        defaultWidth: 118, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
+  { id: 'status',         label: 'Status',        defaultWidth: 138, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 120, filterType: 'text' },
   { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
 ]
@@ -1326,7 +1717,7 @@ function clearListFilters() {
   listColumnFilters.value = []
 }
 function sanitizeSelectedDemands() {
-  const availableIds = new Set(demands.value.map(demand => demand.id))
+  const availableIds = new Set(demandItems.value.map(demand => demand.id))
   selectedDemandIds.value = selectedDemandIds.value.filter(id => availableIds.has(id))
 }
 function isDemandSelected(demandId: string) {
@@ -1396,7 +1787,7 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
 }
 
 watch(
-  () => demands.value.map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}`).join('|'),
+  () => demandItems.value.map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}`).join('|'),
   sanitizeSelectedDemands
 )
 
@@ -1422,6 +1813,12 @@ function startListResize(colId: string, e: MouseEvent) {
 }
 function listColWidth(colId: string, fallback: number): string {
   return `${listColumnSizing.value[colId] ?? fallback}px`
+}
+
+function getListGridTemplateColumns() {
+  return listOrderedCols.value
+    .map(col => listColWidth(col.id, col.defaultWidth))
+    .join(' ')
 }
 
 const listTableWidth = computed(() => `${listOrderedCols.value.reduce((total, col) => {
@@ -1477,6 +1874,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { style: { td: () => ({ width: listColWidth('select', 42) }), th: () => ({ width: listColWidth('select', 42) }) } },
     cell: ({ row }) => {
       const demand = row.original
+      if (isCollapsedRepresentative(demand))
+        return h('span', { class: 'block h-4 w-4' })
+
       return h('label', { class: 'flex items-center justify-center' }, [
         h('input', {
           type: 'checkbox',
@@ -1498,6 +1898,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     size: 76,
     meta: { style: { td: () => ({ width: listColWidth('priority', 76) }), th: () => ({ width: listColWidth('priority', 76) }) } },
     cell: ({ row }) => {
+      if (isCollapsedRepresentative(row.original))
+        return h('div', { class: 'text-xs text-muted' }, '—')
+
       const priority = priorityRankByDemandId.value[row.original.id] ?? 0
       return h('div', { class: 'flex items-center gap-2' }, [
         h('span', {
@@ -1519,17 +1922,23 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string) => {
       const d = row.original
-      const q = filterValue.toLowerCase()
+      const q = filterValue.trim().toLowerCase()
       return d.title.toLowerCase().includes(q)
         || (d.description?.toLowerCase().includes(q) ?? false)
         || (d.jiraIssue?.toLowerCase().includes(q) ?? false)
+        || (d.epicTitle?.toLowerCase().includes(q) ?? false)
+        || (d.roadmapTitle?.toLowerCase().includes(q) ?? false)
     },
-    size: 300,
-    meta: { style: { td: () => ({ width: listColWidth('title', 300) }), th: () => ({ width: listColWidth('title', 300) }) } },
+    size: 440,
+    meta: { style: { td: () => ({ width: listColWidth('title', 440) }), th: () => ({ width: listColWidth('title', 440) }) } },
     cell: ({ row }) => {
       const d = row.original
       const isDeprioritized = d.status === 'Deprioritized'
-      const textNodes = [h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title)]
+      const textNodes = []
+      if (isCollapsedRepresentative(d))
+        return h('span', { class: 'hidden' })
+      textNodes.push(h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title))
+
       if (d.jiraIssue) textNodes.push(h('p', { class: 'text-xs text-blue-500 font-mono' }, d.jiraIssue))
       if (d.dependsOn.length) {
         textNodes.push(
@@ -1557,37 +1966,18 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
   {
     id: 'kpis',
     header: 'KPI',
-    accessorFn: row => row.hasNoKpi ? -1 : row.kpiLinks.length,
+    accessorFn: row => {
+      const summary = getDemandKpiSummary(row)
+      return summary.label
+    },
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => {
-      const leftValue = left.hasNoKpi ? -1 : left.kpiLinks.length
-      const rightValue = right.hasNoKpi ? -1 : right.kpiLinks.length
-      return leftValue - rightValue
+      return getDemandKpiSummary(left).label.localeCompare(getDemandKpiSummary(right).label, 'pt-BR')
     }),
     enableColumnFilter: false,
     size: 132,
     meta: { style: { td: () => ({ width: listColWidth('kpis', 132) }), th: () => ({ width: listColWidth('kpis', 132) }) } },
-    cell: ({ row }) => {
-      const demand = row.original
-      const summary = getDemandKpiSummary(demand)
-
-      return h('button', {
-        type: 'button',
-        class: 'flex max-w-full min-w-0 flex-col items-start gap-1 rounded-lg px-1 py-1 text-left transition-colors hover:opacity-80',
-        title: summary.actionLabel,
-        onClick: (event: Event) => {
-          event.stopPropagation()
-          openDemandKpiWorkspace(demand)
-        }
-      }, [
-        h('span', {
-          class: `inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] ${summary.tone}`
-        }, summary.label),
-        demand.hasNoKpi && demand.noKpiClassification
-          ? h('span', { class: 'text-[11px] text-muted' }, getNoKpiClassificationLabel(demand.noKpiClassification))
-          : null
-      ])
-    }
+    cell: () => h('span', { class: 'text-xs text-muted' }, '—')
   },
   {
     accessorKey: 'quarterLabel',
@@ -1611,6 +2001,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 96) }), th: () => ({ width: listColWidth('quarterLabel', 96) }) } },
     cell: ({ row }) => {
       const demand = row.original
+      if (isCollapsedRepresentative(demand))
+        return h('span', { class: 'text-xs text-muted' }, '—')
+
       const quarterNode = demand.quarterYear === 0 && demand.quarterNumber === 0
         ? h('span', {
           class: 'text-[11px] font-bold uppercase tracking-[0.08em] text-black dark:text-white'
@@ -1633,22 +2026,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.includes(row.original.status)
     },
-    size: 110,
-    meta: { style: { td: () => ({ width: listColWidth('status', 110) }), th: () => ({ width: listColWidth('status', 110) }) } },
-  },
-  {
-    accessorKey: 'classification',
-    header: 'Classificação',
-    enableSorting: true,
-    sortingFn: withListGroupSorting((left, right) => classificationLabels[left.classification].localeCompare(classificationLabels[right.classification], 'pt-BR')),
-    enableColumnFilter: true,
-    filterFn: (row, _colId, filterValue: string[]) => {
-      if (!Array.isArray(filterValue) || !filterValue.length) return true
-      return filterValue.includes(row.original.classification)
-    },
-    size: 126,
-    meta: { style: { td: () => ({ width: listColWidth('classification', 126) }), th: () => ({ width: listColWidth('classification', 126) }) } },
-    cell: ({ row }) => h('span', { class: `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${classificationBadgeClass[row.original.classification]}` }, classificationLabels[row.original.classification]),
+    size: 138,
+    meta: { style: { td: () => ({ width: listColWidth('status', 138) }), th: () => ({ width: listColWidth('status', 138) }) } },
   },
   {
     accessorKey: 'products',
@@ -1662,6 +2041,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     size: 118,
     meta: { style: { td: () => ({ width: listColWidth('products', 118) }), th: () => ({ width: listColWidth('products', 118) }) } },
     cell: ({ row }) => {
+      if (isCollapsedRepresentative(row.original))
+        return h('span', { class: 'text-xs text-muted' }, '—')
+
       const prods = row.original.products
       if (!prods.length) return h('span', { class: 'text-xs text-muted' }, '—')
       return h('div', { class: 'flex flex-col gap-0.5' },
@@ -1676,17 +2058,16 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     sortingFn: withListGroupSorting((left, right) => formatDemandCustomers(left.customers).localeCompare(formatDemandCustomers(right.customers), 'pt-BR')),
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string) => {
-      const query = filterValue.toLowerCase()
-      return !query || row.original.customers?.some(customer => customer.toLowerCase().includes(query)) || false
+      const query = filterValue.trim().toLowerCase()
+      return !query || getEffectiveDemandCustomers(row.original).some(customer => customer.toLowerCase().includes(query))
     },
     size: 120,
     meta: { style: { td: () => ({ width: listColWidth('customers', 120) }), th: () => ({ width: listColWidth('customers', 120) }) } },
     cell: ({ row }) => {
-      const customers = row.original.customers
-      if (!customers?.length) return h('span', { class: 'text-xs text-muted' }, '—')
-      return h('div', { class: 'flex flex-wrap gap-1 max-w-[130px]' },
-        customers.map(customer => h('span', { class: 'rounded-full border border-default bg-elevated px-2 py-0.5 text-xs text-muted' }, customer))
-      )
+      if (isCollapsedRepresentative(row.original))
+        return h('span', { class: 'text-xs text-muted' }, '—')
+
+      return h('span', { class: 'text-xs text-muted' }, '—')
     },
   },
   {
@@ -1697,9 +2078,11 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableColumnFilter: false,
     size: 60,
     meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('hours', 60) }), th: () => ({ width: listColWidth('hours', 60) }) } },
-    cell: ({ row }) => isDemandEstimated(row.original)
-      ? h('span', { class: 'text-xs text-muted' }, `${row.original.hours}h`)
-      : h('span', {
+    cell: ({ row }) => isCollapsedRepresentative(row.original)
+      ? h('span', { class: 'text-xs text-muted' }, '—')
+      : isDemandEstimated(row.original)
+        ? h('span', { class: 'text-xs text-muted' }, `${row.original.hours}h`)
+        : h('span', {
           class: 'inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
         }, '0h'),
   },
@@ -1712,6 +2095,19 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('_actions', 112) }), th: () => ({ width: listColWidth('_actions', 112) }) } },
     cell: ({ row }) => {
       const demand = row.original
+      if (isCollapsedRepresentative(demand)) {
+        return h('div', { class: 'flex items-center justify-end gap-1' }, [
+          h(UButtonComp, {
+            size: 'xs',
+            variant: 'ghost',
+            color: 'neutral',
+            onClick: () => toggleEpicCollapse(demand.epicId)
+          }, {
+            default: () => h(UIconComp, { name: 'i-lucide-chevron-right', class: 'h-4 w-4' })
+          })
+        ])
+      }
+
       const actions = []
 
       if (isBacklogDemand(demand)) {
@@ -1787,9 +2183,9 @@ function toggleListExportMenu() {
   if (listExportUrlVisible.value) URL.revokeObjectURL(listExportUrlVisible.value)
   if (listExportUrlFull.value) URL.revokeObjectURL(listExportUrlFull.value)
   const api = listTableRef.value?.tableApi
-  const visibleRows = api ? api.getSortedRowModel().rows.map(r => r.original) : demands.value
+  const visibleRows = api ? api.getSortedRowModel().rows.map(r => r.original) : demandItems.value
   listExportUrlVisible.value = buildListBlobUrl(visibleRows)
-  listExportUrlFull.value    = buildListBlobUrl(demands.value)
+  listExportUrlFull.value    = buildListBlobUrl(demandItems.value)
   listExportMenuOpen.value   = true
 }
 function closeListExportMenu() { listExportMenuOpen.value = false }
@@ -1824,6 +2220,7 @@ if (activeDemandKpiId.value)
 
 watch(activeDemandKpiId, async (value) => {
   if (!value) {
+    collapseAllEpicGroups()
     await nextTick()
     syncListSectionDividers()
     initListSortable()
@@ -1851,9 +2248,9 @@ watch(activeDemandKpiId, async (value) => {
           />
 
           <div>
-            <h1 class="text-2xl font-bold text-highlighted">KPIs da demanda</h1>
+            <h1 class="text-2xl font-bold text-highlighted">KPIs do épico</h1>
             <p class="mt-1 text-sm text-muted">
-              Tela dedicada para vínculo de indicadores e apuração pós-entrega.
+              Tela dedicada para vínculo de indicadores e apuração contínua do épico.
             </p>
           </div>
         </div>
@@ -1863,7 +2260,7 @@ watch(activeDemandKpiId, async (value) => {
         <UCard :ui="{ body: 'p-5 sm:p-6' }">
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div class="space-y-1">
-              <p class="text-xs font-semibold uppercase tracking-[0.08em] text-primary/70">Demanda</p>
+              <p class="text-xs font-semibold uppercase tracking-[0.08em] text-primary/70">Épico</p>
               <h2 class="text-xl font-semibold text-highlighted">{{ activeDemandKpi.title }}</h2>
               <p class="text-sm text-muted">
                 {{ selectedProject?.name ?? 'Projeto' }} · {{ activeDemandKpi.quarterLabel }}
@@ -1893,9 +2290,9 @@ watch(activeDemandKpiId, async (value) => {
         <div class="space-y-3 text-center">
           <UIcon name="i-lucide-search-x" class="mx-auto h-10 w-10 text-muted" />
           <div>
-            <h2 class="text-lg font-semibold text-highlighted">Demanda não encontrada</h2>
+            <h2 class="text-lg font-semibold text-highlighted">Épico não encontrado</h2>
             <p class="mt-1 text-sm text-muted">
-              Não foi possível localizar a demanda para abrir o registro de KPIs.
+              Não foi possível localizar o épico para abrir o registro de KPIs.
             </p>
           </div>
           <UButton
@@ -1970,11 +2367,20 @@ watch(activeDemandKpiId, async (value) => {
           </template>
         </UPopover>
 
-        <UButton
-          icon="i-lucide-plus"
-          label="Nova Demanda"
-          @click="openCreateModal()"
-        />
+        <div class="flex items-center gap-2">
+          <UButton
+            icon="i-lucide-workflow"
+            label="Ver Roadmaps e Épicos"
+            color="neutral"
+            variant="ghost"
+            @click="openHierarchyView"
+          />
+          <UButton
+            icon="i-lucide-plus"
+            label="Novo Item"
+            @click="openCreateModal()"
+          />
+        </div>
       </div>
     </div>
 
@@ -2134,6 +2540,16 @@ watch(activeDemandKpiId, async (value) => {
                 Limpar filtros
                 <UBadge size="xs" color="primary" variant="solid" class="ml-1">{{ listColumnFilters.length }}</UBadge>
               </UButton>
+              <UButton
+                v-if="visibleEpicIds.length"
+                size="sm"
+                color="neutral"
+                variant="ghost"
+                :leading-icon="areAllEpicGroupsCollapsed ? 'i-lucide-unfold-vertical' : 'i-lucide-fold-vertical'"
+                @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
+              >
+                {{ areAllEpicGroupsCollapsed ? 'Expandir tudo' : 'Recolher tudo' }}
+              </UButton>
               <div class="relative">
                 <UButton
                   variant="ghost"
@@ -2175,7 +2591,6 @@ watch(activeDemandKpiId, async (value) => {
         </template>
 
         <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'">
-          <!-- Header externo fixo -->
           <div class="sticky top-0 z-10 border-b border-accented bg-default overflow-hidden">
             <table class="table-fixed text-sm" :style="{ width: listTableWidth }">
               <thead>
@@ -2272,7 +2687,7 @@ watch(activeDemandKpiId, async (value) => {
               v-model:column-filters="listColumnFilters"
               v-model:column-sizing="listColumnSizing"
               v-model:column-order="listColumnOrder"
-              :data="quarterFilteredDemands"
+              :data="tableDemands"
               :columns="listTanstackColumns"
               :get-row-id="(row: RoadmapDemand) => row.id"
               :column-sizing-options="{ enableColumnResizing: true, columnResizeMode: 'onChange' }"
@@ -2283,6 +2698,7 @@ watch(activeDemandKpiId, async (value) => {
                   class="flex flex-col gap-1"
                   :title="getDemandNotesTooltip(row.original) || getDisplayedDemandStatus(row.original).label"
                 >
+                  <template v-if="!isCollapsedRepresentative(row.original)">
                   <div class="flex items-center gap-1.5">
                     <span
                       class="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
@@ -2326,6 +2742,8 @@ watch(activeDemandKpiId, async (value) => {
                     <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
                     <span>Atrasado</span>
                   </div>
+                  </template>
+                  <span v-else class="text-xs text-muted">—</span>
                 </div>
               </template>
             </UTable>
@@ -2480,6 +2898,9 @@ watch(activeDemandKpiId, async (value) => {
       :dependency-options="dependencyOptions"
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
+      :default-item-type="createItemType"
+      :roadmap-options="roadmapParentOptions"
+      :epic-options="epicParentOptions"
       :default-project-id="selectedProjectId ?? undefined"
       :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? selectedQuarterYear ?? undefined"
       :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? selectedQuarterNumber ?? undefined"

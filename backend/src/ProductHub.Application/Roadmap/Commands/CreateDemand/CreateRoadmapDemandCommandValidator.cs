@@ -23,7 +23,19 @@ public sealed class CreateRoadmapDemandCommandValidator
 
         RuleFor(x => x.Title).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Description).MaximumLength(2000);
-        RuleFor(x => x.ProjectId).NotEmpty();
+        RuleFor(x => x.ItemType)
+            .NotEmpty()
+            .Must(value => Enum.TryParse<RoadmapItemType>(value, true, out _))
+            .WithMessage("Item type must be Roadmap, Epic or Demand.");
+        RuleFor(x => x.ParentDemandId)
+            .Null().When(x => x.ItemType == nameof(RoadmapItemType.Roadmap))
+            .WithMessage("Roadmap items cannot have a parent.");
+        RuleFor(x => x.ParentDemandId)
+            .NotNull().When(x => x.ItemType != nameof(RoadmapItemType.Roadmap))
+            .WithMessage("Epic and demand items require a parent.");
+        RuleFor(x => x.ProjectId)
+            .NotEmpty().When(x => x.ItemType == nameof(RoadmapItemType.Demand))
+            .WithMessage("A demand requires a project.");
         RuleFor(x => x)
             .Must(x => beValidQuarter(x.QuarterYear, x.QuarterNumber))
             .WithMessage("Quarter must be between Q1 and Q4, or Backlog.");
@@ -36,8 +48,8 @@ public sealed class CreateRoadmapDemandCommandValidator
             .Must(c => Enum.TryParse<DemandClassification>(c, true, out _))
             .WithMessage("Invalid classification value.");
         RuleFor(x => x.ProductIds)
-            .NotEmpty().WithMessage("At least one product is required.")
-            .Must(ids => ids.Count > 0).WithMessage("At least one product is required.");
+            .NotEmpty().When(x => x.ItemType == nameof(RoadmapItemType.Demand)).WithMessage("At least one product is required.")
+            .Must(ids => ids.Count > 0).When(x => x.ItemType == nameof(RoadmapItemType.Demand)).WithMessage("At least one product is required.");
         RuleFor(x => x.DependencyDemandIds)
             .Must(ids => ids == null || ids.Where(id => id != Guid.Empty).Distinct().Count() == ids.Count)
             .WithMessage("Dependency demands must be unique.");

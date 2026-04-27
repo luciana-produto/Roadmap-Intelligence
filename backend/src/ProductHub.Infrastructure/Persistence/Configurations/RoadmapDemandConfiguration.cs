@@ -22,6 +22,13 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
         builder.Property(x => x.Description)
             .HasMaxLength(2000);
 
+        builder.Property(x => x.ItemType)
+            .HasConversion<string>()
+            .IsRequired();
+
+        builder.Property(x => x.ParentDemandId)
+            .IsRequired(false);
+
         builder.Property(x => x.Status)
             .HasConversion<string>()
             .IsRequired();
@@ -89,6 +96,7 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
             .OnDelete(DeleteBehavior.Cascade);
 
         builder.HasIndex(x => new { x.ProjectId, x.QuarterYear, x.QuarterNumber, x.SortOrder });
+        builder.HasIndex(x => x.ParentDemandId);
     }
 
     private static IReadOnlyList<string> ParseCustomers(string? value)

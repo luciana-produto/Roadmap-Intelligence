@@ -1,5 +1,6 @@
 using MediatR;
 using ProductHub.Application.Roadmap.DTOs;
+using ProductHub.Domain.Roadmap;
 using ProductHub.Domain.Roadmap.Interfaces;
 
 namespace ProductHub.Application.Roadmap.Queries.GetDependencyOptions;
@@ -19,12 +20,14 @@ public sealed class GetDemandDependencyOptionsQueryHandler(
         var projectNamesById = projects.ToDictionary(project => project.Id, project => project.Name);
 
         return demands
-            .OrderBy(demand => projectNamesById.TryGetValue(demand.ProjectId, out var projectName) ? projectName : string.Empty)
+            .Where(demand => demand.ItemType != RoadmapItemType.Roadmap)
+            .OrderBy(demand => demand.ProjectId.HasValue && projectNamesById.TryGetValue(demand.ProjectId.Value, out var projectName) ? projectName : string.Empty)
             .ThenBy(demand => demand.Title)
             .Select(demand => new DemandDependencyOptionDto(
                 demand.Id,
+                demand.ItemType.ToString(),
                 demand.ProjectId,
-                projectNamesById.TryGetValue(demand.ProjectId, out var projectName) ? projectName : string.Empty,
+                demand.ProjectId.HasValue && projectNamesById.TryGetValue(demand.ProjectId.Value, out var projectName) ? projectName : string.Empty,
                 demand.Title,
                 demand.Quarter.Label,
                 demand.QuarterYear,

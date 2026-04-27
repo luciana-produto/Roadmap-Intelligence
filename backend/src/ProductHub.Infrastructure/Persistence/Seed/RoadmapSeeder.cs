@@ -6,11 +6,15 @@ namespace ProductHub.Infrastructure.Persistence.Seed;
 
 public static class RoadmapSeeder
 {
-    private sealed record MockDemandSeed(
-        int QuarterYear,
-        int QuarterNumber,
+    private sealed record MockRoadmapItemSeed(
+        string Key,
+        RoadmapItemType ItemType,
         string Title,
         string? Description,
+        string? ParentKey,
+        string? ProjectSlug,
+        int QuarterYear,
+        int QuarterNumber,
         DemandStatus Status,
         DemandType Type,
         DemandClassification Classification,
@@ -28,25 +32,62 @@ public static class RoadmapSeeder
         NoKpiClassification? NoKpiClassification = null,
         DeprioritizationReason? DeprioritizationReason = null);
 
-    private sealed record MockDependencySeed(string DemandKey, string DependsOnDemandKey);
+    private sealed record MockDependencySeed(string ItemKey, string DependsOnItemKey);
 
     private static readonly (string Name, string Slug, string[] Products)[] Data =
     [
-        ("Cross",       "cross",       ["SVO", "Taste", "HUB CRM", "SVC"]),
-        ("Neemo",       "neemo",       ["Neemo"]),
-        ("Taste",       "taste",       ["Taste PDV", "Taste AA"]),
-        ("Retaguarda",  "retaguarda",  ["Retaguarda"]),
-        ("Degust",      "degust",      ["Degust PDV", "Hub Delivery"]),
-        ("Menew",       "menew",       ["Menew"])
+        ("Cross", "cross", ["SVO", "Taste", "HUB CRM", "SVC"]),
+        ("Neemo", "neemo", ["Neemo"]),
+        ("Taste", "taste", ["Taste PDV", "Taste AA"]),
+        ("Retaguarda", "retaguarda", ["Retaguarda"]),
+        ("Degust", "degust", ["Degust PDV", "Hub Delivery"]),
+        ("Menew", "menew", ["Menew"])
     ];
 
-    private static readonly MockDemandSeed[] CrossQ22026Demands =
+    private static readonly MockRoadmapItemSeed[] Items =
     [
         new(
-            2026,
-            2,
+            "CROSS-RM-FOUNDATION",
+            RoadmapItemType.Roadmap,
+            "Fundação de Plataforma Cross",
+            "Organiza frentes estruturantes de identidade, compliance e integrações críticas do ecossistema Cross.",
+            null,
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.Backlog,
+            DemandType.Planned,
+            DemandClassification.Strategic,
+            null,
+            []),
+        new(
+            "CROSS-EP-IDENTITY",
+            RoadmapItemType.Epic,
+            "Identidade e acesso unificado do ecossistema Cross",
+            "Consolida autenticação, onboarding e governança de acesso entre canais e backoffice.",
+            "CROSS-RM-FOUNDATION",
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.InProgress,
+            DemandType.Planned,
+            DemandClassification.Strategic,
+            null,
+            [],
+            Observation: "Épico priorizado para reduzir fricção operacional entre squads.",
+            JiraIssue: "CROSS-EP-01",
+            Customers: ["Operações", "CS"],
+            ProblemClarity: 8,
+            PromisedDate: new DateOnly(2026, 6, 25)),
+        new(
+            "CROSS-201",
+            RoadmapItemType.Demand,
             "Padronizar autenticação SSO no ecossistema Cross",
             "Unifica o fluxo de autenticação entre SVO, HUB CRM e SVC para reduzir retrabalho operacional.",
+            "CROSS-EP-IDENTITY",
+            "cross",
+            2026,
+            2,
             DemandStatus.InProgress,
             DemandType.Planned,
             DemandClassification.Strategic,
@@ -58,10 +99,33 @@ public static class RoadmapSeeder
             ProblemClarity: 8,
             PromisedDate: new DateOnly(2026, 6, 20)),
         new(
-            2026,
-            2,
+            "CROSS-EP-COMPLIANCE",
+            RoadmapItemType.Epic,
+            "Compliance e segurança operacional do Cross",
+            "Agrupa entregas mandatórias e de mitigação de risco para garantir continuidade e conformidade.",
+            "CROSS-RM-FOUNDATION",
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.Backlog,
+            DemandType.Planned,
+            DemandClassification.Mandatory,
+            null,
+            [],
+            Observation: "Coordenação compartilhada com jurídico, segurança e infraestrutura.",
+            JiraIssue: "CROSS-EP-02",
+            Customers: ["Jurídico", "Segurança"],
+            ProblemClarity: 7,
+            PromisedDate: new DateOnly(2026, 6, 18)),
+        new(
+            "CROSS-214",
+            RoadmapItemType.Demand,
             "Adequar trilha de auditoria LGPD do HUB CRM",
             "Reforça logs sensíveis e políticas de retenção para auditoria e conformidade.",
+            "CROSS-EP-COMPLIANCE",
+            "cross",
+            2026,
+            2,
             DemandStatus.Backlog,
             DemandType.Planned,
             DemandClassification.Mandatory,
@@ -73,26 +137,14 @@ public static class RoadmapSeeder
             ProblemClarity: 7,
             PromisedDate: new DateOnly(2026, 6, 10)),
         new(
-            2026,
-            2,
-            "Reduzir latência de sincronização do cardápio Taste",
-            "Melhora o tempo de propagação do cardápio em integrações do Cross.",
-            DemandStatus.Done,
-            DemandType.Spillover,
-            DemandClassification.ImprovementGap,
-            40,
-            ["Taste"],
-            Observation: "Entrega concluída e validada em homologação.",
-            JiraIssue: "CROSS-176",
-            Customers: ["Implantação"],
-            ProblemClarity: 9,
-            PromisedDate: new DateOnly(2026, 5, 10),
-            DeliveryDate: new DateOnly(2026, 5, 18)),
-        new(
-            2026,
-            2,
+            "CROSS-223",
+            RoadmapItemType.Demand,
             "Atualizar dependências críticas do gateway SVC",
             "Pacote de atualização para corrigir vulnerabilidades e manter compatibilidade com o gateway.",
+            "CROSS-EP-COMPLIANCE",
+            "cross",
+            2026,
+            2,
             DemandStatus.Backlog,
             DemandType.Unplanned,
             DemandClassification.TechnicalDebtSecurity,
@@ -106,28 +158,67 @@ public static class RoadmapSeeder
             ProblemClarity: 6,
             PromisedDate: new DateOnly(2026, 6, 5)),
         new(
-            2026,
-            2,
-            "Criar dashboard executivo de funil comercial",
-            "Consolida indicadores do HUB CRM para acompanhamento executivo.",
-            DemandStatus.Deprioritized,
+            "CROSS-RM-EXPERIENCE",
+            RoadmapItemType.Roadmap,
+            "Experiência e expansão comercial Cross",
+            "Conecta ganhos de experiência, homologação e descoberta comercial em uma mesma linha de evolução.",
+            null,
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.Backlog,
+            DemandType.Planned,
+            DemandClassification.Strategic,
+            null,
+            []),
+        new(
+            "CROSS-EP-OPERATIONS",
+            RoadmapItemType.Epic,
+            "Eficiência operacional da jornada omnichannel",
+            "Agrupa entregas que reduzem atrito na operação e melhoram a percepção do fluxo fim a fim.",
+            "CROSS-RM-EXPERIENCE",
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.InProgress,
             DemandType.Additional,
             DemandClassification.Evolution,
             null,
-            ["HUB CRM"],
-            Observation: "Demanda deslocada para acomodar iniciativas mandatórias.",
-            JiraIssue: "CROSS-231",
-            Customers: ["Comercial"],
-            ProblemClarity: 5,
-            PromisedDate: new DateOnly(2026, 6, 12),
-            HasNoKpi: true,
-            NoKpiClassification: NoKpiClassification.Mandatory,
-            DeprioritizationReason: DeprioritizationReason.MandatoryUrgent),
+            [],
+            Observation: "Épico com impacto direto em adoção e satisfação do fluxo omnichannel.",
+            JiraIssue: "CROSS-EP-03",
+            Customers: ["Implantação", "Suporte", "Operações"],
+            ProblemClarity: 8,
+            PromisedDate: new DateOnly(2026, 6, 28)),
         new(
+            "CROSS-176",
+            RoadmapItemType.Demand,
+            "Reduzir latência de sincronização do cardápio Taste",
+            "Melhora o tempo de propagação do cardápio em integrações do Cross.",
+            "CROSS-EP-OPERATIONS",
+            "cross",
             2026,
             2,
+            DemandStatus.Done,
+            DemandType.Spillover,
+            DemandClassification.ImprovementGap,
+            40,
+            ["Taste"],
+            Observation: "Entrega concluída e validada em homologação.",
+            JiraIssue: "CROSS-176",
+            Customers: ["Implantação"],
+            ProblemClarity: 9,
+            PromisedDate: new DateOnly(2026, 5, 10),
+            DeliveryDate: new DateOnly(2026, 5, 18)),
+        new(
+            "CROSS-239",
+            RoadmapItemType.Demand,
             "Homologar fluxo omnichannel de pedidos do Cross",
             "Valida a jornada fim a fim entre SVO e Taste com cenários de regressão.",
+            "CROSS-EP-OPERATIONS",
+            "cross",
+            2026,
+            2,
             DemandStatus.InProgress,
             DemandType.Additional,
             DemandClassification.Homologation,
@@ -135,18 +226,37 @@ public static class RoadmapSeeder
             ["SVO", "Taste"],
             Observation: "Homologação compartilhada com operações de loja.",
             JiraIssue: "CROSS-239",
-                Customers: ["Suporte", "Operações"],
-                ProblemClarity: 8,
-                PromisedDate: new DateOnly(2026, 6, 25))
-    ];
-
-    private static readonly MockDemandSeed[] CrossBacklogDemands =
-    [
+            Customers: ["Suporte", "Operações"],
+            ProblemClarity: 8,
+            PromisedDate: new DateOnly(2026, 6, 25)),
         new(
+            "CROSS-EP-SELF-SERVICE",
+            RoadmapItemType.Epic,
+            "Onboarding self-service e ativação comercial",
+            "Explora a jornada autônoma de entrada de novos clientes no ecossistema Cross.",
+            "CROSS-RM-EXPERIENCE",
+            null,
             Quarter.BacklogYear,
             Quarter.BacklogNumber,
+            DemandStatus.Backlog,
+            DemandType.Planned,
+            DemandClassification.Strategic,
+            null,
+            [],
+            Observation: "Épico ainda em discovery, aguardando refinamento com produto e operações.",
+            JiraIssue: "CROSS-EP-04",
+            Customers: ["Produto", "Operações"],
+            ProblemClarity: 4,
+            PromisedDate: new DateOnly(2026, 7, 10)),
+        new(
+            "CROSS-245",
+            RoadmapItemType.Demand,
             "Mapear nova esteira de onboarding self-service no Cross",
             "Descoberta funcional para estruturar a entrada autônoma de novos clientes no ecossistema Cross.",
+            "CROSS-EP-SELF-SERVICE",
+            "cross",
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
             DemandStatus.Backlog,
             DemandType.Planned,
             DemandClassification.Strategic,
@@ -155,14 +265,16 @@ public static class RoadmapSeeder
             Observation: "Aguardando refinamento final com produto e operações.",
             JiraIssue: "CROSS-245",
             Customers: ["Produto", "Operações"],
-            ProblemClarity: 4,
-            HasNoKpi: true,
-            NoKpiClassification: NoKpiClassification.Relationship),
+            ProblemClarity: 4),
         new(
-            Quarter.BacklogYear,
-            Quarter.BacklogNumber,
+            "CROSS-246",
+            RoadmapItemType.Demand,
             "Preparar base para centralização de notificações transacionais",
             "Spike técnico para consolidar notificações críticas entre HUB CRM, Taste e SVC.",
+            "CROSS-EP-SELF-SERVICE",
+            "cross",
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
             DemandStatus.Backlog,
             DemandType.Unplanned,
             DemandClassification.Evolution,
@@ -170,19 +282,50 @@ public static class RoadmapSeeder
             ["HUB CRM", "Taste", "SVC"],
             Observation: "Backlog técnico-comercial sem quarter comprometido.",
             JiraIssue: "CROSS-246",
-                Customers: ["Comercial", "Suporte"],
-                ProblemClarity: 3)
-    ];
-
-    private static readonly MockDemandSeed[] CrossDemands = [.. CrossQ22026Demands, .. CrossBacklogDemands];
-
-    private static readonly MockDemandSeed[] RetaguardaQ22026Demands =
-    [
+            Customers: ["Comercial", "Suporte"],
+            ProblemClarity: 3),
         new(
-            2026,
-            2,
+            "RET-RM-CORE",
+            RoadmapItemType.Roadmap,
+            "Estabilidade transacional da Retaguarda",
+            "Agrupa as frentes estruturais que sustentam fiscal, publicação de eventos e integrações do core.",
+            null,
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.Backlog,
+            DemandType.Planned,
+            DemandClassification.Mandatory,
+            null,
+            []),
+        new(
+            "RET-EP-FISCAL",
+            RoadmapItemType.Epic,
+            "Conciliação fiscal e publicação confiável do core",
+            "Concentra as entregas que sustentam a operação fiscal e a qualidade dos eventos publicados pela Retaguarda.",
+            "RET-RM-CORE",
+            null,
+            Quarter.BacklogYear,
+            Quarter.BacklogNumber,
+            DemandStatus.InProgress,
+            DemandType.Planned,
+            DemandClassification.Mandatory,
+            null,
+            [],
+            Observation: "Entrega acompanhada por arquitetura e financeiro.",
+            JiraIssue: "RET-EP-01",
+            Customers: ["Financeiro", "Arquitetura"],
+            ProblemClarity: 8,
+            PromisedDate: new DateOnly(2026, 6, 28)),
+        new(
+            "RET-101",
+            RoadmapItemType.Demand,
             "Modernizar motor de conciliação fiscal da Retaguarda",
             "Atualiza a base transacional usada pela retaguarda para suportar integrações mais estáveis com o ecossistema Cross.",
+            "RET-EP-FISCAL",
+            "retaguarda",
+            2026,
+            2,
             DemandStatus.InProgress,
             DemandType.Planned,
             DemandClassification.Mandatory,
@@ -194,10 +337,14 @@ public static class RoadmapSeeder
             ProblemClarity: 8,
             PromisedDate: new DateOnly(2026, 6, 28)),
         new(
-            2026,
-            2,
+            "RET-102",
+            RoadmapItemType.Demand,
             "Aprimorar fila de publicação de cadastros mestres",
             "Prepara a retaguarda para publicar eventos mais confiáveis consumidos por Cross e canais satélites.",
+            "RET-EP-FISCAL",
+            "retaguarda",
+            2026,
+            2,
             DemandStatus.Backlog,
             DemandType.Spillover,
             DemandClassification.Evolution,
@@ -205,14 +352,14 @@ public static class RoadmapSeeder
             ["Retaguarda"],
             Observation: "Refinamento pendente com o time de plataforma.",
             JiraIssue: "RET-102",
-                Customers: ["Plataforma"],
-                ProblemClarity: 6,
-                PromisedDate: new DateOnly(2026, 6, 18))
+            Customers: ["Plataforma"],
+            ProblemClarity: 6,
+            PromisedDate: new DateOnly(2026, 6, 18))
     ];
 
-    private static readonly MockDependencySeed[] CrossProjectDependencies =
+    private static readonly MockDependencySeed[] Dependencies =
     [
-        new("CROSS-201", "RET-101"),
+        new("CROSS-EP-IDENTITY", "RET-EP-FISCAL"),
         new("CROSS-214", "RET-101"),
         new("CROSS-239", "CROSS-245"),
         new("CROSS-245", "RET-102")
@@ -255,27 +402,12 @@ public static class RoadmapSeeder
         if (hasProjectChanges)
             await context.SaveChangesAsync();
 
-        var seededDemandIdsByKey = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
-
-        var crossProject = await context.RoadmapProjects
-            .Include(project => project.Products)
-            .FirstOrDefaultAsync(project => project.Slug == "cross");
-        var retaguardaProject = await context.RoadmapProjects
-            .Include(project => project.Products)
-            .FirstOrDefaultAsync(project => project.Slug == "retaguarda");
-
-        if (crossProject is null || retaguardaProject is null)
-            return;
-
-            var crossDemandChanges = await SeedProjectDemandsAsync(context, crossProject, CrossDemands, seededDemandIdsByKey);
-            var retaguardaDemandChanges = await SeedProjectDemandsAsync(context, retaguardaProject, RetaguardaQ22026Demands, seededDemandIdsByKey);
-            var hasDemandChanges = crossDemandChanges || retaguardaDemandChanges;
-
-        if (hasDemandChanges)
+        var itemIdsByKey = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        var hasItemChanges = await SeedRoadmapItemsAsync(context, projectsBySlug, itemIdsByKey);
+        if (hasItemChanges)
             await context.SaveChangesAsync();
 
-        await LoadExistingDemandIdsAsync(context, crossProject.Id, seededDemandIdsByKey);
-        await LoadExistingDemandIdsAsync(context, retaguardaProject.Id, seededDemandIdsByKey);
+        await LoadExistingItemIdsAsync(context, itemIdsByKey);
 
         var existingDependencies = await context.RoadmapDemandDependencies
             .Select(link => new { link.DemandId, link.DependsOnDemandId })
@@ -286,21 +418,20 @@ public static class RoadmapSeeder
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var hasDependencyChanges = false;
-
-        foreach (var dependency in CrossProjectDependencies)
+        foreach (var dependency in Dependencies)
         {
-            if (!seededDemandIdsByKey.TryGetValue(dependency.DemandKey, out var demandId))
+            if (!itemIdsByKey.TryGetValue(dependency.ItemKey, out var itemId))
                 continue;
 
-            if (!seededDemandIdsByKey.TryGetValue(dependency.DependsOnDemandKey, out var dependsOnDemandId))
+            if (!itemIdsByKey.TryGetValue(dependency.DependsOnItemKey, out var dependsOnItemId))
                 continue;
 
-            var dependencyKey = $"{demandId}:{dependsOnDemandId}";
+            var dependencyKey = $"{itemId}:{dependsOnItemId}";
             if (existingDependencySet.Contains(dependencyKey))
                 continue;
 
             await context.RoadmapDemandDependencies.AddAsync(
-                RoadmapDemandDependency.FromRepository(demandId, dependsOnDemandId));
+                RoadmapDemandDependency.FromRepository(itemId, dependsOnItemId));
             existingDependencySet.Add(dependencyKey);
             hasDependencyChanges = true;
         }
@@ -308,14 +439,145 @@ public static class RoadmapSeeder
         if (hasDependencyChanges)
             await context.SaveChangesAsync();
 
-        // ─── KPI Seed ────────────────────────────────────────────────────
-        await SeedKpisAsync(context, crossProject.Id, seededDemandIdsByKey);
+        if (projectsBySlug.TryGetValue("cross", out var crossProject))
+            await SeedKpisAsync(context, crossProject.Id, itemIdsByKey);
+    }
+
+    private static async Task<bool> SeedRoadmapItemsAsync(
+        AppDbContext context,
+        IReadOnlyDictionary<string, RoadmapProject> projectsBySlug,
+        IDictionary<string, Guid> itemIdsByKey)
+    {
+        var existingItems = await context.RoadmapDemands
+            .Include(item => item.Products)
+            .ToListAsync();
+
+        var existingByKey = existingItems
+            .Select(item => new { Item = item, Key = item.JiraIssue ?? item.Title })
+            .Where(entry => !string.IsNullOrWhiteSpace(entry.Key))
+            .ToDictionary(entry => entry.Key!, entry => entry.Item, StringComparer.OrdinalIgnoreCase);
+
+        var existingTradeOffDemandIds = await context.DemandTradeOffs
+            .Select(item => item.DeprioritizedDemandId)
+            .ToListAsync();
+
+        var hasChanges = false;
+
+        for (var index = 0; index < Items.Length; index++)
+        {
+            var seed = Items[index];
+
+            Guid? parentId = null;
+            if (!string.IsNullOrWhiteSpace(seed.ParentKey) && itemIdsByKey.TryGetValue(seed.ParentKey, out var resolvedParentId))
+                parentId = resolvedParentId;
+
+            Guid? projectId = null;
+            IReadOnlyList<Guid> productIds = [];
+            if (!string.IsNullOrWhiteSpace(seed.ProjectSlug) && projectsBySlug.TryGetValue(seed.ProjectSlug, out var project))
+            {
+                projectId = project.Id;
+                var productIdsByName = project.Products.ToDictionary(product => product.Name, product => product.Id, StringComparer.OrdinalIgnoreCase);
+                productIds = seed.ProductNames
+                    .Where(productIdsByName.ContainsKey)
+                    .Select(productName => productIdsByName[productName])
+                    .ToList();
+            }
+
+            if (!existingByKey.TryGetValue(seed.Key, out var item))
+            {
+                item = RoadmapDemand.Create(
+                    seed.ItemType,
+                    parentId,
+                    seed.Title,
+                    seed.Description,
+                    projectId,
+                    seed.QuarterYear,
+                    seed.QuarterNumber,
+                    seed.Type,
+                    seed.Classification,
+                    productIds,
+                    seed.ItemType == RoadmapItemType.Demand ? (index + 1) * 10 : 0,
+                    seed.JiraIssue,
+                    seed.Hours,
+                    seed.Customers,
+                    seed.IsBlocked,
+                    seed.BlockedReason,
+                    seed.PromisedDate,
+                    seed.ProblemClarity,
+                    seed.HasNoKpi,
+                    seed.NoKpiClassification);
+
+                await context.RoadmapDemands.AddAsync(item);
+                existingByKey[seed.Key] = item;
+                hasChanges = true;
+            }
+
+            item.Update(
+                seed.ItemType,
+                parentId,
+                seed.Title,
+                seed.Description,
+                projectId,
+                seed.QuarterYear,
+                seed.QuarterNumber,
+                seed.Status,
+                seed.Type,
+                seed.Classification,
+                sortOrder: seed.ItemType == RoadmapItemType.Demand ? item.SortOrder : 0,
+                observation: seed.Observation,
+                deprioritizationReason: seed.DeprioritizationReason,
+                jiraIssue: seed.JiraIssue,
+                hours: seed.Hours,
+                customers: seed.Customers,
+                isBlocked: seed.IsBlocked,
+                blockedReason: seed.BlockedReason,
+                promisedDate: seed.PromisedDate,
+                deliveryDate: seed.DeliveryDate,
+                problemClarity: seed.ProblemClarity,
+                hasNoKpi: seed.HasNoKpi,
+                noKpiClassification: seed.NoKpiClassification);
+
+            item.ReplaceProducts(productIds);
+            itemIdsByKey[seed.Key] = item.Id;
+
+            if (seed.Status == DemandStatus.Deprioritized
+                && seed.DeprioritizationReason.HasValue
+                && projectId.HasValue
+                && !existingTradeOffDemandIds.Contains(item.Id))
+            {
+                await context.DemandTradeOffs.AddAsync(
+                    DemandTradeOff.Create(
+                        projectId.Value,
+                        seed.QuarterYear,
+                        seed.QuarterNumber,
+                        item.Id,
+                        null,
+                        seed.DeprioritizationReason.Value,
+                        seed.Observation));
+                existingTradeOffDemandIds.Add(item.Id);
+                hasChanges = true;
+            }
+        }
+
+        return hasChanges;
+    }
+
+    private static async Task LoadExistingItemIdsAsync(
+        AppDbContext context,
+        IDictionary<string, Guid> itemIdsByKey)
+    {
+        var existingItems = await context.RoadmapDemands
+            .Select(item => new { item.Id, Key = item.JiraIssue ?? item.Title })
+            .ToListAsync();
+
+        foreach (var item in existingItems.Where(entry => !string.IsNullOrWhiteSpace(entry.Key)))
+            itemIdsByKey[item.Key!] = item.Id;
     }
 
     private static async Task SeedKpisAsync(
         AppDbContext context,
         Guid projectId,
-        IDictionary<string, Guid> demandIdsByKey)
+        IDictionary<string, Guid> itemIdsByKey)
     {
         var existingKpis = await context.Kpis
             .Where(k => k.ProjectId == projectId)
@@ -357,160 +619,48 @@ public static class RoadmapSeeder
 
         await context.SaveChangesAsync();
 
-        // Seed demand-KPI links
         var kpiByName = kpis.ToDictionary(k => k.Name, StringComparer.OrdinalIgnoreCase);
-
-        var linkSeeds = new (string DemandKey, string KpiName, ImpactType Impact, decimal? EstimatedImpact, ConfidenceLevel Confidence, string? Observation)[]
+        var linkSeeds = new (string ItemKey, string KpiName, ImpactType Impact, decimal? EstimatedImpact, ConfidenceLevel Confidence, string? Observation)[]
         {
-            ("CROSS-201", "Taxa de Churn Mensal", ImpactType.Decrease, 0.3m, ConfidenceLevel.Medium, "Redução esperada com a padronização do SSO."),
-            ("CROSS-201", "Tempo Médio de Onboarding", ImpactType.Decrease, 5m, ConfidenceLevel.High, "Fluxo mais simples reduz o tempo de ativação."),
-            ("CROSS-214", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.5m, ConfidenceLevel.High, null),
-            ("CROSS-176", "NPS do Produto", ImpactType.Increase, 3m, ConfidenceLevel.Medium, "Entrega concluída com expectativa de melhoria percebida pelo cliente."),
-            ("CROSS-176", "Taxa de Churn Mensal", ImpactType.Decrease, 0.2m, ConfidenceLevel.Low, "Há risco de impacto operacional nas primeiras semanas."),
-            ("CROSS-223", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.2m, ConfidenceLevel.Low, null),
-            ("RET-101", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.7m, ConfidenceLevel.High, null),
-            ("RET-101", "Receita Recorrente Mensal (MRR)", ImpactType.Increase, 15000m, ConfidenceLevel.Medium, null)
+            ("CROSS-EP-IDENTITY", "Taxa de Churn Mensal", ImpactType.Decrease, 0.3m, ConfidenceLevel.Medium, "Redução esperada com a padronização do SSO."),
+            ("CROSS-EP-IDENTITY", "Tempo Médio de Onboarding", ImpactType.Decrease, 5m, ConfidenceLevel.High, "Fluxo mais simples reduz o tempo de ativação."),
+            ("CROSS-EP-COMPLIANCE", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.5m, ConfidenceLevel.High, null),
+            ("CROSS-EP-OPERATIONS", "NPS do Produto", ImpactType.Increase, 3m, ConfidenceLevel.Medium, "A redução de fricção deve melhorar a percepção do fluxo."),
+            ("CROSS-EP-OPERATIONS", "Taxa de Adoção da Funcionalidade", ImpactType.Increase, 4m, ConfidenceLevel.Medium, "Homologação mais estável acelera adoção em clientes ativos."),
+            ("RET-EP-FISCAL", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.7m, ConfidenceLevel.High, null),
+            ("RET-EP-FISCAL", "Receita Recorrente Mensal (MRR)", ImpactType.Increase, 15000m, ConfidenceLevel.Medium, null)
         };
 
-        foreach (var (demandKey, kpiName, impact, estimated, confidence, observation) in linkSeeds)
+        foreach (var (itemKey, kpiName, impact, estimated, confidence, observation) in linkSeeds)
         {
-            if (!demandIdsByKey.TryGetValue(demandKey, out var demandId))
+            if (!itemIdsByKey.TryGetValue(itemKey, out var itemId))
                 continue;
             if (!kpiByName.TryGetValue(kpiName, out var kpi))
                 continue;
 
             await context.DemandKpiLinks.AddAsync(
-                DemandKpiLink.FromRepository(demandId, kpi.Id, impact, estimated, confidence, observation));
+                DemandKpiLink.FromRepository(itemId, kpi.Id, impact, estimated, confidence, observation));
         }
 
         await context.SaveChangesAsync();
 
-        var measurementSeeds = new (string DemandKey, string KpiName, decimal MeasuredValue, DateOnly MeasurementDate, MeasurementResult Result, string? Observation)[]
+        var measurementSeeds = new (string ItemKey, string KpiName, decimal MeasuredValue, DateOnly MeasurementDate, MeasurementResult Result, string? Observation)[]
         {
-            ("CROSS-176", "NPS do Produto", 4.2m, new DateOnly(2026, 5, 25), MeasurementResult.Positive, "Clientes perceberam melhora no fluxo após a entrega."),
-            ("CROSS-176", "Taxa de Churn Mensal", 0.15m, new DateOnly(2026, 5, 25), MeasurementResult.Negative, "O churn subiu temporariamente por ajustes operacionais no rollout.")
+            ("CROSS-EP-OPERATIONS", "NPS do Produto", 4.2m, new DateOnly(2026, 5, 25), MeasurementResult.Positive, "Clientes perceberam melhora no fluxo após as entregas do épico."),
+            ("CROSS-EP-OPERATIONS", "Taxa de Adoção da Funcionalidade", 2.1m, new DateOnly(2026, 5, 25), MeasurementResult.Positive, "Adoção inicial acima do esperado em clientes piloto.")
         };
 
-        foreach (var (demandKey, kpiName, measuredValue, measurementDate, result, observation) in measurementSeeds)
+        foreach (var (itemKey, kpiName, measuredValue, measurementDate, result, observation) in measurementSeeds)
         {
-            if (!demandIdsByKey.TryGetValue(demandKey, out var demandId))
+            if (!itemIdsByKey.TryGetValue(itemKey, out var itemId))
                 continue;
             if (!kpiByName.TryGetValue(kpiName, out var kpi))
                 continue;
 
             await context.KpiMeasurements.AddAsync(
-                KpiMeasurement.Create(kpi.Id, demandId, measuredValue, measurementDate, result, observation));
+                KpiMeasurement.Create(kpi.Id, itemId, measuredValue, measurementDate, result, observation));
         }
 
         await context.SaveChangesAsync();
-    }
-
-    private static async Task<bool> SeedProjectDemandsAsync(
-        AppDbContext context,
-        RoadmapProject project,
-        MockDemandSeed[] seeds,
-        IDictionary<string, Guid> seededDemandIdsByKey)
-    {
-        var productIdsByName = project.Products
-            .ToDictionary(product => product.Name, product => product.Id, StringComparer.OrdinalIgnoreCase);
-
-        var existingDemands = await context.RoadmapDemands
-            .Where(demand => demand.ProjectId == project.Id)
-            .Select(demand => new { demand.Id, Key = demand.JiraIssue ?? demand.Title })
-            .ToListAsync();
-
-        var existingDemandKeySet = existingDemands
-            .Where(item => !string.IsNullOrWhiteSpace(item.Key))
-            .ToDictionary(item => item.Key!, item => item.Id, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var existingDemand in existingDemands.Where(item => !string.IsNullOrWhiteSpace(item.Key)))
-            seededDemandIdsByKey[existingDemand.Key!] = existingDemand.Id;
-
-        var hasDemandChanges = false;
-
-        for (var index = 0; index < seeds.Length; index++)
-        {
-            var seed = seeds[index];
-            var demandKey = seed.JiraIssue ?? seed.Title;
-            if (existingDemandKeySet.ContainsKey(demandKey))
-                continue;
-
-            var demand = RoadmapDemand.Create(
-                seed.Title,
-                seed.Description,
-                project.Id,
-                seed.QuarterYear,
-                seed.QuarterNumber,
-                seed.Type,
-                seed.Classification,
-                seed.ProductNames.Select(productName => productIdsByName[productName]),
-                (index + 1) * 10,
-                seed.JiraIssue,
-                seed.Hours,
-                seed.Customers,
-                seed.IsBlocked,
-                seed.BlockedReason,
-                seed.PromisedDate,
-                seed.ProblemClarity,
-                hasNoKpi: seed.HasNoKpi,
-                noKpiClassification: seed.NoKpiClassification);
-
-            demand.Update(
-                seed.Title,
-                seed.Description,
-                seed.QuarterYear,
-                seed.QuarterNumber,
-                seed.Status,
-                seed.Type,
-                seed.Classification,
-                sortOrder: null,
-                observation: seed.Observation,
-                jiraIssue: seed.JiraIssue,
-                hours: seed.Hours,
-                customers: seed.Customers,
-                isBlocked: seed.IsBlocked,
-                blockedReason: seed.BlockedReason,
-                promisedDate: seed.PromisedDate,
-                deliveryDate: seed.DeliveryDate,
-                problemClarity: seed.ProblemClarity,
-                hasNoKpi: seed.HasNoKpi,
-                noKpiClassification: seed.NoKpiClassification,
-                deprioritizationReason: seed.DeprioritizationReason);
-
-            await context.RoadmapDemands.AddAsync(demand);
-
-            if (seed.Status == DemandStatus.Deprioritized && seed.DeprioritizationReason.HasValue)
-            {
-                await context.DemandTradeOffs.AddAsync(
-                    DemandTradeOff.Create(
-                        project.Id,
-                        seed.QuarterYear,
-                        seed.QuarterNumber,
-                        demand.Id,
-                        null,
-                        seed.DeprioritizationReason.Value,
-                        seed.Observation));
-            }
-
-            existingDemandKeySet[demandKey] = demand.Id;
-            seededDemandIdsByKey[demandKey] = demand.Id;
-            hasDemandChanges = true;
-        }
-
-        return hasDemandChanges;
-    }
-
-    private static async Task LoadExistingDemandIdsAsync(
-        AppDbContext context,
-        Guid projectId,
-        IDictionary<string, Guid> seededDemandIdsByKey)
-    {
-        var existingDemands = await context.RoadmapDemands
-            .Where(demand => demand.ProjectId == projectId)
-            .Select(demand => new { demand.Id, Key = demand.JiraIssue ?? demand.Title })
-            .ToListAsync();
-
-        foreach (var demand in existingDemands.Where(item => !string.IsNullOrWhiteSpace(item.Key)))
-            seededDemandIdsByKey[demand.Key!] = demand.Id;
     }
 }

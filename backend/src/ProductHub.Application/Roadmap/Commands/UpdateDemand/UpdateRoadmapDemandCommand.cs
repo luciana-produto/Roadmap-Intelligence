@@ -5,9 +5,11 @@ namespace ProductHub.Application.Roadmap.Commands.UpdateDemand;
 
 public sealed record UpdateRoadmapDemandCommand(
     Guid Id,
+    string ItemType,
+    Guid? ParentDemandId,
     string Title,
     string? Description,
-    Guid ProjectId,
+    Guid? ProjectId,
     int QuarterYear,
     int QuarterNumber,
     string Status,

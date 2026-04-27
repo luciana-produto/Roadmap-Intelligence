@@ -4,7 +4,8 @@ public sealed record DemandProductDto(Guid ProductId, string Name);
 
 public sealed record DemandDependencyDto(
     Guid DemandId,
-    Guid ProjectId,
+    string ItemType,
+    Guid? ProjectId,
     string ProjectName,
     string Title,
     string QuarterLabel,
@@ -14,7 +15,8 @@ public sealed record DemandDependencyDto(
 
 public sealed record DemandDependencyOptionDto(
     Guid DemandId,
-    Guid ProjectId,
+    string ItemType,
+    Guid? ProjectId,
     string ProjectName,
     string Title,
     string QuarterLabel,
@@ -32,9 +34,16 @@ public sealed record RoadmapProjectDto(
 
 public sealed record RoadmapDemandDto(
     Guid Id,
+    string ItemType,
+    Guid? ParentDemandId,
+    string? ParentTitle,
+    Guid? RoadmapId,
+    string? RoadmapTitle,
+    Guid? EpicId,
+    string? EpicTitle,
     string Title,
     string? Description,
-    Guid ProjectId,
+    Guid? ProjectId,
     string QuarterLabel,
     int QuarterYear,
     int QuarterNumber,

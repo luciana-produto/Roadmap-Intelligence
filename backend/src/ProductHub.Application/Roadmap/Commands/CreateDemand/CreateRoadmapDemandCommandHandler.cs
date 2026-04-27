@@ -17,6 +17,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
         CreateRoadmapDemandCommand request,
         CancellationToken cancellationToken)
     {
+        Enum.TryParse<RoadmapItemType>(request.ItemType, true, out var itemType);
         var dependencyDemandIds = (request.DependencyDemandIds ?? [])
             .Where(id => id != Guid.Empty)
             .Distinct()
@@ -25,13 +26,32 @@ public sealed class CreateRoadmapDemandCommandHandler(
             ? [.. dependencyDemandIds, request.ReplacementDemandId.Value]
             : dependencyDemandIds;
 
-        var project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId, cancellationToken)
-            ?? throw new NotFoundException("RoadmapProject", request.ProjectId);
+        RoadmapProject? project = null;
+        Dictionary<Guid, string> productMap = [];
+        if (request.ProjectId.HasValue)
+        {
+            project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId.Value, cancellationToken)
+                ?? throw new NotFoundException("RoadmapProject", request.ProjectId.Value);
 
-        var projectProductIds = project.Products.Select(p => p.Id).ToHashSet();
-        foreach (var pid in request.ProductIds)
-            if (!projectProductIds.Contains(pid))
-                throw new NotFoundException("RoadmapProduct", pid);
+            var projectProductIds = project.Products.Select(p => p.Id).ToHashSet();
+            foreach (var pid in request.ProductIds)
+                if (!projectProductIds.Contains(pid))
+                    throw new NotFoundException("RoadmapProduct", pid);
+
+            productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
+        }
+
+        if (request.ParentDemandId.HasValue)
+        {
+            var parent = await demandRepository.GetByIdAsync(request.ParentDemandId.Value, cancellationToken)
+                ?? throw new NotFoundException("RoadmapDemand", request.ParentDemandId.Value);
+
+            if (itemType == RoadmapItemType.Epic && parent.ItemType != RoadmapItemType.Roadmap)
+                throw new ValidationException([new ValidationFailure(nameof(request.ParentDemandId), "An epic must be linked to a roadmap item.")]);
+
+            if (itemType == RoadmapItemType.Demand && parent.ItemType != RoadmapItemType.Epic)
+                throw new ValidationException([new ValidationFailure(nameof(request.ParentDemandId), "A demand must be linked to an epic item.")]);
+        }
 
         var dependencyDemands = await demandRepository.GetByIdsAsync(relatedDemandIds, cancellationToken);
         var dependencyDemandMap = dependencyDemands.ToDictionary(demand => demand.Id);
@@ -50,13 +70,17 @@ public sealed class CreateRoadmapDemandCommandHandler(
             noKpiClassification = parsedNoKpiClassification;
         }
 
-        var nextSortOrder = await demandRepository.GetNextSortOrderAsync(
-            request.ProjectId,
-            request.QuarterYear,
-            request.QuarterNumber,
-            cancellationToken);
+        var nextSortOrder = itemType == RoadmapItemType.Demand && request.ProjectId.HasValue
+            ? await demandRepository.GetNextSortOrderAsync(
+                request.ProjectId.Value,
+                request.QuarterYear,
+                request.QuarterNumber,
+                cancellationToken)
+            : 0;
 
         var demand = RoadmapDemand.Create(
+            itemType,
+            request.ParentDemandId,
             request.Title,
             request.Description,
             request.ProjectId,
@@ -80,7 +104,6 @@ public sealed class CreateRoadmapDemandCommandHandler(
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
         var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
             .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync([demand.Id, .. dependencyDemandIds], cancellationToken);

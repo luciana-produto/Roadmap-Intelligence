@@ -7,7 +7,8 @@ import type {
   RoadmapCapacitySummary,
   CapacityFormData,
   DemandFormData,
-  DemandStatus
+  DemandStatus,
+  RoadmapItemType
 } from '~/types/roadmap'
 
 export const useRoadmapStore = defineStore('roadmap', () => {
@@ -42,9 +43,16 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   }
 
   function upsertDependencyOptionFromDemand(demand: RoadmapDemand) {
-    const projectName = projects.value.find(project => project.id === demand.projectId)?.name ?? ''
+    if (demand.itemType === 'Roadmap')
+      return
+
+    const projectName = demand.projectId
+      ? projects.value.find(project => project.id === demand.projectId)?.name ?? ''
+      : ''
+
     const nextOption: DemandDependencyOption = {
       demandId: demand.id,
+      itemType: demand.itemType,
       projectId: demand.projectId,
       projectName,
       title: demand.title,
@@ -91,7 +99,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   }
 
   function isDemandVisibleInCurrentStoreScope(demand: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>) {
-    if (selectedProjectId.value && demand.projectId !== selectedProjectId.value)
+    if (selectedProjectId.value && demand.projectId && demand.projectId !== selectedProjectId.value)
       return false
 
     if (selectedQuarterYear.value != null && demand.quarterYear !== selectedQuarterYear.value)
@@ -197,6 +205,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
 
   async function createDemand(payload: DemandFormData): Promise<RoadmapDemand> {
     const body = {
+      itemType: payload.itemType,
+      parentDemandId: payload.parentDemandId || undefined,
       title: payload.title,
       description: payload.description || undefined,
       projectId: payload.projectId,
@@ -237,6 +247,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   async function updateDemand(id: string, payload: DemandFormData): Promise<RoadmapDemand> {
     const body = {
       id,
+      itemType: payload.itemType,
+      parentDemandId: payload.parentDemandId || undefined,
       title: payload.title,
       description: payload.description || undefined,
       projectId: payload.projectId,
@@ -299,6 +311,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     if (!demand) return
     const body = {
       id,
+      itemType: demand.itemType,
+      parentDemandId: demand.parentDemandId || undefined,
       title: demand.title,
       description: demand.description || undefined,
       projectId: demand.projectId,

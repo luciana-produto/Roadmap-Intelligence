@@ -7,9 +7,11 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
 {
     private List<RoadmapDemandProduct> _products = [];
 
+    public RoadmapItemType ItemType { get; private set; }
+    public Guid? ParentDemandId { get; private set; }
     public string Title { get; private set; } = default!;
     public string? Description { get; private set; }
-    public Guid ProjectId { get; private set; }
+    public Guid? ProjectId { get; private set; }
     public int QuarterYear { get; private set; }
     public int QuarterNumber { get; private set; }
     public DemandStatus Status { get; private set; }
@@ -38,14 +40,16 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     private RoadmapDemand() { }
 
     public static RoadmapDemand Create(
+        RoadmapItemType itemType,
+        Guid? parentDemandId,
         string title,
         string? description,
-        Guid projectId,
+        Guid? projectId,
         int quarterYear,
         int quarterNumber,
         DemandType type,
         DemandClassification classification,
-        IEnumerable<Guid> productIds,
+        IEnumerable<Guid>? productIds,
         int sortOrder = 0,
         string? jiraIssue = null,
         decimal? hours = null,
@@ -62,19 +66,26 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
+        ValidateHierarchy(itemType, parentDemandId, projectId);
+        var normalizedProjectId = NormalizeProjectId(itemType, projectId);
+        var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
+        var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
+
         var demand = new RoadmapDemand
         {
+            ItemType = itemType,
+            ParentDemandId = parentDemandId,
             Title = title,
             Description = description,
-            ProjectId = projectId,
-            QuarterYear = quarterYear,
-            QuarterNumber = quarterNumber,
+            ProjectId = normalizedProjectId,
+            QuarterYear = normalizedQuarter.Year,
+            QuarterNumber = normalizedQuarter.Number,
             Status = DemandStatus.Backlog,
             Type = type,
             Classification = classification,
             SortOrder = sortOrder,
             JiraIssue = jiraIssue,
-            Hours = hours,
+            Hours = normalizedHours,
             Customers = NormalizeCustomers(customers),
             IsBlocked = isBlocked,
             BlockedReason = isBlocked ? blockedReason : null,
@@ -83,7 +94,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             HasNoKpi = hasNoKpi,
             NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification)
         };
-        demand._products = productIds
+        demand._products = NormalizeProductIds(itemType, productIds)
             .Distinct()
             .Select(id => RoadmapDemandProduct.Create(demand.Id, id))
             .ToList();
@@ -91,8 +102,11 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     }
 
     public void Update(
+        RoadmapItemType itemType,
+        Guid? parentDemandId,
         string title,
         string? description,
+        Guid? projectId,
         int quarterYear,
         int quarterNumber,
         DemandStatus status,
@@ -118,10 +132,18 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
+        ValidateHierarchy(itemType, parentDemandId, projectId);
+        var normalizedProjectId = NormalizeProjectId(itemType, projectId);
+        var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
+        var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
+
+        ItemType = itemType;
+        ParentDemandId = parentDemandId;
         Title = title;
         Description = description;
-        QuarterYear = quarterYear;
-        QuarterNumber = quarterNumber;
+        ProjectId = normalizedProjectId;
+        QuarterYear = normalizedQuarter.Year;
+        QuarterNumber = normalizedQuarter.Number;
         Status = status;
         Type = type;
         Classification = classification;
@@ -131,7 +153,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DeprioritizationReason = NormalizeDeprioritizationReason(status, deprioritizationReason);
         ReplacementDemandId = status == DemandStatus.Deprioritized ? replacementDemandId : null;
         JiraIssue = jiraIssue;
-        Hours = hours;
+        Hours = normalizedHours;
         Customers = NormalizeCustomers(customers);
         IsBlocked = isBlocked;
         BlockedReason = isBlocked ? blockedReason : null;
@@ -140,6 +162,14 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;
         NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
+    }
+
+    public void ReplaceProducts(IEnumerable<Guid>? productIds)
+    {
+        _products = NormalizeProductIds(ItemType, productIds)
+            .Distinct()
+            .Select(id => RoadmapDemandProduct.Create(Id, id))
+            .ToList();
     }
 
     public void SetSortOrder(int sortOrder) =>
@@ -181,4 +211,31 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList()
         ?? [];
+
+    private static IReadOnlyList<Guid> NormalizeProductIds(RoadmapItemType itemType, IEnumerable<Guid>? productIds) =>
+        itemType == RoadmapItemType.Demand
+            ? (productIds ?? []).Where(id => id != Guid.Empty).ToList()
+            : [];
+
+    private static Guid? NormalizeProjectId(RoadmapItemType itemType, Guid? projectId) =>
+        itemType == RoadmapItemType.Demand && projectId.HasValue && projectId.Value != Guid.Empty
+            ? projectId.Value
+            : null;
+
+    private static (int Year, int Number) NormalizeQuarter(RoadmapItemType itemType, int quarterYear, int quarterNumber) =>
+        itemType == RoadmapItemType.Demand
+            ? (quarterYear, quarterNumber)
+            : (Quarter.BacklogYear, Quarter.BacklogNumber);
+
+    private static void ValidateHierarchy(RoadmapItemType itemType, Guid? parentDemandId, Guid? projectId)
+    {
+        if (itemType == RoadmapItemType.Roadmap && parentDemandId.HasValue)
+            throw new ArgumentException("Roadmap items cannot have a parent.", nameof(parentDemandId));
+
+        if (itemType != RoadmapItemType.Roadmap && !parentDemandId.HasValue)
+            throw new ArgumentException("Epic and demand items require a parent.", nameof(parentDemandId));
+
+        if (itemType == RoadmapItemType.Demand && (!projectId.HasValue || projectId.Value == Guid.Empty))
+            throw new ArgumentException("Demand items require a project.", nameof(projectId));
+    }
 }

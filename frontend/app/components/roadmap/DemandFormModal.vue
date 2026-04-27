@@ -2,6 +2,7 @@
 import type {
   RoadmapDemand,
   RoadmapProject,
+  RoadmapItemType,
   DemandDependencyOption,
   DemandFormData,
   DemandType,
@@ -20,6 +21,7 @@ import type {
 } from '~/types/roadmap'
 
 type DemandFormState = Omit<DemandFormData, 'classification'> & {
+  itemType: RoadmapItemType | ''
   classification: DemandClassification | ''
 }
 
@@ -46,6 +48,9 @@ const toast = useToast()
 const props = defineProps<{
   open: boolean
   projects: RoadmapProject[]
+  defaultItemType?: RoadmapItemType
+  roadmapOptions?: Array<{ id: string, title: string }>
+  epicOptions?: Array<{ id: string, title: string, roadmapTitle?: string }>
   dependencyOptions: DemandDependencyOption[]
   customerSuggestions: string[]
   demand?: RoadmapDemand | null
@@ -61,7 +66,30 @@ const emit = defineEmits<{
 }>()
 
 const isEdit = computed(() => !!props.demand)
-const title = computed(() => isEdit.value ? 'Editar Demanda' : 'Nova Demanda')
+const itemTypeOptions = [
+  { value: 'Roadmap', label: 'Roadmap' },
+  { value: 'Epic', label: 'Épico' },
+  { value: 'Demand', label: 'Demanda' }
+]
+
+const itemTypeLabels: Record<RoadmapItemType, string> = {
+  Roadmap: 'Roadmap',
+  Epic: 'Épico',
+  Demand: 'Demanda'
+}
+
+const hasSelectedItemType = computed(() => form.itemType !== '')
+const isRoadmap = computed(() => form.itemType === 'Roadmap')
+const isEpic = computed(() => form.itemType === 'Epic')
+const isDemand = computed(() => form.itemType === 'Demand')
+
+const title = computed(() => {
+  if (!hasSelectedItemType.value)
+    return isEdit.value ? 'Editar item' : 'Novo Item'
+
+  const itemLabel = itemTypeLabels[form.itemType as RoadmapItemType]
+  return isEdit.value ? `Editar ${itemLabel}` : `Novo ${itemLabel}`
+})
 
 const currentYear = new Date().getFullYear()
 const quarters = [
@@ -132,7 +160,7 @@ const resultTabs = computed(() => {
     { value: 'general', label: 'Geral' }
   ]
 
-  if (isEdit.value)
+  if (hasSelectedItemType.value && isEdit.value)
     tabs.push({ value: 'status', label: 'Status' })
 
   return tabs
@@ -149,13 +177,15 @@ const deprioritizationReasonRequired = computed(() => form.status === 'Depriorit
 const deliveryDateRequired = computed(() => form.status === 'Done')
 
 const form = reactive<DemandFormState>({
+  itemType: '',
+  parentDemandId: undefined,
   title: '',
   description: '',
   projectId: '',
   quarterYear: currentYear,
   quarterNumber: 1,
   type: 'Planned',
-  classification: '',
+  classification: 'Strategic',
   productIds: [],
   status: 'Backlog',
   observation: '',
@@ -172,6 +202,24 @@ const form = reactive<DemandFormState>({
   problemClarity: undefined,
   hasNoKpi: false,
   noKpiClassification: undefined
+})
+
+const parentOptions = computed(() => {
+  if (!hasSelectedItemType.value)
+    return []
+
+  if (form.itemType === 'Epic') {
+    return (props.roadmapOptions ?? []).map(option => ({ value: option.id, label: option.title }))
+  }
+
+  if (form.itemType === 'Demand') {
+    return (props.epicOptions ?? []).map(option => ({
+      value: option.id,
+      label: option.roadmapTitle ? `${option.roadmapTitle} · ${option.title}` : option.title
+    }))
+  }
+
+  return []
 })
 
 const kpiLinkEdits = ref<EditableDemandKpiLink[]>([])
@@ -257,7 +305,7 @@ const productsForProject = computed(() =>
 )
 
 function syncSingleProductSelection() {
-  if (isEdit.value)
+  if (isEdit.value || !isDemand.value)
     return
 
   if (productsForProject.value.length === 1) {
@@ -275,9 +323,11 @@ watch(() => props.open, (open) => {
   showSubmitHint.value = false
 
   if (props.demand) {
+    form.itemType = props.demand.itemType
+    form.parentDemandId = props.demand.parentDemandId
     form.title = props.demand.title
     form.description = props.demand.description ?? ''
-    form.projectId = props.demand.projectId
+    form.projectId = props.demand.projectId ?? ''
     form.quarterYear = props.demand.quarterYear
     form.quarterNumber = props.demand.quarterNumber
     form.type = props.demand.type
@@ -309,13 +359,15 @@ watch(() => props.open, (open) => {
     customerInput.value = ''
   }
   else {
+    form.itemType = props.defaultItemType ?? ''
+    form.parentDemandId = undefined
     form.title = ''
     form.description = ''
     form.projectId = props.defaultProjectId ?? props.projects[0]?.id ?? ''
     form.quarterYear = props.defaultQuarterYear ?? currentYear
     form.quarterNumber = props.defaultQuarterNumber ?? 1
     form.type = 'Planned'
-    form.classification = ''
+    form.classification = 'Strategic'
     form.productIds = []
     form.status = 'Backlog'
     form.observation = ''
@@ -341,6 +393,49 @@ watch(() => props.open, (open) => {
 })
 
 watch(() => form.projectId, () => {
+  syncSingleProductSelection()
+})
+
+watch(() => form.itemType, (itemType) => {
+  if (!itemType) {
+    form.parentDemandId = undefined
+    form.projectId = ''
+    form.productIds = []
+    form.title = ''
+    form.description = ''
+    form.type = 'Planned'
+    form.classification = 'Strategic'
+    form.status = 'Backlog'
+    form.hours = undefined
+    form.customers = []
+    form.promisedDate = ''
+    return
+  }
+
+  if (itemType === 'Roadmap') {
+    form.parentDemandId = undefined
+    form.projectId = ''
+    form.productIds = []
+    form.type = 'Planned'
+    form.classification = 'Strategic'
+    form.hours = undefined
+    form.customers = []
+    form.promisedDate = ''
+    return
+  }
+
+  if (itemType === 'Epic') {
+    form.projectId = ''
+    form.productIds = []
+    form.type = 'Planned'
+    form.hours = undefined
+    return
+  }
+
+  form.classification = 'Strategic'
+  if (!form.projectId)
+    form.projectId = props.defaultProjectId ?? props.projects[0]?.id ?? ''
+
   syncSingleProductSelection()
 })
 
@@ -429,10 +524,12 @@ function removeCustomerTag(tag: string) {
 }
 
 function toggleProduct(id: string, checked: boolean) {
-  if (checked)
-    form.productIds = [...form.productIds, id]
-  else
-    form.productIds = form.productIds.filter(p => p !== id)
+  if (checked) {
+    form.productIds = [id]
+    return
+  }
+
+  form.productIds = form.productIds.filter(p => p !== id)
 }
 
 function toggleDependency(demandId: string, checked: boolean) {
@@ -835,13 +932,17 @@ function isKpiLinkComplete(link: EditableDemandKpiLink) {
 }
 
 const missingSubmitReason = computed(() => {
+  if (!form.itemType)
+    return 'Selecione o tipo do item'
   if (!form.title)
-    return 'Informe o título da demanda'
-  if (!form.projectId)
+    return `Informe o título ${isRoadmap.value ? 'do roadmap' : isEpic.value ? 'do épico' : 'da demanda'}`
+  if (!isRoadmap.value && !form.parentDemandId)
+    return isEpic.value ? 'Selecione o roadmap pai' : 'Selecione o épico pai'
+  if (isDemand.value && !form.projectId)
     return 'Selecione o projeto'
-  if (!form.classification)
+  if (isEpic.value && !form.classification)
     return 'Selecione a classificação'
-  if (form.productIds.length === 0)
+  if (isDemand.value && form.productIds.length === 0)
     return 'Selecione ao menos um produto'
   if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
     return 'Selecione o motivo da despriorização'
@@ -856,7 +957,14 @@ const missingSubmitReason = computed(() => {
 })
 
 const isSubmitDisabled = computed(() => !!missingSubmitReason.value)
-const submitButtonLabel = computed(() => isEdit.value ? 'Editar demanda' : 'Criar demanda')
+const submitButtonLabel = computed(() => {
+  if (!form.itemType)
+    return isEdit.value ? 'Salvar item' : 'Criar item'
+
+  return isEdit.value
+    ? `Salvar ${itemTypeLabels[form.itemType as RoadmapItemType]}`
+    : `Criar ${itemTypeLabels[form.itemType as RoadmapItemType]}`
+})
 
 const isSubmitting = ref(false)
 
@@ -905,8 +1013,14 @@ async function handleSubmit() {
   if (isSubmitDisabled.value) return
   isSubmitting.value = true
   try {
+    if (!form.itemType)
+      return
+
     emit('submit', {
       ...form,
+      itemType: form.itemType,
+      projectId: form.projectId || undefined,
+      parentDemandId: form.parentDemandId || undefined,
       hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
       classification: form.classification as DemandClassification
     })
@@ -945,13 +1059,39 @@ async function handleSubmit() {
         <template v-if="activeTab === 'general'">
         <section class="space-y-4">
           <div>
-            <h3 class="text-sm font-semibold text-highlighted">Dados da demanda</h3>
+            <h3 class="text-sm font-semibold text-highlighted">Dados do item</h3>
           </div>
 
+          <div class="grid gap-3 md:grid-cols-2">
+            <UFormField label="Tipo" required>
+              <USelect
+                v-model="form.itemType"
+                :items="itemTypeOptions"
+                placeholder="Selecione"
+                class="w-full"
+                :disabled="isEdit"
+              />
+            </UFormField>
+
+            <UFormField v-if="hasSelectedItemType && !isRoadmap" :label="isEpic ? 'Roadmap pai' : 'Épico pai'" required>
+              <USelect
+                v-model="form.parentDemandId"
+                :items="parentOptions"
+                placeholder="Selecione"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+
+          <div v-if="!hasSelectedItemType" class="rounded-xl border border-dashed border-default bg-elevated/40 px-4 py-6 text-sm text-muted">
+            Selecione o tipo do item para carregar os campos de cadastro.
+          </div>
+
+          <div v-if="hasSelectedItemType" class="contents">
           <UFormField label="Título" required>
             <UInput
               v-model="form.title"
-              placeholder="Descreva a demanda brevemente"
+              :placeholder="isRoadmap ? 'Nome do roadmap' : isEpic ? 'Nome do épico' : 'Descreva a demanda brevemente'"
               class="w-full"
             />
           </UFormField>
@@ -965,8 +1105,8 @@ async function handleSubmit() {
             />
           </UFormField>
 
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <UFormField label="Projeto" required>
+          <div v-if="!isRoadmap" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <UFormField v-if="isDemand" label="Projeto" required>
               <USelect
                 v-model="form.projectId"
                 :items="projects.map(p => ({ value: p.id, label: p.name }))"
@@ -976,7 +1116,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField label="Quarter" required>
+            <UFormField v-if="isDemand" label="Quarter" required>
               <USelect
                 v-model="selectedQuarter"
                 :items="quarters"
@@ -985,7 +1125,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField label="Tipo" required>
+            <UFormField v-if="isDemand" label="Tipo" required>
               <USelect
                 v-model="form.type as DemandType"
                 :items="typeOptions"
@@ -993,7 +1133,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField label="Classificação" required>
+            <UFormField v-if="isEpic" label="Classificação" required>
               <USelect
                 v-model="form.classification"
                 :items="classificationOptions"
@@ -1003,7 +1143,25 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div v-if="isRoadmap" class="grid gap-3 md:grid-cols-2">
+            <UFormField label="Status">
+              <USelect
+                v-model="form.status as DemandStatus"
+                :items="statusOptions"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Issue (Jira)">
+              <UInput
+                v-model="form.jiraIssue"
+                placeholder="Ex: ROADMAP-123"
+                class="w-full"
+              />
+            </UFormField>
+          </div>
+
+          <div v-if="!isRoadmap" class="grid grid-cols-2 gap-3 md:grid-cols-4">
             <UFormField label="">
               <div class="space-y-1.5">
                 <div class="flex items-center gap-1.5">
@@ -1037,7 +1195,7 @@ async function handleSubmit() {
               </div>
             </UFormField>
 
-            <UFormField label="Issue (Jira)">
+            <UFormField v-if="isEpic" label="Issue (Jira)">
               <UInput
                 v-model="form.jiraIssue"
                 placeholder="Ex: PROJ-1234"
@@ -1045,7 +1203,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField label="Horas">
+            <UFormField v-if="isDemand" label="Horas">
               <UInput
                 :model-value="form.hours ?? ''"
                 type="number"
@@ -1057,7 +1215,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField label="Data prometida">
+            <UFormField v-if="isEpic" label="Data prometida">
               <UInput
                 v-model="form.promisedDate"
                 type="date"
@@ -1066,7 +1224,7 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <UFormField label="Clientes envolvidos">
+          <UFormField v-if="isEpic" label="Clientes envolvidos">
             <div class="space-y-2">
               <div class="rounded-lg border border-default bg-elevated p-2">
                 <div class="flex min-h-10 flex-wrap items-center gap-2">
@@ -1125,7 +1283,7 @@ async function handleSubmit() {
             </div>
           </UFormField>
 
-          <UFormField label="Produtos" required>
+          <UFormField v-if="isDemand" label="Produto" required>
             <div
               v-if="productsForProject.length"
               class="flex flex-wrap gap-2 p-3 rounded-lg border border-default bg-elevated"
@@ -1155,13 +1313,14 @@ async function handleSubmit() {
               Selecione um projeto primeiro.
             </p>
           </UFormField>
+          </div>
         </section>
 
-        <section class="space-y-4 border-t border-default pt-4">
+        <section v-if="hasSelectedItemType && !isRoadmap" class="space-y-4 border-t border-default pt-4">
           <div>
-            <h3 class="text-sm font-semibold text-highlighted">Dependências entre demandas</h3>
+            <h3 class="text-sm font-semibold text-highlighted">Dependências entre épicos e demandas</h3>
             <p class="mt-1 text-xs text-muted">
-              Relacione demandas que precisam ser concluídas antes desta seguir adiante.
+              Relacione épicos ou demandas que precisam ser concluídos antes deste item seguir adiante.
             </p>
           </div>
 
@@ -1216,7 +1375,7 @@ async function handleSubmit() {
               </label>
 
               <p v-if="!filteredDependencyOptions.length" class="text-xs italic text-muted">
-                Nenhuma demanda encontrada para vincular.
+                Nenhum item encontrado para vincular.
               </p>
             </div>
           </div>
@@ -1238,7 +1397,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField label="Impedimento">
+            <UFormField v-if="!isRoadmap" label="Impedimento">
               <label class="flex h-10 items-center gap-2 cursor-pointer select-none">
                 <input
                   v-model="form.isBlocked"
@@ -1251,7 +1410,7 @@ async function handleSubmit() {
               </label>
             </UFormField>
 
-            <UFormField v-if="deliveryDateRequired" label="Data prometida">
+            <UFormField v-if="!isRoadmap && deliveryDateRequired" label="Data prometida">
               <UInput
                 v-model="form.promisedDate"
                 type="date"
@@ -1259,7 +1418,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="deliveryDateRequired" label="Data de entrega" required>
+            <UFormField v-if="!isRoadmap && deliveryDateRequired" label="Data de entrega" required>
               <UInput
                 v-model="form.deliveryDate"
                 type="date"

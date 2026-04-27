@@ -121,6 +121,8 @@ watch(() => formState.hasNoKpi, (hasNoKpi) => {
 
 function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFormData>): DemandFormData {
   return {
+    itemType: demand.itemType,
+    parentDemandId: demand.parentDemandId,
     title: demand.title,
     description: demand.description ?? '',
     projectId: demand.projectId,
@@ -411,7 +413,7 @@ function isKpiLinkComplete(link: EditableDemandKpiLink) {
 
 const setupSubmitReason = computed(() => {
   if (!props.demand)
-    return 'Demanda não encontrada.'
+    return 'Épico não encontrado.'
   if (formState.hasNoKpi)
     return null
   if (!formState.hasNoKpi && persistedKpiLinks.value.length === 0 && kpiLinkDrafts.value.length === 0)
@@ -648,13 +650,10 @@ const persistedKpiLinks = computed(() => props.demand?.kpiLinks ?? [])
 
 const measurementSectionState = computed(() => {
   if (!props.demand?.id)
-    return { enabled: false, message: 'Demanda não encontrada.', tone: 'default' as const }
+    return { enabled: false, message: 'Épico não encontrado.', tone: 'default' as const }
 
   if (formState.hasNoKpi || persistedKpiLinks.value.length === 0)
-    return { enabled: false, message: 'A apuração só fica disponível para demandas com KPI vinculado.', tone: 'default' as const }
-
-  if (props.demand.status !== 'Done')
-    return { enabled: false, message: 'A apuração fica disponível após a entrega da demanda.', tone: 'error' as const }
+    return { enabled: false, message: 'A apuração só fica disponível para épicos com KPI vinculado.', tone: 'default' as const }
 
   return { enabled: true, message: '', tone: 'default' as const }
 })
@@ -1123,9 +1122,9 @@ async function deleteMeasurement(measurementId: string) {
     <UCard :ui="{ body: 'p-5 sm:p-6' }">
       <div class="space-y-4">
         <div>
-          <h2 class="text-base font-semibold text-highlighted">Apuração pós-entrega</h2>
+          <h2 class="text-base font-semibold text-highlighted">Apuração de KPI</h2>
           <p class="mt-1 text-sm text-muted">
-            Registre as apurações dos KPIs vinculados. A mais recente passa a ser considerada a apuração atual.
+            Registre as apurações dos KPIs vinculados a qualquer momento. A mais recente passa a ser considerada a apuração atual.
           </p>
         </div>
 

@@ -18,8 +18,15 @@ public sealed class ReorderRoadmapDemandCommandHandler(
         var demand = await demandRepository.GetByIdAsync(request.DemandId, cancellationToken)
             ?? throw new NotFoundException("RoadmapDemand", request.DemandId);
 
+        if (demand.ItemType != RoadmapItemType.Demand || !demand.ProjectId.HasValue)
+        {
+            throw new ValidationException([
+                new ValidationFailure(nameof(request.DemandId), "Only demand items can be reordered within a quarter.")
+            ]);
+        }
+
         var scopedDemands = await demandRepository.GetByScopeTrackedAsync(
-            demand.ProjectId,
+            demand.ProjectId.Value,
             demand.QuarterYear,
             demand.QuarterNumber,
             cancellationToken);

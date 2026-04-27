@@ -1,5 +1,6 @@
 export type DemandStatus = 'Backlog' | 'InProgress' | 'Done' | 'Deprioritized'
 export type DemandType = 'Planned' | 'Spillover' | 'Unplanned' | 'Additional'
+export type RoadmapItemType = 'Roadmap' | 'Epic' | 'Demand'
 export type DemandClassification =
   | 'TechnicalDebtSecurity'
   | 'Strategic'
@@ -44,7 +45,8 @@ export interface RoadmapProject {
 
 export interface DemandDependency {
   demandId: string
-  projectId: string
+  itemType: RoadmapItemType
+  projectId?: string
   projectName: string
   title: string
   quarterLabel: string
@@ -55,7 +57,8 @@ export interface DemandDependency {
 
 export interface DemandDependencyOption {
   demandId: string
-  projectId: string
+  itemType: RoadmapItemType
+  projectId?: string
   projectName: string
   title: string
   quarterLabel: string
@@ -82,9 +85,16 @@ export interface DemandTradeOffHistory {
 
 export interface RoadmapDemand {
   id: string
+  itemType: RoadmapItemType
+  parentDemandId?: string
+  parentTitle?: string
+  roadmapId?: string
+  roadmapTitle?: string
+  epicId?: string
+  epicTitle?: string
   title: string
   description?: string
-  projectId: string
+  projectId?: string
   quarterLabel: string
   quarterYear: number
   quarterNumber: number
@@ -135,9 +145,11 @@ export interface RoadmapCapacitySummary {
 }
 
 export interface DemandFormData {
+  itemType: RoadmapItemType
+  parentDemandId?: string
   title: string
   description: string
-  projectId: string
+  projectId?: string
   quarterYear: number
   quarterNumber: number
   type: DemandType

@@ -15,6 +15,7 @@ internal static class RoadmapDemandDtoMapper
         IEnumerable<KpiMeasurement>? kpiMeasurements = null,
         IEnumerable<DemandTradeOff>? tradeOffs = null)
     {
+        var hierarchy = ResolveHierarchy(demand, demandsById);
         var effectivePromisedDate = GetEffectivePromisedDate(demand);
         var today = DateOnly.FromDateTime(DateTime.Today);
         var isDeliveredLate = demand.Status == DemandStatus.Done
@@ -97,6 +98,13 @@ internal static class RoadmapDemandDtoMapper
 
         return new RoadmapDemandDto(
             demand.Id,
+            demand.ItemType.ToString(),
+            demand.ParentDemandId,
+            hierarchy.ParentTitle,
+            hierarchy.RoadmapId,
+            hierarchy.RoadmapTitle,
+            hierarchy.EpicId,
+            hierarchy.EpicTitle,
             demand.Title,
             demand.Description,
             demand.ProjectId,
@@ -169,12 +177,48 @@ internal static class RoadmapDemandDtoMapper
 
         return new DemandDependencyDto(
             relatedDemand.Id,
+            relatedDemand.ItemType.ToString(),
             relatedDemand.ProjectId,
-            projectNamesById.TryGetValue(relatedDemand.ProjectId, out var projectName) ? projectName : string.Empty,
+            relatedDemand.ProjectId.HasValue && projectNamesById.TryGetValue(relatedDemand.ProjectId.Value, out var projectName) ? projectName : string.Empty,
             relatedDemand.Title,
             relatedDemand.Quarter.Label,
             relatedDemand.QuarterYear,
             relatedDemand.QuarterNumber,
             relatedDemand.Status.ToString());
+    }
+
+    private static (Guid? RoadmapId, string? RoadmapTitle, Guid? EpicId, string? EpicTitle, string? ParentTitle) ResolveHierarchy(
+        RoadmapDemand demand,
+        IReadOnlyDictionary<Guid, RoadmapDemand> demandsById)
+    {
+        RoadmapDemand? parent = null;
+        if (demand.ParentDemandId.HasValue)
+            demandsById.TryGetValue(demand.ParentDemandId.Value, out parent);
+
+        if (demand.ItemType == RoadmapItemType.Roadmap)
+        {
+            return (demand.Id, demand.Title, null, null, null);
+        }
+
+        if (demand.ItemType == RoadmapItemType.Epic)
+        {
+            return (
+                parent?.ItemType == RoadmapItemType.Roadmap ? parent.Id : null,
+                parent?.ItemType == RoadmapItemType.Roadmap ? parent.Title : null,
+                demand.Id,
+                demand.Title,
+                parent?.Title);
+        }
+
+        RoadmapDemand? roadmap = null;
+        if (parent?.ParentDemandId.HasValue == true)
+            demandsById.TryGetValue(parent.ParentDemandId.Value, out roadmap);
+
+        return (
+            roadmap?.ItemType == RoadmapItemType.Roadmap ? roadmap.Id : parent?.ItemType == RoadmapItemType.Roadmap ? parent.Id : null,
+            roadmap?.ItemType == RoadmapItemType.Roadmap ? roadmap.Title : parent?.ItemType == RoadmapItemType.Roadmap ? parent.Title : null,
+            parent?.ItemType == RoadmapItemType.Epic ? parent.Id : null,
+            parent?.ItemType == RoadmapItemType.Epic ? parent.Title : null,
+            parent?.Title);
     }
 }

@@ -23,11 +23,32 @@ public sealed class GetDemandsQueryHandler(
         var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
             .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
 
-        var demands = await demandRepository.GetByProjectAsync(
+        var projectScopedDemands = (await demandRepository.GetByProjectAsync(
             request.ProjectId,
             request.QuarterYear,
             request.QuarterNumber,
-            cancellationToken);
+            cancellationToken))
+            .ToList();
+
+        var ancestorIds = new HashSet<Guid>(
+            projectScopedDemands
+                .Where(demand => demand.ParentDemandId.HasValue)
+                .Select(demand => demand.ParentDemandId!.Value));
+
+        var directAncestors = await demandRepository.GetByIdsAsync(ancestorIds, cancellationToken);
+        foreach (var grandParentId in directAncestors
+            .Where(item => item.ParentDemandId.HasValue)
+            .Select(item => item.ParentDemandId!.Value))
+        {
+            ancestorIds.Add(grandParentId);
+        }
+
+        var ancestors = await demandRepository.GetByIdsAsync(ancestorIds, cancellationToken);
+        var demands = projectScopedDemands
+            .Concat(ancestors)
+            .GroupBy(demand => demand.Id)
+            .Select(group => group.First())
+            .ToList();
 
         var demandIds = demands.Select(demand => demand.Id).ToArray();
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync(demandIds, cancellationToken);

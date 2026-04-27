@@ -4,9 +4,11 @@ using ProductHub.Application.Roadmap.DTOs;
 namespace ProductHub.Application.Roadmap.Commands.CreateDemand;
 
 public sealed record CreateRoadmapDemandCommand(
+    string ItemType,
+    Guid? ParentDemandId,
     string Title,
     string? Description,
-    Guid ProjectId,
+    Guid? ProjectId,
     int QuarterYear,
     int QuarterNumber,
     string Type,
