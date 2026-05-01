@@ -52,6 +52,27 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
         builder.Property(x => x.ReplacementDemandId)
             .IsRequired(false);
         builder.Property(x => x.JiraIssue).HasMaxLength(100);
+        var issueLinksConverter = new ValueConverter<IReadOnlyList<RoadmapIssueLink>, string?>(
+            links => JsonSerializer.Serialize(links ?? Array.Empty<RoadmapIssueLink>(), (JsonSerializerOptions?)null),
+            value => ParseIssueLinks(value));
+
+        var issueLinksComparer = new ValueComparer<IReadOnlyList<RoadmapIssueLink>>(
+            (left, right) => ReferenceEquals(left, right)
+                || (left != null && right != null && left.Count == right.Count && left.Zip(right).All(pair => pair.First.Key == pair.Second.Key && pair.First.Url == pair.Second.Url)),
+            links => links == null
+                ? 0
+                : links.Aggregate(0, (hash, link) => HashCode.Combine(hash, link.Key.GetHashCode(), link.Url.GetHashCode())),
+            links => links == null
+                ? Array.Empty<RoadmapIssueLink>()
+                : links.Select(link => RoadmapIssueLink.Create(link.Key, link.Url)).ToList());
+
+        var issueLinksProperty = builder.Property(x => x.IssueLinks)
+            .HasColumnName("IssueLinksJson");
+        issueLinksProperty.Metadata.SetField("_issueLinks");
+        issueLinksProperty.Metadata.SetPropertyAccessMode(PropertyAccessMode.Field);
+        issueLinksProperty.HasConversion(issueLinksConverter);
+        issueLinksProperty.IsRequired(false);
+        issueLinksProperty.Metadata.SetValueComparer(issueLinksComparer);
         builder.Property(x => x.Hours);
 
         var customersConverter = new ValueConverter<IReadOnlyList<string>, string?>(
@@ -90,7 +111,16 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
             .HasField("_products")
             .UsePropertyAccessMode(PropertyAccessMode.Field);
 
+        builder.Navigation(x => x.ProjectLinks)
+            .HasField("_projectLinks")
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
+
         builder.HasMany(x => x.Products)
+            .WithOne()
+            .HasForeignKey(x => x.DemandId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasMany(x => x.ProjectLinks)
             .WithOne()
             .HasForeignKey(x => x.DemandId)
             .OnDelete(DeleteBehavior.Cascade);
@@ -112,5 +142,20 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
         return value
             .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .ToList();
+    }
+
+    private static IReadOnlyList<RoadmapIssueLink> ParseIssueLinks(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return [];
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<RoadmapIssueLink>>(value) ?? [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
     }
 }

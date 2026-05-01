@@ -17,7 +17,8 @@ import type {
   KpiMeasurement,
   MeasurementResult,
   CreateDemandKpiMeasurementInput,
-  UpdateDemandKpiMeasurementInput
+  UpdateDemandKpiMeasurementInput,
+  IssueLinkInput
 } from '~/types/roadmap'
 
 type DemandFormState = Omit<DemandFormData, 'classification'> & {
@@ -182,6 +183,7 @@ const form = reactive<DemandFormState>({
   title: '',
   description: '',
   projectId: '',
+  projectIds: [],
   quarterYear: currentYear,
   quarterNumber: 1,
   type: 'Planned',
@@ -192,6 +194,7 @@ const form = reactive<DemandFormState>({
   deprioritizationReason: undefined,
   replacementDemandId: undefined,
   jiraIssue: '',
+  issueLinks: [],
   hours: undefined,
   customers: [],
   dependencyDemandIds: [],
@@ -328,6 +331,7 @@ watch(() => props.open, (open) => {
     form.title = props.demand.title
     form.description = props.demand.description ?? ''
     form.projectId = props.demand.projectId ?? ''
+    form.projectIds = props.demand.projectIds ?? (props.demand.projectId ? [props.demand.projectId] : [])
     form.quarterYear = props.demand.quarterYear
     form.quarterNumber = props.demand.quarterNumber
     form.type = props.demand.type
@@ -338,6 +342,9 @@ watch(() => props.open, (open) => {
     form.deprioritizationReason = props.demand.deprioritizationReason ?? undefined
     form.replacementDemandId = props.demand.replacementDemandId ?? undefined
     form.jiraIssue = props.demand.jiraIssue ?? ''
+    form.issueLinks = props.demand.issueLinks?.length
+      ? props.demand.issueLinks.map(issue => ({ key: issue.key, url: issue.url ?? '' }))
+      : (props.demand.jiraIssue ? [{ key: props.demand.jiraIssue, url: '' }] : [])
     form.hours = props.demand.hours ?? undefined
     form.customers = props.demand.customers ?? []
     form.dependencyDemandIds = props.demand.dependsOn.map(item => item.demandId)
@@ -345,7 +352,9 @@ watch(() => props.open, (open) => {
     form.blockedReason = props.demand.blockedReason ?? ''
     form.promisedDate = props.demand.promisedDate ?? ''
     form.deliveryDate = props.demand.deliveryDate ?? ''
-    form.problemClarity = props.demand.problemClarity ?? undefined
+    form.problemClarity = props.demand.itemType === 'Epic'
+      ? props.demand.problemClarity ?? undefined
+      : undefined
     form.hasNoKpi = props.demand.hasNoKpi ?? false
     form.noKpiClassification = props.demand.noKpiClassification ?? undefined
     kpiLinkEdits.value = (props.demand.kpiLinks ?? []).map(l => toEditableKpiLink({
@@ -364,6 +373,7 @@ watch(() => props.open, (open) => {
     form.title = ''
     form.description = ''
     form.projectId = props.defaultProjectId ?? props.projects[0]?.id ?? ''
+    form.projectIds = props.defaultProjectId ? [props.defaultProjectId] : []
     form.quarterYear = props.defaultQuarterYear ?? currentYear
     form.quarterNumber = props.defaultQuarterNumber ?? 1
     form.type = 'Planned'
@@ -374,6 +384,7 @@ watch(() => props.open, (open) => {
     form.deprioritizationReason = undefined
     form.replacementDemandId = undefined
     form.jiraIssue = ''
+    form.issueLinks = []
     form.hours = undefined
     form.customers = []
     form.dependencyDemandIds = []
@@ -400,6 +411,7 @@ watch(() => form.itemType, (itemType) => {
   if (!itemType) {
     form.parentDemandId = undefined
     form.projectId = ''
+    form.projectIds = []
     form.productIds = []
     form.title = ''
     form.description = ''
@@ -409,35 +421,67 @@ watch(() => form.itemType, (itemType) => {
     form.hours = undefined
     form.customers = []
     form.promisedDate = ''
+    form.issueLinks = []
     return
   }
 
   if (itemType === 'Roadmap') {
     form.parentDemandId = undefined
     form.projectId = ''
+    form.projectIds = props.defaultProjectId ? [props.defaultProjectId] : []
     form.productIds = []
     form.type = 'Planned'
     form.classification = 'Strategic'
     form.hours = undefined
     form.customers = []
     form.promisedDate = ''
+    form.problemClarity = undefined
+    form.issueLinks = []
     return
   }
 
   if (itemType === 'Epic') {
     form.projectId = ''
+    form.projectIds = form.projectIds?.length ? form.projectIds : (props.defaultProjectId ? [props.defaultProjectId] : [])
     form.productIds = []
     form.type = 'Planned'
     form.hours = undefined
+    form.issueLinks = []
     return
   }
 
   form.classification = 'Strategic'
+  form.problemClarity = undefined
+  form.projectIds = []
   if (!form.projectId)
     form.projectId = props.defaultProjectId ?? props.projects[0]?.id ?? ''
 
   syncSingleProductSelection()
 })
+
+function addIssueLink() {
+  form.issueLinks = [...(form.issueLinks ?? []), { key: '', url: '' }]
+}
+
+function removeIssueLink(index: number) {
+  form.issueLinks = (form.issueLinks ?? []).filter((_, currentIndex) => currentIndex !== index)
+}
+
+function normalizeIssueLinks(issueLinks?: Array<{ key: string, url: string }>): IssueLinkInput[] {
+  return (issueLinks ?? [])
+    .map(issue => ({ key: issue.key.trim(), url: issue.url.trim() }))
+    .filter(issue => issue.key || issue.url)
+}
+
+function isValidIssueUrl(url: string) {
+  try {
+    const parsed = new URL(url)
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+  }
+  catch {
+    return false
+  }
+}
 
 watch(() => form.isBlocked, (val) => {
   if (!val) form.blockedReason = ''
@@ -503,6 +547,21 @@ const selectedDependencyOptions = computed(() => {
   return props.dependencyOptions.filter(option => selectedIds.has(option.demandId))
 })
 
+const selectedNonDemandProjects = computed(() =>
+  props.projects.filter(project => (form.projectIds ?? []).includes(project.id))
+)
+
+const nonDemandProjectsLabel = computed(() => {
+  const count = selectedNonDemandProjects.value.length
+  if (!count)
+    return 'Selecione os projetos'
+
+  if (count === 1)
+    return selectedNonDemandProjects.value[0]!.name
+
+  return `${count} projetos`
+})
+
 function setCustomerTags(tags: string[]) {
   form.customers = [...new Set(tags.map(tag => tag.trim()).filter(Boolean))]
 }
@@ -543,6 +602,17 @@ function toggleDependency(demandId: string, checked: boolean) {
 
 function removeDependency(demandId: string) {
   form.dependencyDemandIds = (form.dependencyDemandIds ?? []).filter(id => id !== demandId)
+}
+
+function toggleProjectAssociation(projectId: string, checked: boolean) {
+  const nextIds = new Set(form.projectIds ?? [])
+
+  if (checked)
+    nextIds.add(projectId)
+  else
+    nextIds.delete(projectId)
+
+  form.projectIds = Array.from(nextIds)
 }
 
 function updateHours(value: string | number | null | undefined) {
@@ -953,6 +1023,12 @@ const missingSubmitReason = computed(() => {
   if (form.isBlocked && !form.blockedReason)
     return 'Preencha o motivo do impedimento'
 
+  const normalizedIssueLinks = normalizeIssueLinks(form.issueLinks)
+  if (normalizedIssueLinks.some(issue => !issue.key || !issue.url))
+    return 'Preencha a issue e o link em cada linha informada'
+  if (normalizedIssueLinks.some(issue => !isValidIssueUrl(issue.url)))
+    return 'Informe links válidos para todas as issues'
+
   return null
 })
 
@@ -1020,8 +1096,12 @@ async function handleSubmit() {
       ...form,
       itemType: form.itemType,
       projectId: form.projectId || undefined,
+      projectIds: form.itemType === 'Demand' ? [] : (form.projectIds ?? []),
       parentDemandId: form.parentDemandId || undefined,
+      jiraIssue: undefined,
+      issueLinks: normalizeIssueLinks(form.issueLinks),
       hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
+      problemClarity: form.itemType === 'Epic' ? form.problemClarity : undefined,
       classification: form.classification as DemandClassification
     })
   }
@@ -1105,6 +1185,38 @@ async function handleSubmit() {
             />
           </UFormField>
 
+          <UFormField v-if="!isDemand" label="Projetos">
+            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+              <UButton
+                type="button"
+                variant="outline"
+                color="neutral"
+                trailing-icon="i-lucide-chevron-down"
+                class="w-full justify-between"
+              >
+                <span class="truncate">{{ nonDemandProjectsLabel }}</span>
+              </UButton>
+
+              <template #content>
+                <div class="min-w-72 space-y-1 p-2">
+                  <label
+                    v-for="project in projects"
+                    :key="project.id"
+                    class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-highlighted transition-colors hover:bg-elevated"
+                  >
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 accent-primary"
+                      :checked="form.projectIds?.includes(project.id)"
+                      @change="(event) => toggleProjectAssociation(project.id, (event.target as HTMLInputElement).checked)"
+                    >
+                    <span class="truncate">{{ project.name }}</span>
+                  </label>
+                </div>
+              </template>
+            </UPopover>
+          </UFormField>
+
           <div v-if="!isRoadmap" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <UFormField v-if="isDemand" label="Projeto" required>
               <USelect
@@ -1151,18 +1263,61 @@ async function handleSubmit() {
                 class="w-full"
               />
             </UFormField>
+          </div>
 
-            <UFormField label="Issue (Jira)">
+          <div v-else class="grid gap-3 md:grid-cols-3">
+            <UFormField v-if="isEpic || isDemand" label="Data prometida">
               <UInput
-                v-model="form.jiraIssue"
-                placeholder="Ex: ROADMAP-123"
+                v-model="form.promisedDate"
+                type="date"
                 class="w-full"
               />
             </UFormField>
           </div>
 
+          <UFormField :label="isRoadmap ? 'Issues' : 'Issues (Jira)'"><div class="space-y-2">
+            <div
+              v-for="(issue, index) in form.issueLinks"
+              :key="`${index}-${issue.key}-${issue.url}`"
+              class="grid gap-2 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)_auto]"
+            >
+              <UInput
+                v-model="issue.key"
+                :placeholder="isEpic ? 'Ex: EPIC-123' : isDemand ? 'Ex: DEM-123' : 'Ex: ROADMAP-123'"
+                class="w-full"
+              />
+              <UInput
+                v-model="issue.url"
+                placeholder="https://..."
+                class="w-full"
+              />
+              <UButton
+                type="button"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-trash-2"
+                aria-label="Remover issue"
+                @click="removeIssueLink(index)"
+              />
+            </div>
+
+            <div class="flex items-center justify-between gap-3">
+              <p class="text-xs text-muted">Cada issue informada deve ter um link absoluto.</p>
+              <UButton
+                type="button"
+                size="sm"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-plus"
+                @click="addIssueLink"
+              >
+                Adicionar issue
+              </UButton>
+            </div>
+          </div></UFormField>
+
           <div v-if="!isRoadmap" class="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <UFormField label="">
+            <UFormField v-if="isEpic" label="">
               <div class="space-y-1.5">
                 <div class="flex items-center gap-1.5">
                   <span class="text-sm text-highlighted">Nota da clareza</span>
@@ -1195,14 +1350,6 @@ async function handleSubmit() {
               </div>
             </UFormField>
 
-            <UFormField v-if="isEpic" label="Issue (Jira)">
-              <UInput
-                v-model="form.jiraIssue"
-                placeholder="Ex: PROJ-1234"
-                class="w-full"
-              />
-            </UFormField>
-
             <UFormField v-if="isDemand" label="Horas">
               <UInput
                 :model-value="form.hours ?? ''"
@@ -1212,14 +1359,6 @@ async function handleSubmit() {
                 placeholder="Ex: 8"
                 class="w-full"
                 @update:model-value="updateHours"
-              />
-            </UFormField>
-
-            <UFormField v-if="isEpic" label="Data prometida">
-              <UInput
-                v-model="form.promisedDate"
-                type="date"
-                class="w-full"
               />
             </UFormField>
           </div>
@@ -1408,14 +1547,6 @@ async function handleSubmit() {
                   {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
                 </span>
               </label>
-            </UFormField>
-
-            <UFormField v-if="!isRoadmap && deliveryDateRequired" label="Data prometida">
-              <UInput
-                v-model="form.promisedDate"
-                type="date"
-                class="w-full"
-              />
             </UFormField>
 
             <UFormField v-if="!isRoadmap && deliveryDateRequired" label="Data de entrega" required>

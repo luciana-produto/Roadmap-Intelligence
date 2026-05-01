@@ -37,6 +37,9 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.ProjectId)
             .NotEmpty().When(x => x.ItemType == nameof(RoadmapItemType.Demand))
             .WithMessage("A demand requires a project.");
+        RuleFor(x => x.ProjectIds)
+            .Must(ids => ids == null || ids.Where(id => id != Guid.Empty).Distinct().Count() == ids.Count)
+            .WithMessage("Project associations must be unique.");
         RuleFor(x => x)
             .Must(x => beValidQuarter(x.QuarterYear, x.QuarterNumber))
             .WithMessage("Quarter must be between Q1 and Q4, or Backlog.");
@@ -65,9 +68,19 @@ public sealed class UpdateRoadmapDemandCommandValidator
             .NotNull().WithMessage("Delivery date is required when status is Done.")
             .When(x => x.Status is "Done");
         RuleFor(x => x.PromisedDate)
-            .Must((command, promisedDate) => !promisedDate.HasValue || command.QuarterNumber > 0)
+            .Must((command, promisedDate) => !promisedDate.HasValue || command.ItemType != nameof(RoadmapItemType.Demand) || command.QuarterNumber > 0)
             .WithMessage("Promised date requires a prioritized quarter.");
         RuleFor(x => x.JiraIssue).MaximumLength(100);
+                RuleForEach(x => x.IssueLinks).ChildRules(link =>
+                {
+                    link.RuleFor(x => x.Key)
+                        .NotEmpty().WithMessage("Issue key is required.")
+                        .MaximumLength(100).WithMessage("Issue key must have a maximum length of 100 characters.");
+                    link.RuleFor(x => x.Url)
+                        .NotEmpty().WithMessage("Issue link is required.")
+                        .MaximumLength(1000).WithMessage("Issue link must have a maximum length of 1000 characters.")
+                        .Must(url => Uri.TryCreate(url, UriKind.Absolute, out _)).WithMessage("Issue link must be a valid absolute URL.");
+                });
         RuleFor(x => x.Hours).GreaterThan(0).When(x => x.Hours.HasValue);
         RuleFor(x => x.Customers)
             .Must(customers => customers == null || string.Join(", ", customers).Length <= 500)

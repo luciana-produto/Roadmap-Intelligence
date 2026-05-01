@@ -6,6 +6,8 @@ namespace ProductHub.Domain.Roadmap;
 public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
 {
     private List<RoadmapDemandProduct> _products = [];
+    private List<RoadmapDemandProject> _projectLinks = [];
+    private IReadOnlyList<RoadmapIssueLink> _issueLinks = [];
 
     public RoadmapItemType ItemType { get; private set; }
     public Guid? ParentDemandId { get; private set; }
@@ -22,6 +24,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public DeprioritizationReason? DeprioritizationReason { get; private set; }
     public Guid? ReplacementDemandId { get; private set; }
     public string? JiraIssue { get; private set; }
+    public IReadOnlyList<RoadmapIssueLink> IssueLinks => _issueLinks;
     public decimal? Hours { get; private set; }
     public IReadOnlyList<string> Customers { get; private set; } = [];
     public bool IsBlocked { get; private set; }
@@ -35,6 +38,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public DateTime? UpdatedAt { get; set; }
 
     public IReadOnlyList<RoadmapDemandProduct> Products => _products.AsReadOnly();
+    public IReadOnlyList<RoadmapDemandProject> ProjectLinks => _projectLinks.AsReadOnly();
     public Quarter Quarter => Quarter.Create(QuarterYear, QuarterNumber);
 
     private RoadmapDemand() { }
@@ -45,6 +49,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         string title,
         string? description,
         Guid? projectId,
+        IEnumerable<Guid>? projectIds,
         int quarterYear,
         int quarterNumber,
         DemandType type,
@@ -52,6 +57,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         IEnumerable<Guid>? productIds,
         int sortOrder = 0,
         string? jiraIssue = null,
+        IEnumerable<RoadmapIssueLink>? issueLinks = null,
         decimal? hours = null,
         IEnumerable<string>? customers = null,
         bool isBlocked = false,
@@ -61,14 +67,14 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         bool hasNoKpi = false,
         NoKpiClassification? noKpiClassification = null)
     {
-        Quarter.Create(quarterYear, quarterNumber);
-
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
         ValidateHierarchy(itemType, parentDemandId, projectId);
         var normalizedProjectId = NormalizeProjectId(itemType, projectId);
+        var normalizedProjectIds = NormalizeProjectIds(itemType, projectIds);
         var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
+        Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
 
         var demand = new RoadmapDemand
@@ -85,6 +91,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             Classification = classification,
             SortOrder = sortOrder,
             JiraIssue = jiraIssue,
+            _issueLinks = NormalizeIssueLinks(issueLinks),
             Hours = normalizedHours,
             Customers = NormalizeCustomers(customers),
             IsBlocked = isBlocked,
@@ -98,6 +105,9 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             .Distinct()
             .Select(id => RoadmapDemandProduct.Create(demand.Id, id))
             .ToList();
+        demand._projectLinks = normalizedProjectIds
+            .Select(id => RoadmapDemandProject.Create(demand.Id, id))
+            .ToList();
         return demand;
     }
 
@@ -107,6 +117,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         string title,
         string? description,
         Guid? projectId,
+        IEnumerable<Guid>? projectIds,
         int quarterYear,
         int quarterNumber,
         DemandStatus status,
@@ -117,6 +128,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DeprioritizationReason? deprioritizationReason = null,
         Guid? replacementDemandId = null,
         string? jiraIssue = null,
+        IEnumerable<RoadmapIssueLink>? issueLinks = null,
         decimal? hours = null,
         IEnumerable<string>? customers = null,
         bool isBlocked = false,
@@ -127,14 +139,14 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         bool hasNoKpi = false,
         NoKpiClassification? noKpiClassification = null)
     {
-        Quarter.Create(quarterYear, quarterNumber);
-
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
         ValidateHierarchy(itemType, parentDemandId, projectId);
         var normalizedProjectId = NormalizeProjectId(itemType, projectId);
+        var normalizedProjectIds = NormalizeProjectIds(itemType, projectIds);
         var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
+        Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
 
         ItemType = itemType;
@@ -153,6 +165,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DeprioritizationReason = NormalizeDeprioritizationReason(status, deprioritizationReason);
         ReplacementDemandId = status == DemandStatus.Deprioritized ? replacementDemandId : null;
         JiraIssue = jiraIssue;
+        _issueLinks = NormalizeIssueLinks(issueLinks);
         Hours = normalizedHours;
         Customers = NormalizeCustomers(customers);
         IsBlocked = isBlocked;
@@ -162,6 +175,9 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;
         NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
+        _projectLinks = normalizedProjectIds
+            .Select(id => RoadmapDemandProject.Create(Id, id))
+            .ToList();
     }
 
     public void ReplaceProducts(IEnumerable<Guid>? productIds)
@@ -212,10 +228,23 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             .ToList()
         ?? [];
 
+    private static IReadOnlyList<RoadmapIssueLink> NormalizeIssueLinks(IEnumerable<RoadmapIssueLink>? issueLinks) =>
+        issueLinks?
+            .Where(issue => !string.IsNullOrWhiteSpace(issue.Key) && !string.IsNullOrWhiteSpace(issue.Url))
+            .GroupBy(issue => issue.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList()
+        ?? [];
+
     private static IReadOnlyList<Guid> NormalizeProductIds(RoadmapItemType itemType, IEnumerable<Guid>? productIds) =>
         itemType == RoadmapItemType.Demand
             ? (productIds ?? []).Where(id => id != Guid.Empty).ToList()
             : [];
+
+    private static IReadOnlyList<Guid> NormalizeProjectIds(RoadmapItemType itemType, IEnumerable<Guid>? projectIds) =>
+        itemType == RoadmapItemType.Demand
+            ? []
+            : (projectIds ?? []).Where(id => id != Guid.Empty).Distinct().ToList();
 
     private static Guid? NormalizeProjectId(RoadmapItemType itemType, Guid? projectId) =>
         itemType == RoadmapItemType.Demand && projectId.HasValue && projectId.Value != Guid.Empty

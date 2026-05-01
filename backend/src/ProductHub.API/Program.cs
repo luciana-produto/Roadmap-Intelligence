@@ -1,5 +1,6 @@
 using Serilog;
 using Serilog.Enrichers.CorrelationId;
+using Microsoft.EntityFrameworkCore;
 using ProductHub.API.Middleware;
 using ProductHub.Application;
 using ProductHub.Infrastructure;
@@ -94,6 +95,7 @@ static async Task InitializeDatabaseAsync(IServiceProvider services, bool hasPer
             using var scope = services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             await db.Database.EnsureCreatedAsync();
+                await ApplySchemaUpdatesAsync(db, hasPersistentDatabase);
             await RoadmapSeeder.SeedAsync(db);
             return;
         }
@@ -112,5 +114,19 @@ static async Task InitializeDatabaseAsync(IServiceProvider services, bool hasPer
     using var finalScope = services.CreateScope();
     var finalDb = finalScope.ServiceProvider.GetRequiredService<AppDbContext>();
     await finalDb.Database.EnsureCreatedAsync();
+        await ApplySchemaUpdatesAsync(finalDb, hasPersistentDatabase);
+
+    static async Task ApplySchemaUpdatesAsync(AppDbContext db, bool hasPersistentDatabase)
+    {
+        if (!hasPersistentDatabase)
+            return;
+
+        await db.Database.ExecuteSqlRawAsync("""
+            IF COL_LENGTH('RoadmapDemands', 'IssueLinksJson') IS NULL
+            BEGIN
+                ALTER TABLE RoadmapDemands ADD IssueLinksJson NVARCHAR(MAX) NULL;
+            END
+            """);
+    }
     await RoadmapSeeder.SeedAsync(finalDb);
 }

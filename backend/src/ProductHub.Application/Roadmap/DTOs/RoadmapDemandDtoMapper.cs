@@ -108,6 +108,9 @@ internal static class RoadmapDemandDtoMapper
             demand.Title,
             demand.Description,
             demand.ProjectId,
+            demand.ProjectId.HasValue
+                ? [demand.ProjectId.Value]
+                : demand.ProjectLinks.Select(link => link.ProjectId).Distinct().ToList().AsReadOnly(),
             demand.Quarter.Label,
             demand.QuarterYear,
             demand.QuarterNumber,
@@ -125,6 +128,11 @@ internal static class RoadmapDemandDtoMapper
             demand.DeprioritizationReason?.ToString(),
             demand.ReplacementDemandId,
             demand.JiraIssue,
+            demand.IssueLinks.Count > 0
+                ? demand.IssueLinks.Select(issue => new IssueLinkDto(issue.Key, issue.Url)).ToList().AsReadOnly()
+                : (string.IsNullOrWhiteSpace(demand.JiraIssue)
+                    ? []
+                    : [new IssueLinkDto(demand.JiraIssue, null)]),
             demand.Hours,
             demand.Customers,
             demand.IsBlocked,

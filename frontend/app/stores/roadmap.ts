@@ -210,6 +210,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       title: payload.title,
       description: payload.description || undefined,
       projectId: payload.projectId,
+      projectIds: payload.itemType === 'Demand' ? [] : (payload.projectIds ?? []),
       quarterYear: payload.quarterYear,
       quarterNumber: payload.quarterNumber,
       type: payload.type,
@@ -217,7 +218,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       productIds: payload.productIds,
       dependencyDemandIds: payload.dependencyDemandIds ?? [],
       replacementDemandId: payload.replacementDemandId || undefined,
-      jiraIssue: payload.jiraIssue || undefined,
+      jiraIssue: payload.issueLinks?.[0]?.key || payload.jiraIssue || undefined,
+      issueLinks: payload.issueLinks ?? [],
       hours: payload.hours ?? undefined,
       promisedDate: payload.promisedDate || undefined,
       customers: normalizeCustomers(payload.customers),
@@ -252,6 +254,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       title: payload.title,
       description: payload.description || undefined,
       projectId: payload.projectId,
+      projectIds: payload.itemType === 'Demand' ? [] : (payload.projectIds ?? []),
       quarterYear: payload.quarterYear,
       quarterNumber: payload.quarterNumber,
       status: payload.status ?? 'Backlog',
@@ -262,14 +265,15 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       observation: payload.observation || undefined,
       deprioritizationReason: payload.deprioritizationReason || undefined,
       replacementDemandId: payload.replacementDemandId || undefined,
-      jiraIssue: payload.jiraIssue || undefined,
+      jiraIssue: payload.issueLinks?.[0]?.key || payload.jiraIssue || undefined,
+      issueLinks: payload.issueLinks ?? [],
       hours: payload.hours ?? undefined,
       promisedDate: payload.promisedDate || undefined,
       customers: normalizeCustomers(payload.customers),
       isBlocked: payload.isBlocked ?? false,
       blockedReason: payload.blockedReason || undefined,
       deliveryDate: payload.deliveryDate || undefined,
-      problemClarity: payload.problemClarity ?? undefined,
+      problemClarity: payload.itemType === 'Epic' ? payload.problemClarity ?? undefined : undefined,
       hasNoKpi: payload.hasNoKpi ?? false,
       noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
     }
@@ -277,8 +281,10 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       `/api/roadmap/demands/${id}`,
       body as unknown as Record<string, unknown>
     )
+    await fetchDemands()
+
     if (res.data)
-      applyUpdatedDemandState(res.data)
+      upsertDependencyOptionFromDemand(res.data)
 
     customerSuggestions.value = [...new Set([
       ...customerSuggestions.value,
@@ -316,6 +322,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       title: demand.title,
       description: demand.description || undefined,
       projectId: demand.projectId,
+      projectIds: demand.itemType === 'Demand' ? [] : (demand.projectIds ?? []),
       quarterYear: demand.quarterYear,
       quarterNumber: demand.quarterNumber,
       status,
@@ -323,13 +330,14 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       classification: demand.classification,
       productIds: demand.products.map(p => p.productId),
       observation: demand.observation || undefined,
-      jiraIssue: demand.jiraIssue || undefined,
+      jiraIssue: demand.issueLinks?.[0]?.key || demand.jiraIssue || undefined,
+      issueLinks: demand.issueLinks ?? [],
       hours: demand.hours ?? undefined,
       customers: normalizeCustomers(demand.customers),
       isBlocked: demand.isBlocked ?? false,
       blockedReason: demand.blockedReason || undefined,
       deliveryDate: demand.deliveryDate || undefined,
-      problemClarity: demand.problemClarity ?? undefined,
+      problemClarity: demand.itemType === 'Epic' ? demand.problemClarity ?? undefined : undefined,
       hasNoKpi: demand.hasNoKpi ?? false,
       noKpiClassification: demand.hasNoKpi ? demand.noKpiClassification ?? undefined : undefined
     }

@@ -27,7 +27,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             ? [.. dependencyDemandIds, request.ReplacementDemandId.Value]
             : dependencyDemandIds;
 
-        var demand = await demandRepository.GetByIdAsync(request.Id, cancellationToken)
+        var demand = await demandRepository.GetByIdForUpdateAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException("RoadmapDemand", request.Id);
         var originalStatus = demand.Status;
         var originalQuarterYear = demand.QuarterYear;
@@ -53,6 +53,19 @@ public sealed class UpdateRoadmapDemandCommandHandler(
                     throw new NotFoundException("RoadmapProduct", pid);
 
             productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
+        }
+
+        if (itemType != RoadmapItemType.Demand && request.ProjectIds is { Count: > 0 })
+        {
+            var validProjectIds = (await projectRepository.GetAllAsync(cancellationToken))
+                .Select(projectItem => projectItem.Id)
+                .ToHashSet();
+
+            foreach (var linkedProjectId in request.ProjectIds.Where(id => id != Guid.Empty).Distinct())
+            {
+                if (!validProjectIds.Contains(linkedProjectId))
+                    throw new NotFoundException("RoadmapProject", linkedProjectId);
+            }
         }
 
         if (request.ParentDemandId.HasValue)
@@ -116,6 +129,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.Title,
             request.Description,
             request.ProjectId,
+            request.ProjectIds,
             request.QuarterYear,
             request.QuarterNumber,
             status,
@@ -126,6 +140,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             deprioritizationReason,
             request.ReplacementDemandId,
             request.JiraIssue,
+                        request.IssueLinks?.Select(issue => RoadmapIssueLink.Create(issue.Key, issue.Url)),
             request.Hours,
             request.Customers,
             request.IsBlocked,
@@ -173,7 +188,6 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             }
         }
 
-        demandRepository.Update(demand);
         await demandRepository.ReplaceProductsAsync(demand.Id, request.ProductIds, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);

@@ -17,8 +17,9 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
     {
         var query = context.RoadmapDemands
             .Include(d => d.Products)
+            .Include(d => d.ProjectLinks)
             .AsNoTracking()
-            .Where(d => d.ProjectId == projectId);
+            .Where(d => d.ProjectId == projectId || d.ProjectLinks.Any(link => link.ProjectId == projectId));
 
         if (quarterYear.HasValue)
             query = query.Where(d => d.QuarterYear == quarterYear.Value);
@@ -39,6 +40,7 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
         CancellationToken cancellationToken = default) =>
         await context.RoadmapDemands
             .Include(d => d.Products)
+            .Include(d => d.ProjectLinks)
             .Where(d => d.ProjectId == projectId && d.QuarterYear == quarterYear && d.QuarterNumber == quarterNumber)
             .OrderBy(d => d.SortOrder)
             .ThenBy(d => d.CreatedAt)
@@ -63,7 +65,16 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
         CancellationToken cancellationToken = default) =>
         await context.RoadmapDemands
             .Include(d => d.Products)
+            .Include(d => d.ProjectLinks)
             .AsNoTracking()
+            .FirstOrDefaultAsync(d => d.Id == id, cancellationToken);
+
+    public async Task<RoadmapDemand?> GetByIdForUpdateAsync(
+        Guid id,
+        CancellationToken cancellationToken = default) =>
+        await context.RoadmapDemands
+            .Include(d => d.Products)
+            .Include(d => d.ProjectLinks)
             .FirstOrDefaultAsync(d => d.Id == id, cancellationToken);
 
     public async Task<IReadOnlyList<RoadmapDemand>> GetByIdsAsync(
@@ -76,6 +87,7 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
 
         return await context.RoadmapDemands
             .Include(d => d.Products)
+            .Include(d => d.ProjectLinks)
             .AsNoTracking()
             .Where(d => demandIds.Contains(d.Id))
             .ToListAsync(cancellationToken);

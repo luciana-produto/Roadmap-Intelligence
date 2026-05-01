@@ -30,6 +30,16 @@ export interface DemandProduct {
   name: string
 }
 
+export interface IssueLink {
+  key: string
+  url?: string
+}
+
+export interface IssueLinkInput {
+  key: string
+  url: string
+}
+
 export interface RoadmapProduct {
   id: string
   name: string
@@ -95,6 +105,7 @@ export interface RoadmapDemand {
   title: string
   description?: string
   projectId?: string
+  projectIds?: string[]
   quarterLabel: string
   quarterYear: number
   quarterNumber: number
@@ -107,6 +118,7 @@ export interface RoadmapDemand {
   deprioritizationReason?: DeprioritizationReason
   replacementDemandId?: string
   jiraIssue?: string
+  issueLinks?: IssueLink[]
   hours?: number
   customers?: string[]
   isBlocked: boolean
@@ -150,6 +162,7 @@ export interface DemandFormData {
   title: string
   description: string
   projectId?: string
+  projectIds?: string[]
   quarterYear: number
   quarterNumber: number
   type: DemandType
@@ -160,6 +173,7 @@ export interface DemandFormData {
   deprioritizationReason?: DeprioritizationReason
   replacementDemandId?: string
   jiraIssue?: string
+  issueLinks?: IssueLinkInput[]
   hours?: number
   customers?: string[]
   dependencyDemandIds?: string[]

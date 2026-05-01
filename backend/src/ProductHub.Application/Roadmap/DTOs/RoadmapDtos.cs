@@ -24,6 +24,10 @@ public sealed record DemandDependencyOptionDto(
     int QuarterNumber,
     string Status);
 
+public sealed record IssueLinkDto(string Key, string? Url);
+
+public sealed record IssueLinkInput(string Key, string Url);
+
 public sealed record RoadmapProductDto(Guid Id, string Name, Guid ProjectId);
 
 public sealed record RoadmapProjectDto(
@@ -44,6 +48,7 @@ public sealed record RoadmapDemandDto(
     string Title,
     string? Description,
     Guid? ProjectId,
+    IReadOnlyList<Guid> ProjectIds,
     string QuarterLabel,
     int QuarterYear,
     int QuarterNumber,
@@ -56,6 +61,7 @@ public sealed record RoadmapDemandDto(
     string? DeprioritizationReason,
     Guid? ReplacementDemandId,
     string? JiraIssue,
+    IReadOnlyList<IssueLinkDto> IssueLinks,
     decimal? Hours,
     IReadOnlyList<string> Customers,
     bool IsBlocked,

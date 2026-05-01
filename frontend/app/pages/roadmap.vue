@@ -173,9 +173,22 @@ function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicI
   ].join(':')
 }
 
+function getDisplayIssueLinks(demand: Pick<RoadmapDemand, 'issueLinks' | 'jiraIssue'>) {
+  if (demand.issueLinks?.length)
+    return demand.issueLinks
+
+  if (demand.jiraIssue?.trim())
+    return [{ key: demand.jiraIssue.trim() }]
+
+  return []
+}
+
 function getVisibleEpicDemandCluster(anchorDemand?: RoadmapDemand) {
   if (!anchorDemand)
     return []
+
+  if (!groupDemandsByEpic.value)
+    return [anchorDemand]
 
   const anchorIndex = visibleListRows.value.findIndex(demand => demand.id === anchorDemand.id)
   if (anchorIndex < 0)
@@ -213,6 +226,7 @@ function getEpicHeaderMeta(anchorDemand?: RoadmapDemand) {
     kpiSummary: getDemandKpiSummary(epic),
     productsLabel: groupedProductNames.join(' · '),
     customersLabel: formatDemandCustomers(groupedCustomers),
+    issueLinks: getDisplayIssueLinks(epic),
     totalHours
   }
 }
@@ -709,6 +723,35 @@ function moveDemandId(
   return nextIds
 }
 
+function moveDemandCluster(
+  ids: string[],
+  movedIds: string[],
+  beforeId: string | null,
+  afterId: string | null
+) {
+  const movedIdSet = new Set(movedIds)
+  const nextIds = ids.filter(id => !movedIdSet.has(id))
+
+  if (beforeId) {
+    const targetIndex = nextIds.indexOf(beforeId)
+    if (targetIndex >= 0) {
+      nextIds.splice(targetIndex, 0, ...movedIds)
+      return nextIds
+    }
+  }
+
+  if (afterId) {
+    const targetIndex = nextIds.indexOf(afterId)
+    if (targetIndex >= 0) {
+      nextIds.splice(targetIndex + 1, 0, ...movedIds)
+      return nextIds
+    }
+  }
+
+  nextIds.push(...movedIds)
+  return nextIds
+}
+
 function isSameDemandScope(left: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>, right: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>) {
   return left.projectId === right.projectId
     && left.quarterYear === right.quarterYear
@@ -732,6 +775,12 @@ function getScopedDemandIds(demand: RoadmapDemand) {
 
 function getDemandScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
   return `${demand.projectId}:${demand.quarterYear}:${demand.quarterNumber}:${getDemandGroupKey(demand)}`
+}
+
+function getDemandDragScopeKey(demand: RoadmapDemand) {
+  return groupDemandsByEpic.value
+    ? getEpicDisplayGroupKey(demand)
+    : getDemandScopeKey(demand)
 }
 
 function ensureDemandCanMoveToStatus(demand: RoadmapDemand, status: DemandStatus) {
@@ -793,13 +842,174 @@ async function persistDemandPriority(
   }
 }
 
-async function handleListSortEnd(oldIndex: number, newIndex: number) {
+async function persistEpicClusterPriority(
+  anchorDemand: RoadmapDemand,
+  beforeId: string | null,
+  afterId: string | null
+) {
+  const currentCluster = getVisibleEpicDemandCluster(anchorDemand)
+  if (!currentCluster.length)
+    return
+
+  const scopedDemandIds = getScopedDemandIds(anchorDemand)
+  const movedIds = currentCluster.map(demand => demand.id)
+  const orderedDemandIds = moveDemandCluster(scopedDemandIds, movedIds, beforeId, afterId)
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+  try {
+    await roadmapStore.reorderDemand(anchorDemand.id, anchorDemand.status, orderedDemandIds)
+    await nextTick()
+
+    if (listScrollContainerRef.value && listScrollTop != null) {
+      listScrollContainerRef.value.scrollTop = listScrollTop
+      listScrollContainerRef.value.scrollLeft = listScrollLeft ?? 0
+    }
+  }
+  catch {
+    // handled by useApi
+  }
+}
+
+async function handleEpicSortEnd(item: HTMLElement) {
+  const anchorDemandId = item.dataset.anchorDemandId
+  const scopeKey = item.dataset.scopeKey
+  if (!anchorDemandId || !scopeKey)
+    return
+
+  const anchorDemand = visibleListRows.value.find(demand => demand.id === anchorDemandId)
+  if (!anchorDemand) {
+    await roadmapStore.fetchDemands()
+    return
+  }
+
+  const currentCluster = getVisibleEpicDemandCluster(anchorDemand)
+  const tbody = item.parentElement
+  if (!tbody)
+    return
+
+  const epicRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLTableRowElement[]
+  const currentIndex = epicRows.indexOf(item as HTMLTableRowElement)
+  if (currentIndex < 0)
+    return
+
+  const nextAnchorRow = epicRows.slice(currentIndex + 1).find(row =>
+    row.dataset.scopeKey === scopeKey
+    && row.dataset.anchorDemandId
+    && row.dataset.anchorDemandId !== anchorDemandId
+  )
+  const previousAnchorRow = [...epicRows.slice(0, currentIndex)].reverse().find(row =>
+    row.dataset.scopeKey === scopeKey
+    && row.dataset.anchorDemandId
+    && row.dataset.anchorDemandId !== anchorDemandId
+  )
+
+  let beforeId: string | null = null
+  let afterId: string | null = null
+
+  if (nextAnchorRow?.dataset.anchorDemandId) {
+    const nextAnchorDemand = visibleListRows.value.find(demand => demand.id === nextAnchorRow.dataset.anchorDemandId)
+    beforeId = getVisibleEpicDemandCluster(nextAnchorDemand)[0]?.id ?? null
+  }
+
+  if (previousAnchorRow?.dataset.anchorDemandId) {
+    const previousAnchorDemand = visibleListRows.value.find(demand => demand.id === previousAnchorRow.dataset.anchorDemandId)
+    const previousCluster = getVisibleEpicDemandCluster(previousAnchorDemand)
+    afterId = previousCluster[previousCluster.length - 1]?.id ?? null
+  }
+
+  if (!beforeId && !afterId)
+    return
+
+  await persistEpicClusterPriority(anchorDemand, beforeId, afterId)
+}
+
+function getEpicClusterAnchors(anchorDemand?: RoadmapDemand) {
+  if (!anchorDemand)
+    return []
+
+  return visibleListRows.value.filter(row => {
+    const header = visibleEpicHeaderByDemandId.value[row.id]
+    return !!header?.showHeader && isSameDemandGroup(row, anchorDemand)
+  })
+}
+
+function getEpicClusterMoveState(anchorDemand?: RoadmapDemand) {
+  const anchors = getEpicClusterAnchors(anchorDemand)
+  const currentIndex = anchorDemand
+    ? anchors.findIndex(row => row.id === anchorDemand.id)
+    : -1
+
+  return {
+    canMoveUp: currentIndex > 0,
+    canMoveDown: currentIndex >= 0 && currentIndex < anchors.length - 1
+  }
+}
+
+async function moveEpicCluster(anchorDemand: RoadmapDemand, direction: 'up' | 'down') {
+  const anchors = getEpicClusterAnchors(anchorDemand)
+  const currentIndex = anchors.findIndex(row => row.id === anchorDemand.id)
+  if (currentIndex < 0)
+    return
+
+  const targetAnchor = direction === 'up'
+    ? anchors[currentIndex - 1]
+    : anchors[currentIndex + 1]
+
+  if (!targetAnchor)
+    return
+
+  const currentCluster = getVisibleEpicDemandCluster(anchorDemand)
+  const targetCluster = getVisibleEpicDemandCluster(targetAnchor)
+  if (!currentCluster.length || !targetCluster.length)
+    return
+
+  const scopedDemandIds = getScopedDemandIds(anchorDemand)
+  const movedIds = currentCluster.map(demand => demand.id)
+  const orderedDemandIds = direction === 'up'
+    ? moveDemandCluster(scopedDemandIds, movedIds, targetCluster[0]!.id, null)
+    : moveDemandCluster(scopedDemandIds, movedIds, null, targetCluster[targetCluster.length - 1]!.id)
+
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+  try {
+    await roadmapStore.reorderDemand(anchorDemand.id, anchorDemand.status, orderedDemandIds)
+    await nextTick()
+
+    if (listScrollContainerRef.value && listScrollTop != null) {
+      listScrollContainerRef.value.scrollTop = listScrollTop
+      listScrollContainerRef.value.scrollLeft = listScrollLeft ?? 0
+    }
+  }
+  catch {
+    // handled by useApi
+  }
+}
+
+async function handleListSortEnd(item: HTMLElement) {
+  const demandId = item.dataset.demandId
+  if (!demandId)
+    return
+
   const visibleRows = visibleSortableRows.value
-  const demand = visibleRows[oldIndex]
+  const oldIndex = visibleRows.findIndex(row => row.id === demandId)
+  const demand = oldIndex >= 0 ? visibleRows[oldIndex] : null
   if (!demand) {
     await roadmapStore.fetchDemands()
     return
   }
+
+  const tbody = item.parentElement
+  if (!tbody)
+    return
+
+  const orderedDemandIds = Array.from(tbody.querySelectorAll('.list-demand-row'))
+    .map(row => (row as HTMLTableRowElement).dataset.demandId)
+    .filter((value): value is string => !!value)
+  const newIndex = orderedDemandIds.indexOf(demand.id)
+  if (newIndex < 0 || newIndex === oldIndex)
+    return
 
   const remainingRows = visibleRows.filter((_, index) => index !== oldIndex)
 
@@ -881,8 +1091,8 @@ function initListSortable() {
 
   listBodySortable = Sortable.create(tbody, {
     animation: 150,
-    draggable: '.list-demand-row',
-    handle: '.list-priority-handle',
+    draggable: '.list-demand-row,.list-epic-divider',
+    handle: '.list-priority-handle,.list-epic-priority-handle',
     ghostClass: 'opacity-40',
     forceFallback: true,
     fallbackOnBody: true,
@@ -893,18 +1103,26 @@ function initListSortable() {
       const dragged = event.dragged as HTMLElement | null
       const related = event.related as HTMLElement | null
 
-      if (!related?.dataset.demandId)
+      if (!related?.dataset.demandId && !related?.dataset.anchorDemandId)
+        return false
+
+      const draggedIsEpic = !!dragged?.dataset.anchorDemandId
+
+      if (draggedIsEpic)
+        return !!related.dataset.anchorDemandId && dragged?.dataset.scopeKey === related.dataset.scopeKey
+
+      if (!related.dataset.demandId)
         return false
 
       const draggedQuarter = dragged?.dataset.quarterKey
       const relatedQuarter = related.dataset.quarterKey
 
-      // Cross-quarter: always allow
+      // Cross-quarter: always allow for demand rows
       if (draggedQuarter !== relatedQuarter)
         return true
 
-      // Same quarter: only within same type group
-      return dragged?.dataset.scopeKey === related.dataset.scopeKey
+      // Same quarter: when grouped, keep demand reordering inside the visible epic group.
+      return dragged?.dataset.dragScopeKey === related.dataset.dragScopeKey
     },
     onEnd: (event) => {
       const oldIndex = event.oldDraggableIndex ?? event.oldIndex
@@ -913,7 +1131,14 @@ function initListSortable() {
       if (oldIndex == null || newIndex == null || oldIndex === newIndex)
         return
 
-      handleListSortEnd(oldIndex, newIndex)
+      const draggedItem = event.item as HTMLElement | null
+      if (draggedItem?.dataset.anchorDemandId) {
+        handleEpicSortEnd(draggedItem)
+        return
+      }
+
+      if (draggedItem)
+        handleListSortEnd(draggedItem)
     }
   })
 }
@@ -964,8 +1189,9 @@ function syncListSectionDividers() {
       return
     }
 
-    const isCollapsedRow = !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+    const isCollapsedRow = groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
     row.dataset.demandId = demand.id
+    row.dataset.dragScopeKey = getDemandDragScopeKey(demand)
     if (isCollapsedRow)
       row.style.setProperty('display', 'none', 'important')
     else
@@ -1037,7 +1263,7 @@ function syncListSectionDividers() {
       }
     }
 
-    if (epicHeader?.showHeader) {
+    if (groupDemandsByEpic.value && epicHeader?.showHeader) {
       dividerConfigs.push({
         rowIndex: i,
         kind: 'epic',
@@ -1071,12 +1297,17 @@ function syncListSectionDividers() {
     }
     else {
       const headerMeta = getEpicHeaderMeta(visibleRows[config.rowIndex])
-      dividerRow.className = 'list-section-divider border-y border-default bg-primary/5'
+      const anchorDemand = visibleRows[config.rowIndex]
+      dividerRow.className = 'list-section-divider list-epic-divider border-y border-default bg-primary/5'
+      dividerRow.dataset.anchorDemandId = anchorDemand?.id ?? ''
+      dividerRow.dataset.scopeKey = anchorDemand ? getDemandScopeKey(anchorDemand) : ''
+      dividerRow.dataset.dragScopeKey = anchorDemand ? getDemandDragScopeKey(anchorDemand) : ''
+      dividerRow.dataset.quarterKey = anchorDemand ? `${anchorDemand.quarterYear}:${anchorDemand.quarterNumber}` : ''
 
-      const mainStartIndex = listOrderedCols.value.findIndex(column => column.id === 'priority')
-      const mainEndIndex = listOrderedCols.value.findIndex(column => column.id === 'title')
-      const spanStart = mainStartIndex >= 0 ? mainStartIndex : 1
-      const spanEnd = mainEndIndex >= mainStartIndex ? mainEndIndex : mainStartIndex
+      const quarterIndex = listOrderedCols.value.findIndex(column => column.id === 'quarterLabel')
+      const titleIndex = listOrderedCols.value.findIndex(column => column.id === 'title')
+      const spanStart = quarterIndex >= 0 ? quarterIndex : Math.max(titleIndex, 1)
+      const spanEnd = titleIndex >= spanStart ? titleIndex : spanStart
 
       const appendDefaultCell = (className = 'px-3 py-2 align-middle') => {
         const cell = document.createElement('td')
@@ -1088,6 +1319,57 @@ function syncListSectionDividers() {
       for (let index = 0; index < listOrderedCols.value.length; index++) {
         const column = listOrderedCols.value[index]!
 
+        if (headerMeta && column.id === 'priority') {
+          const cell = appendDefaultCell('px-3 py-2 align-middle')
+          const dragHandle = document.createElement('span')
+          dragHandle.className = 'list-epic-priority-handle inline-flex h-7 w-7 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing'
+          dragHandle.title = 'Arrastar para repriorizar o épico'
+
+          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+          svg.setAttribute('viewBox', '0 0 24 24')
+          svg.setAttribute('fill', 'none')
+          svg.setAttribute('stroke', 'currentColor')
+          svg.setAttribute('stroke-width', '2')
+          svg.setAttribute('stroke-linecap', 'round')
+          svg.setAttribute('stroke-linejoin', 'round')
+          svg.setAttribute('class', 'h-4 w-4')
+
+          const pathOne = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+          pathOne.setAttribute('cx', '9')
+          pathOne.setAttribute('cy', '6')
+          pathOne.setAttribute('r', '1')
+
+          const pathTwo = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+          pathTwo.setAttribute('cx', '9')
+          pathTwo.setAttribute('cy', '12')
+          pathTwo.setAttribute('r', '1')
+
+          const pathThree = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+          pathThree.setAttribute('cx', '9')
+          pathThree.setAttribute('cy', '18')
+          pathThree.setAttribute('r', '1')
+
+          const pathFour = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+          pathFour.setAttribute('cx', '15')
+          pathFour.setAttribute('cy', '6')
+          pathFour.setAttribute('r', '1')
+
+          const pathFive = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+          pathFive.setAttribute('cx', '15')
+          pathFive.setAttribute('cy', '12')
+          pathFive.setAttribute('r', '1')
+
+          const pathSix = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+          pathSix.setAttribute('cx', '15')
+          pathSix.setAttribute('cy', '18')
+          pathSix.setAttribute('r', '1')
+
+          svg.append(pathOne, pathTwo, pathThree, pathFour, pathFive, pathSix)
+          dragHandle.appendChild(svg)
+          cell.appendChild(dragHandle)
+          continue
+        }
+
         if (index === spanStart) {
           const cell = document.createElement('td')
           cell.className = 'px-3 py-2 align-middle'
@@ -1096,16 +1378,38 @@ function syncListSectionDividers() {
           const titleWrap = document.createElement('div')
           titleWrap.className = 'flex min-w-0 flex-wrap items-center gap-2'
 
+          const scopeWrap = document.createElement('div')
+          scopeWrap.className = 'flex min-w-0 flex-col gap-1'
+
+          const quarterMeta = document.createElement('div')
+          quarterMeta.className = 'flex min-w-0 flex-wrap items-center gap-2'
+
           if (headerMeta) {
             const classificationBadge = document.createElement('span')
             classificationBadge.className = `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
             classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
-            titleWrap.appendChild(classificationBadge)
+            quarterMeta.appendChild(classificationBadge)
 
             const counter = document.createElement('span')
             counter.className = 'inline-flex items-center rounded-full border border-default bg-default px-2 py-0.5 text-[11px] font-medium text-muted'
             counter.textContent = `${config.count} demanda${config.count === 1 ? '' : 's'}`
-            titleWrap.appendChild(counter)
+            quarterMeta.appendChild(counter)
+
+            headerMeta.issueLinks.forEach((issueLink) => {
+              const jiraTag = issueLink.url
+                ? document.createElement('a')
+                : document.createElement('span')
+              jiraTag.className = 'inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+              jiraTag.textContent = issueLink.key
+
+              if (jiraTag instanceof HTMLAnchorElement) {
+                jiraTag.href = issueLink.url
+                jiraTag.target = '_blank'
+                jiraTag.rel = 'noopener noreferrer'
+              }
+
+              quarterMeta.appendChild(jiraTag)
+            })
           }
 
           const toggleButton = document.createElement('button')
@@ -1126,7 +1430,9 @@ function syncListSectionDividers() {
           title.textContent = `${config.roadmapTitle ?? 'Sem roadmap'} › ${config.epicTitle ?? 'Sem épico'}`
 
           toggleButton.append(icon, title)
-          titleWrap.append(toggleButton)
+          scopeWrap.append(quarterMeta, toggleButton)
+          titleWrap.append(scopeWrap)
+
           cell.appendChild(titleWrap)
           dividerRow.appendChild(cell)
           index = spanEnd
@@ -1253,7 +1559,7 @@ function syncListSectionDividers() {
 }
 
 watch(
-  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${collapsedEpicIds.value.join('|')}`,
+  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
   async () => {
     await nextTick()
     syncListSectionDividers()
@@ -1326,11 +1632,13 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     type: demand.type,
     classification: demand.classification,
     productIds: demand.products.map(product => product.productId),
+    projectIds: demand.projectIds ?? (demand.projectId ? [demand.projectId] : []),
     status: demand.status,
     observation: demand.observation ?? '',
     deprioritizationReason: demand.deprioritizationReason ?? undefined,
     replacementDemandId: demand.replacementDemandId ?? undefined,
     jiraIssue: demand.jiraIssue ?? '',
+    issueLinks: getDisplayIssueLinks(demand).filter((issue): issue is { key: string, url: string } => !!issue.url).map(issue => ({ key: issue.key, url: issue.url })),
     hours: demand.hours,
     promisedDate: demand.promisedDate ?? '',
     customers: demand.customers ?? [],
@@ -1338,7 +1646,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     isBlocked: demand.isBlocked,
     blockedReason: demand.blockedReason ?? '',
     deliveryDate: demand.deliveryDate ?? '',
-    problemClarity: demand.problemClarity ?? undefined,
+    problemClarity: demand.itemType === 'Epic' ? demand.problemClarity ?? undefined : undefined,
     hasNoKpi: demand.hasNoKpi,
     noKpiClassification: demand.noKpiClassification ?? undefined,
     ...overrides
@@ -1384,6 +1692,9 @@ async function handleSubmit(data: DemandFormData) {
       toast.add({ title: 'Item criado', color: 'success' })
     }
     modalOpen.value = false
+    await nextTick()
+    syncListSectionDividers()
+    initListSortable()
   }
   catch {
     // error handled by useApi
@@ -1461,6 +1772,7 @@ const listSorting = ref<SortingState>([])
 const listColumnFilters = ref<ColumnFiltersState>([])
 const listColumnSizing = ref<ColumnSizingState>({})
 const listColumnOrder = ref<string[]>([])
+const groupDemandsByEpic = ref(true)
 
 const listTableRef = useTemplateRef<{
   tableApi: {
@@ -1475,6 +1787,9 @@ const collapsedEpicIds = ref<string[]>([])
 const hasInitializedCollapsedEpicIds = ref(false)
 
 const visibleEpicIds = computed(() => {
+  if (!groupDemandsByEpic.value)
+    return []
+
   return Array.from(new Set(
     quarterFilteredDemands.value
       .map(demand => demand.epicId)
@@ -1485,7 +1800,7 @@ const visibleEpicIds = computed(() => {
 const tableDemands = computed(() => quarterFilteredDemands.value)
 
 function isCollapsedRepresentative(demand: RoadmapDemand) {
-  return !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+  return groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
 }
 
 function toggleEpicCollapse(epicId?: string) {
@@ -1509,6 +1824,9 @@ function expandAllEpicGroups() {
 }
 
 const areAllEpicGroupsCollapsed = computed(() => {
+  if (!groupDemandsByEpic.value)
+    return false
+
   return visibleEpicIds.value.length > 0 && visibleEpicIds.value.every(epicId => collapsedEpicIds.value.includes(epicId))
 })
 
@@ -1538,6 +1856,13 @@ const visibleListDemandCount = computed(() => {
 })
 const visibleEpicHeaderByDemandId = computed(() => {
   const result: Record<string, { showHeader: boolean, count: number, epicId?: string, roadmapTitle?: string | null, epicTitle?: string | null, collapsed: boolean }> = {}
+
+  if (!groupDemandsByEpic.value) {
+    for (const demand of visibleListRows.value)
+      result[demand.id] = { showHeader: false, count: 0, collapsed: false }
+
+    return result
+  }
 
   for (let index = 0; index < visibleListRows.value.length; index++) {
     const demand = visibleListRows.value[index]!
@@ -1570,8 +1895,8 @@ const listHasActiveFilters = computed(() => listColumnFilters.value.length > 0)
 const shouldConstrainListHeight = computed(() => visibleListDemandCount.value > 20)
 const listTableKey = computed(() =>
   tableDemands.value
-    .map(demand => `${demand.id}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}`)
-    .join('|') + `::${collapsedEpicIds.value.join('|')}`
+    .map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`)
+    .join('|') + `::${groupDemandsByEpic.value ? 'grouped' : 'flat'}::${collapsedEpicIds.value.join('|')}`
 )
 const priorityRankByDemandId = computed(() => {
   const result: Record<string, number> = {}
@@ -1639,7 +1964,7 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'title',          label: 'Demanda',       defaultWidth: 440, filterType: 'text' },
   { id: 'kpis',           label: 'KPI',           defaultWidth: 148, disableFilter: true },
   { id: 'products',       label: 'Produtos',      defaultWidth: 118, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
-  { id: 'hours',          label: 'Horas',         defaultWidth: 60, disableFilter: true, alignRight: true },
+  { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
   { id: 'status',         label: 'Status',        defaultWidth: 138, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 120, filterType: 'text' },
   { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
@@ -1926,11 +2251,12 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       return d.title.toLowerCase().includes(q)
         || (d.description?.toLowerCase().includes(q) ?? false)
         || (d.jiraIssue?.toLowerCase().includes(q) ?? false)
+        || getDisplayIssueLinks(d).some(issue => issue.key.toLowerCase().includes(q))
         || (d.epicTitle?.toLowerCase().includes(q) ?? false)
         || (d.roadmapTitle?.toLowerCase().includes(q) ?? false)
     },
-    size: 440,
-    meta: { style: { td: () => ({ width: listColWidth('title', 440) }), th: () => ({ width: listColWidth('title', 440) }) } },
+    size: 560,
+    meta: { style: { td: () => ({ width: listColWidth('title', 560) }), th: () => ({ width: listColWidth('title', 560) }) } },
     cell: ({ row }) => {
       const d = row.original
       const isDeprioritized = d.status === 'Deprioritized'
@@ -1939,7 +2265,22 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         return h('span', { class: 'hidden' })
       textNodes.push(h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title))
 
-      if (d.jiraIssue) textNodes.push(h('p', { class: 'text-xs text-blue-500 font-mono' }, d.jiraIssue))
+      const issueLinks = getDisplayIssueLinks(d)
+      if (issueLinks.length) {
+        textNodes.push(h('div', { class: 'mt-1 flex flex-wrap gap-1' },
+          issueLinks.map(issue => issue.url
+            ? h('a', {
+                href: issue.url,
+                target: '_blank',
+                rel: 'noopener noreferrer',
+                class: 'inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700 hover:border-blue-300 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+              }, issue.key)
+            : h('span', {
+                class: 'inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+              }, issue.key)
+          )
+        ))
+      }
       if (d.dependsOn.length) {
         textNodes.push(
           h('div', { class: 'mt-1 flex flex-wrap gap-1' }, [
@@ -1975,8 +2316,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       return getDemandKpiSummary(left).label.localeCompare(getDemandKpiSummary(right).label, 'pt-BR')
     }),
     enableColumnFilter: false,
-    size: 132,
-    meta: { style: { td: () => ({ width: listColWidth('kpis', 132) }), th: () => ({ width: listColWidth('kpis', 132) }) } },
+    size: 96,
+    meta: { style: { td: () => ({ width: listColWidth('kpis', 96) }), th: () => ({ width: listColWidth('kpis', 96) }) } },
     cell: () => h('span', { class: 'text-xs text-muted' }, '—')
   },
   {
@@ -2072,7 +2413,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
   },
   {
     accessorKey: 'hours',
-    header: 'Horas',
+    header: 'Hrs',
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => (left.hours ?? 0) - (right.hours ?? 0)),
     enableColumnFilter: false,
@@ -2539,6 +2880,15 @@ watch(activeDemandKpiId, async (value) => {
               >
                 Limpar filtros
                 <UBadge size="xs" color="primary" variant="solid" class="ml-1">{{ listColumnFilters.length }}</UBadge>
+              </UButton>
+              <UButton
+                size="sm"
+                color="neutral"
+                variant="ghost"
+                :leading-icon="groupDemandsByEpic ? 'i-lucide-layers-3' : 'i-lucide-list'"
+                @click="groupDemandsByEpic = !groupDemandsByEpic"
+              >
+                {{ groupDemandsByEpic ? 'Desagrupar épicos' : 'Agrupar por épico' }}
               </UButton>
               <UButton
                 v-if="visibleEpicIds.length"

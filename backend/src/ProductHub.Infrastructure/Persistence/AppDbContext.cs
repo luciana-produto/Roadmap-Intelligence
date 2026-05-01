@@ -14,6 +14,7 @@ public class AppDbContext(
     public DbSet<RoadmapProduct> RoadmapProducts => Set<RoadmapProduct>();
     public DbSet<RoadmapDemand> RoadmapDemands => Set<RoadmapDemand>();
     public DbSet<RoadmapDemandProduct> RoadmapDemandProducts => Set<RoadmapDemandProduct>();
+    public DbSet<RoadmapDemandProject> RoadmapDemandProjects => Set<RoadmapDemandProject>();
     public DbSet<RoadmapDemandDependency> RoadmapDemandDependencies => Set<RoadmapDemandDependency>();
     public DbSet<RoadmapCapacity> RoadmapCapacities => Set<RoadmapCapacity>();
     public DbSet<Kpi> Kpis => Set<Kpi>();

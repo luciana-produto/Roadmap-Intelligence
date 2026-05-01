@@ -41,6 +41,19 @@ public sealed class CreateRoadmapDemandCommandHandler(
             productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
         }
 
+        if (itemType != RoadmapItemType.Demand && request.ProjectIds is { Count: > 0 })
+        {
+            var validProjectIds = (await projectRepository.GetAllAsync(cancellationToken))
+                .Select(projectItem => projectItem.Id)
+                .ToHashSet();
+
+            foreach (var linkedProjectId in request.ProjectIds.Where(id => id != Guid.Empty).Distinct())
+            {
+                if (!validProjectIds.Contains(linkedProjectId))
+                    throw new NotFoundException("RoadmapProject", linkedProjectId);
+            }
+        }
+
         if (request.ParentDemandId.HasValue)
         {
             var parent = await demandRepository.GetByIdAsync(request.ParentDemandId.Value, cancellationToken)
@@ -84,6 +97,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.Title,
             request.Description,
             request.ProjectId,
+            request.ProjectIds,
             request.QuarterYear,
             request.QuarterNumber,
             type,
@@ -91,6 +105,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.ProductIds,
             nextSortOrder,
             request.JiraIssue,
+                        request.IssueLinks?.Select(issue => RoadmapIssueLink.Create(issue.Key, issue.Url)),
             request.Hours,
             request.Customers,
             request.IsBlocked,
