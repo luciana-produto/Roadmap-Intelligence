@@ -5,6 +5,7 @@ import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
 import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType } from '~/types/roadmap'
+import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
@@ -21,7 +22,7 @@ const demandItems = computed(() => demands.value.filter(item => item.itemType ==
 const itemsById = computed(() => new Map(demands.value.map(item => [item.id, item] as const)))
 
 // ─── View mode ───────────────────────────────────────────────────────────────
-const viewMode = ref<'list'>('list')
+const viewMode = ref<'list' | 'hierarchy'>(route.query.view === 'hierarchy' ? 'hierarchy' : 'list')
 
 // ─── Quarter phase ────────────────────────────────────────────────────────────
 const now = new Date()
@@ -1180,6 +1181,7 @@ function syncListSectionDividers() {
     const demand = visibleRows[index]
     if (!demand) {
       row.classList.remove('list-demand-row')
+      row.classList.remove('bg-elevated/5', 'hover:bg-elevated/15')
       row.classList.remove('bg-red-50/70', 'dark:bg-red-950/20')
       row.style.display = ''
       row.hidden = false
@@ -1211,10 +1213,15 @@ function syncListSectionDividers() {
     }
 
     const inconsistent = hasInconsistentDependency(demand)
+    const isGroupedDemandRow = groupDemandsByEpic.value && !!demand.epicId
+    row.classList.toggle('bg-elevated/5', isGroupedDemandRow && !inconsistent)
+    row.classList.toggle('hover:bg-elevated/15', isGroupedDemandRow && !inconsistent)
     row.classList.toggle('bg-red-50/70', inconsistent)
     row.classList.toggle('dark:bg-red-950/20', inconsistent)
 
     for (const cell of Array.from(row.children) as HTMLTableCellElement[]) {
+      cell.classList.toggle('bg-elevated/5', isGroupedDemandRow && !inconsistent)
+      cell.classList.toggle('hover:bg-elevated/15', isGroupedDemandRow && !inconsistent)
       cell.classList.toggle('bg-red-50/70', inconsistent)
       cell.classList.toggle('dark:bg-red-950/20', inconsistent)
     }
@@ -1288,118 +1295,273 @@ function syncListSectionDividers() {
     dividerCell.colSpan = listOrderedCols.value.length
 
     if (kind === 'quarter') {
-      dividerCell.className = 'border-y-2 border-indigo-300 bg-indigo-100 px-3 py-2.5 text-center text-xs font-extrabold uppercase tracking-[0.2em] text-indigo-800 dark:border-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-200'
+      dividerCell.className = 'border-y border-default bg-elevated/80 px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-muted'
       dividerCell.textContent = config.label
     }
     else if (kind === 'additional') {
-      dividerCell.className = 'border-y border-default bg-gray-100 px-3 py-1.5 text-center text-[11px] font-bold uppercase tracking-[0.15em] text-gray-500 dark:bg-gray-800/60 dark:text-gray-400'
+      dividerCell.className = 'border-y border-default bg-elevated/40 px-3 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-muted'
       dividerCell.textContent = config.label
     }
     else {
       const headerMeta = getEpicHeaderMeta(visibleRows[config.rowIndex])
       const anchorDemand = visibleRows[config.rowIndex]
-      dividerRow.className = 'list-section-divider list-epic-divider border-y border-default bg-primary/5'
+      dividerRow.className = 'list-section-divider list-epic-divider border-y border-default bg-default'
       dividerRow.dataset.anchorDemandId = anchorDemand?.id ?? ''
       dividerRow.dataset.scopeKey = anchorDemand ? getDemandScopeKey(anchorDemand) : ''
       dividerRow.dataset.dragScopeKey = anchorDemand ? getDemandDragScopeKey(anchorDemand) : ''
       dividerRow.dataset.quarterKey = anchorDemand ? `${anchorDemand.quarterYear}:${anchorDemand.quarterNumber}` : ''
 
-      const quarterIndex = listOrderedCols.value.findIndex(column => column.id === 'quarterLabel')
-      const titleIndex = listOrderedCols.value.findIndex(column => column.id === 'title')
-      const spanStart = quarterIndex >= 0 ? quarterIndex : Math.max(titleIndex, 1)
-      const spanEnd = titleIndex >= spanStart ? titleIndex : spanStart
+      const fullRowCell = document.createElement('td')
+      fullRowCell.colSpan = listOrderedCols.value.length
+      fullRowCell.className = 'p-0'
 
-      const appendDefaultCell = (className = 'px-3 py-2 align-middle') => {
-        const cell = document.createElement('td')
+      const grid = document.createElement('div')
+      grid.className = 'grid items-start bg-default'
+      grid.style.gridTemplateColumns = getListGridTemplateColumns()
+
+      const createGridCell = (className = 'px-3 py-2 align-top') => {
+        const cell = document.createElement('div')
         cell.className = className
-        dividerRow.appendChild(cell)
         return cell
       }
 
-      for (let index = 0; index < listOrderedCols.value.length; index++) {
-        const column = listOrderedCols.value[index]!
+      for (const column of listOrderedCols.value) {
+        if (column.id === 'select') {
+          const cell = createGridCell('px-3 py-2 align-top')
 
-        if (headerMeta && column.id === 'priority') {
-          const cell = appendDefaultCell('px-3 py-2 align-middle')
-          const dragHandle = document.createElement('span')
-          dragHandle.className = 'list-epic-priority-handle inline-flex h-7 w-7 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing'
-          dragHandle.title = 'Arrastar para repriorizar o épico'
+          const toggleButton = document.createElement('button')
+          toggleButton.type = 'button'
+          toggleButton.className = 'mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:text-highlighted'
+          toggleButton.addEventListener('click', (event) => {
+            event.preventDefault()
+            event.stopPropagation()
+            toggleEpicCollapse(config.epicId)
+          })
 
-          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-          svg.setAttribute('viewBox', '0 0 24 24')
-          svg.setAttribute('fill', 'none')
-          svg.setAttribute('stroke', 'currentColor')
-          svg.setAttribute('stroke-width', '2')
-          svg.setAttribute('stroke-linecap', 'round')
-          svg.setAttribute('stroke-linejoin', 'round')
-          svg.setAttribute('class', 'h-4 w-4')
+          const toggleIcon = document.createElement('span')
+          toggleIcon.textContent = config.collapsed ? '▸' : '▾'
+          toggleButton.appendChild(toggleIcon)
+          cell.appendChild(toggleButton)
 
-          const pathOne = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-          pathOne.setAttribute('cx', '9')
-          pathOne.setAttribute('cy', '6')
-          pathOne.setAttribute('r', '1')
-
-          const pathTwo = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-          pathTwo.setAttribute('cx', '9')
-          pathTwo.setAttribute('cy', '12')
-          pathTwo.setAttribute('r', '1')
-
-          const pathThree = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-          pathThree.setAttribute('cx', '9')
-          pathThree.setAttribute('cy', '18')
-          pathThree.setAttribute('r', '1')
-
-          const pathFour = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-          pathFour.setAttribute('cx', '15')
-          pathFour.setAttribute('cy', '6')
-          pathFour.setAttribute('r', '1')
-
-          const pathFive = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-          pathFive.setAttribute('cx', '15')
-          pathFive.setAttribute('cy', '12')
-          pathFive.setAttribute('r', '1')
-
-          const pathSix = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-          pathSix.setAttribute('cx', '15')
-          pathSix.setAttribute('cy', '18')
-          pathSix.setAttribute('r', '1')
-
-          svg.append(pathOne, pathTwo, pathThree, pathFour, pathFive, pathSix)
-          dragHandle.appendChild(svg)
-          cell.appendChild(dragHandle)
+          grid.appendChild(cell)
           continue
         }
 
-        if (index === spanStart) {
-          const cell = document.createElement('td')
-          cell.className = 'px-3 py-2 align-middle'
-          cell.colSpan = spanEnd - spanStart + 1
-
-          const titleWrap = document.createElement('div')
-          titleWrap.className = 'flex min-w-0 flex-wrap items-center gap-2'
-
-          const scopeWrap = document.createElement('div')
-          scopeWrap.className = 'flex min-w-0 flex-col gap-1'
-
-          const quarterMeta = document.createElement('div')
-          quarterMeta.className = 'flex min-w-0 flex-wrap items-center gap-2'
+        if (column.id === 'priority') {
+          const cell = createGridCell('px-3 py-2 align-top')
 
           if (headerMeta) {
-            const classificationBadge = document.createElement('span')
-            classificationBadge.className = `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
-            classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
-            quarterMeta.appendChild(classificationBadge)
+            const dragHandle = document.createElement('span')
+            dragHandle.className = 'list-epic-priority-handle inline-flex h-7 w-7 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing'
+            dragHandle.title = 'Arrastar para repriorizar o épico'
 
-            const counter = document.createElement('span')
-            counter.className = 'inline-flex items-center rounded-full border border-default bg-default px-2 py-0.5 text-[11px] font-medium text-muted'
-            counter.textContent = `${config.count} demanda${config.count === 1 ? '' : 's'}`
-            quarterMeta.appendChild(counter)
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+            svg.setAttribute('viewBox', '0 0 24 24')
+            svg.setAttribute('fill', 'none')
+            svg.setAttribute('stroke', 'currentColor')
+            svg.setAttribute('stroke-width', '2')
+            svg.setAttribute('stroke-linecap', 'round')
+            svg.setAttribute('stroke-linejoin', 'round')
+            svg.setAttribute('class', 'h-4 w-4')
+
+            for (const [cx, cy] of [['9', '6'], ['9', '12'], ['9', '18'], ['15', '6'], ['15', '12'], ['15', '18']] as const) {
+              const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+              circle.setAttribute('cx', cx)
+              circle.setAttribute('cy', cy)
+              circle.setAttribute('r', '1')
+              svg.appendChild(circle)
+            }
+
+            dragHandle.appendChild(svg)
+            cell.appendChild(dragHandle)
+          }
+
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'quarterLabel') {
+          const cell = createGridCell('px-3 py-2 align-top')
+
+          if (anchorDemand) {
+            const quarterNode = anchorDemand.quarterYear === 0 && anchorDemand.quarterNumber === 0
+              ? document.createElement('span')
+              : document.createElement('span')
+
+            quarterNode.className = anchorDemand.quarterYear === 0 && anchorDemand.quarterNumber === 0
+              ? 'inline-flex items-center rounded-md border border-default bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-highlighted'
+              : 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted'
+            quarterNode.textContent = anchorDemand.quarterLabel || 'Backlog'
+
+            const typeNode = document.createElement('span')
+            typeNode.className = 'text-[11px] text-muted'
+            typeNode.textContent = typeLabels[anchorDemand.type]
+
+            const wrap = document.createElement('div')
+            wrap.className = 'flex min-w-0 flex-col gap-0.5'
+            wrap.append(quarterNode, typeNode)
+            cell.appendChild(wrap)
+          }
+
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'title') {
+          const cell = createGridCell('px-3 py-2 align-top')
+          const titleWrap = document.createElement('div')
+          titleWrap.className = 'flex min-w-0 items-start gap-1.5'
+
+          const epicIcon = document.createElement('span')
+          epicIcon.className = 'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-amber-500'
+          epicIcon.textContent = '★'
+
+          const scopeWrap = document.createElement('div')
+          scopeWrap.className = 'min-w-0 flex-1'
+
+          const metaRow = document.createElement('div')
+          metaRow.className = 'flex flex-wrap items-center gap-1.5'
+
+          const epicLabel = document.createElement('span')
+          epicLabel.className = 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted'
+          epicLabel.textContent = 'Épico'
+          metaRow.appendChild(epicLabel)
+
+          const countNode = document.createElement('span')
+          countNode.className = 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
+          countNode.textContent = `${config.count} demanda${config.count === 1 ? '' : 's'}`
+          metaRow.appendChild(countNode)
+
+          const titleBlock = document.createElement('div')
+          titleBlock.className = 'mt-0.5 min-w-0'
+
+          if (config.roadmapTitle) {
+            const roadmapLabel = document.createElement('div')
+            roadmapLabel.className = 'truncate text-[11px] text-muted'
+            roadmapLabel.textContent = config.roadmapTitle
+            titleBlock.appendChild(roadmapLabel)
+          }
+
+          const epicTitle = document.createElement('div')
+          epicTitle.className = 'truncate text-[13px] font-medium text-highlighted'
+          epicTitle.textContent = config.epicTitle ?? 'Sem épico'
+          titleBlock.appendChild(epicTitle)
+
+          scopeWrap.append(metaRow, titleBlock)
+          titleWrap.append(epicIcon, scopeWrap)
+          cell.appendChild(titleWrap)
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'kpis') {
+          const cell = createGridCell('px-3 py-2 align-top')
+
+          if (headerMeta) {
+            const container = document.createElement('div')
+            container.className = 'flex min-w-0 flex-col items-start gap-1'
+
+            const button = document.createElement('button')
+            button.type = 'button'
+            button.className = `inline-flex max-w-full items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80 ${headerMeta.kpiSummary.tone}`
+            button.textContent = headerMeta.kpiSummary.label
+            button.title = headerMeta.kpiSummary.actionLabel
+            button.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openDemandKpiWorkspace(headerMeta.epic)
+            })
+            container.appendChild(button)
+
+            if (headerMeta.epic.hasNoKpi && headerMeta.epic.noKpiClassification) {
+              const note = document.createElement('span')
+              note.className = 'text-[11px] text-muted'
+              note.textContent = getNoKpiClassificationLabel(headerMeta.epic.noKpiClassification)
+              container.appendChild(note)
+            }
+
+            cell.appendChild(container)
+          }
+
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'products') {
+          const cell = createGridCell('px-3 py-2 align-top')
+          if (headerMeta?.productsLabel) {
+            const text = document.createElement('div')
+            text.className = 'truncate text-[11px] text-muted'
+            text.textContent = headerMeta.productsLabel
+            cell.appendChild(text)
+          }
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'hours') {
+          const cell = createGridCell('px-3 py-2 text-right align-top')
+          if (headerMeta) {
+            const text = document.createElement('div')
+            text.className = 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold text-highlighted'
+            text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
+            cell.appendChild(text)
+          }
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'status') {
+          const cell = createGridCell('px-3 py-2 align-top')
+          if (headerMeta) {
+            const badge = document.createElement('span')
+            badge.className = `inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${headerMeta.epic.status === 'Done'
+              ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300'
+              : headerMeta.epic.status === 'InProgress'
+                ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+                : headerMeta.epic.status === 'Deprioritized'
+                  ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'
+                  : 'border-default bg-default text-muted'}`
+            badge.textContent = statusLabels[headerMeta.epic.status]
+            cell.appendChild(badge)
+          }
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'customers') {
+          const cell = createGridCell('px-3 py-2 align-top')
+          if (headerMeta?.customersLabel) {
+            const text = document.createElement('div')
+            text.className = 'truncate text-[11px] text-muted'
+            text.textContent = headerMeta.customersLabel
+            cell.appendChild(text)
+          }
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'classification') {
+          const cell = createGridCell('px-3 py-2 align-top')
+          if (headerMeta) {
+            const classificationBadge = document.createElement('span')
+            classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
+            classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
+            cell.appendChild(classificationBadge)
+          }
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'issue') {
+          const cell = createGridCell('px-3 py-2 align-top')
+          if (headerMeta?.issueLinks?.length) {
+            const issuesWrap = document.createElement('div')
+            issuesWrap.className = 'flex flex-wrap gap-1.5'
 
             headerMeta.issueLinks.forEach((issueLink) => {
-              const jiraTag = issueLink.url
-                ? document.createElement('a')
-                : document.createElement('span')
-              jiraTag.className = 'inline-flex items-center rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
+              const jiraTag = issueLink.url ? document.createElement('a') : document.createElement('span')
+              jiraTag.className = 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
               jiraTag.textContent = issueLink.key
 
               if (jiraTag instanceof HTMLAnchorElement) {
@@ -1408,146 +1570,56 @@ function syncListSectionDividers() {
                 jiraTag.rel = 'noopener noreferrer'
               }
 
-              quarterMeta.appendChild(jiraTag)
+              issuesWrap.appendChild(jiraTag)
             })
+
+            cell.appendChild(issuesWrap)
           }
-
-          const toggleButton = document.createElement('button')
-          toggleButton.type = 'button'
-          toggleButton.className = 'inline-flex min-w-0 max-w-full items-center gap-2 rounded-full border border-default bg-default px-3 py-1 text-left text-xs font-semibold text-highlighted transition-colors hover:border-primary/40'
-          toggleButton.addEventListener('click', (event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            toggleEpicCollapse(config.epicId)
-          })
-
-          const icon = document.createElement('span')
-          icon.textContent = config.collapsed ? '▸' : '▾'
-          icon.className = 'text-muted'
-
-          const title = document.createElement('span')
-          title.className = 'truncate'
-          title.textContent = `${config.roadmapTitle ?? 'Sem roadmap'} › ${config.epicTitle ?? 'Sem épico'}`
-
-          toggleButton.append(icon, title)
-          scopeWrap.append(quarterMeta, toggleButton)
-          titleWrap.append(scopeWrap)
-
-          cell.appendChild(titleWrap)
-          dividerRow.appendChild(cell)
-          index = spanEnd
+          grid.appendChild(cell)
           continue
         }
 
-        if (headerMeta && column.id === 'kpis') {
-          const cell = appendDefaultCell()
-          const container = document.createElement('div')
-          container.className = 'flex min-w-0 flex-col items-start gap-1'
+        if (column.id === '_actions') {
+          const cell = createGridCell('px-3 py-2 text-right align-top')
+          if (headerMeta) {
+            const button = document.createElement('button')
+            button.type = 'button'
+            button.className = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
+            button.title = 'Editar épico'
+            button.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openEditModal(headerMeta.epic)
+            })
 
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.className = `inline-flex max-w-full items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] transition-colors hover:opacity-80 ${headerMeta.kpiSummary.tone}`
-          button.textContent = headerMeta.kpiSummary.label
-          button.title = headerMeta.kpiSummary.actionLabel
-          button.addEventListener('click', (event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            openDemandKpiWorkspace(headerMeta.epic)
-          })
-          container.appendChild(button)
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+            svg.setAttribute('viewBox', '0 0 24 24')
+            svg.setAttribute('fill', 'none')
+            svg.setAttribute('stroke', 'currentColor')
+            svg.setAttribute('stroke-width', '2')
+            svg.setAttribute('stroke-linecap', 'round')
+            svg.setAttribute('stroke-linejoin', 'round')
+            svg.setAttribute('class', 'h-4 w-4')
 
-          if (headerMeta.epic.hasNoKpi && headerMeta.epic.noKpiClassification) {
-            const note = document.createElement('span')
-            note.className = 'text-[11px] text-muted'
-            note.textContent = getNoKpiClassificationLabel(headerMeta.epic.noKpiClassification)
-            container.appendChild(note)
+            const pathBody = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+            pathBody.setAttribute('d', 'M12 20h9')
+
+            const pathTip = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+            pathTip.setAttribute('d', 'M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z')
+
+            svg.append(pathBody, pathTip)
+            button.appendChild(svg)
+            cell.appendChild(button)
           }
-
-          cell.appendChild(container)
+          grid.appendChild(cell)
           continue
         }
 
-        if (headerMeta && column.id === 'products') {
-          const cell = appendDefaultCell()
-          if (headerMeta.productsLabel) {
-            const text = document.createElement('div')
-            text.className = 'truncate text-xs text-muted'
-            text.textContent = headerMeta.productsLabel
-            cell.appendChild(text)
-          }
-          continue
-        }
-
-        if (headerMeta && column.id === 'hours') {
-          const cell = appendDefaultCell('px-3 py-2 text-right align-middle')
-          const text = document.createElement('div')
-          text.className = 'text-xs font-semibold text-highlighted'
-          text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
-          cell.appendChild(text)
-          continue
-        }
-
-        if (headerMeta && column.id === 'status') {
-          const cell = appendDefaultCell()
-          const badge = document.createElement('span')
-          badge.className = `inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${headerMeta.epic.status === 'Done'
-            ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-800 dark:bg-green-900/20 dark:text-green-300'
-            : headerMeta.epic.status === 'InProgress'
-              ? 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
-              : headerMeta.epic.status === 'Deprioritized'
-                ? 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'
-                : 'border-default bg-default text-muted'}`
-          badge.textContent = statusLabels[headerMeta.epic.status]
-          cell.appendChild(badge)
-          continue
-        }
-
-        if (headerMeta && column.id === 'customers') {
-          const cell = appendDefaultCell()
-          if (headerMeta.customersLabel) {
-            const text = document.createElement('div')
-            text.className = 'truncate text-xs text-muted'
-            text.textContent = headerMeta.customersLabel
-            cell.appendChild(text)
-          }
-          continue
-        }
-
-        if (headerMeta && column.id === '_actions') {
-          const cell = appendDefaultCell('px-3 py-2 text-right align-middle')
-          const button = document.createElement('button')
-          button.type = 'button'
-          button.className = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
-          button.title = 'Editar épico'
-          button.addEventListener('click', (event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            openEditModal(headerMeta.epic)
-          })
-
-          const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-          svg.setAttribute('viewBox', '0 0 24 24')
-          svg.setAttribute('fill', 'none')
-          svg.setAttribute('stroke', 'currentColor')
-          svg.setAttribute('stroke-width', '2')
-          svg.setAttribute('stroke-linecap', 'round')
-          svg.setAttribute('stroke-linejoin', 'round')
-          svg.setAttribute('class', 'h-4 w-4')
-
-          const pathBody = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-          pathBody.setAttribute('d', 'M12 20h9')
-
-          const pathTip = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-          pathTip.setAttribute('d', 'M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z')
-
-          svg.append(pathBody, pathTip)
-          button.appendChild(svg)
-          cell.appendChild(button)
-          continue
-        }
-
-        appendDefaultCell(column.id === '_actions' ? 'px-3 py-2 text-right align-middle' : 'px-3 py-2 align-middle')
+        grid.appendChild(createGridCell(column.alignRight ? 'px-3 py-2 text-right align-top' : 'px-3 py-2 align-top'))
       }
+
+      fullRowCell.appendChild(grid)
+      dividerRow.appendChild(fullRowCell)
 
       tbody.insertBefore(dividerRow, targetRow)
       return
@@ -1597,6 +1669,23 @@ const epicParentOptions = computed(() =>
     projectIds: item.projectIds
   }))
 )
+const createMenuItems = computed(() => [[
+  {
+    label: 'Novo roadmap',
+    icon: 'i-lucide-map',
+    onSelect: () => openCreateModal('Roadmap')
+  },
+  {
+    label: 'Novo épico',
+    icon: 'i-lucide-layers-3',
+    onSelect: () => openCreateModal('Epic')
+  },
+  {
+    label: 'Nova demanda',
+    icon: 'i-lucide-list-todo',
+    onSelect: () => openCreateModal('Demand')
+  }
+]])
 
 function openCreateModal(itemType?: RoadmapItemType) {
   createItemType.value = itemType
@@ -1604,10 +1693,20 @@ function openCreateModal(itemType?: RoadmapItemType) {
   modalOpen.value = true
 }
 
+function openListView() {
+  navigateTo({
+    path: '/roadmap',
+    query: selectedProjectId.value ? { projectId: selectedProjectId.value } : undefined
+  })
+}
+
 function openHierarchyView() {
   navigateTo({
-    path: '/roadmap-hierarquia',
-    query: selectedProjectId.value ? { projectId: selectedProjectId.value } : undefined
+    path: '/roadmap',
+    query: {
+      ...(selectedProjectId.value ? { projectId: selectedProjectId.value } : {}),
+      view: 'hierarchy'
+    }
   })
 }
 
@@ -1967,8 +2066,8 @@ const classificationBadgeClass: Record<DemandClassification, string> = {
 const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'select',         label: '',             defaultWidth: 42, disableFilter: true, disableSorting: true },
   { id: 'priority',       label: 'Prioridade',   defaultWidth: 76, disableFilter: true },
-  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
   { id: 'title',          label: 'Demanda',       defaultWidth: 440, filterType: 'text' },
+  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
   { id: 'kpis',           label: 'KPI',           defaultWidth: 148, disableFilter: true },
   { id: 'products',       label: 'Produtos',      defaultWidth: 118, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
@@ -2233,16 +2332,11 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (isCollapsedRepresentative(row.original))
         return h('div', { class: 'text-xs text-muted' }, '—')
 
-      const priority = priorityRankByDemandId.value[row.original.id] ?? 0
-      return h('div', { class: 'flex items-center gap-2' }, [
+      return h('div', { class: 'flex items-center justify-center' }, [
         h('span', {
           class: 'list-priority-handle inline-flex h-7 w-7 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
           title: 'Arrastar para repriorizar'
-        }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-4 w-4' })]),
-        h('div', { class: 'flex flex-col min-w-0' }, [
-          h('span', { class: 'text-xs font-semibold text-highlighted' }, `#${priority}`),
-          h('span', { class: 'text-[11px] text-muted' }, 'Arraste')
-        ])
+        }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-4 w-4' })])
       ])
     }
   },
@@ -2268,12 +2362,64 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const d = row.original
       const isDeprioritized = d.status === 'Deprioritized'
       const textNodes = []
+      const issueLinks = getDisplayIssueLinks(d)
       if (isCollapsedRepresentative(d))
         return h('span', { class: 'hidden' })
-      textNodes.push(h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title))
+      if (!groupDemandsByEpic.value && (d.roadmapTitle || d.epicTitle)) {
+        textNodes.push(h('div', { class: 'mb-1 flex flex-wrap items-center gap-1' }, [
+          d.roadmapTitle
+            ? h('span', {
+                class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted'
+              }, 'Roadmap')
+            : null,
+          d.roadmapTitle
+            ? h('span', {
+                class: 'max-w-[180px] truncate text-[11px] text-muted',
+                title: d.roadmapTitle
+              }, d.roadmapTitle)
+            : null,
+          d.epicTitle
+            ? h('span', {
+                class: 'inline-flex items-center rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary'
+              }, 'Épico')
+            : null,
+          d.epicTitle
+            ? h('span', {
+                class: 'max-w-[180px] truncate text-[11px] text-highlighted',
+                title: d.epicTitle
+              }, d.epicTitle)
+            : null,
+        ].filter(Boolean)))
+      }
+      if (groupDemandsByEpic.value && d.epicId) {
+        textNodes.push(h('div', { class: 'flex items-start gap-1.5 pl-12' }, [
+          h(UIconComp, { name: 'i-lucide-list-todo', class: 'mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600' }),
+          h('div', { class: 'min-w-0 flex-1' }, [
+            h('div', { class: 'mb-1 flex flex-wrap items-center gap-1.5' }, [
+              h('span', {
+                class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted'
+              }, 'Demanda'),
+              ...issueLinks.map(issue => issue.url
+                ? h('a', {
+                    href: issue.url,
+                    target: '_blank',
+                    rel: 'noopener noreferrer',
+                    class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
+                  }, issue.key)
+                : h('span', {
+                    class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary'
+                  }, issue.key)
+              )
+            ]),
+            h('p', { class: `truncate text-[13px] font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title)
+          ])
+        ]))
+      }
+      else {
+        textNodes.push(h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title))
+      }
 
-      const issueLinks = getDisplayIssueLinks(d)
-      if (issueLinks.length) {
+      if (issueLinks.length && (!groupDemandsByEpic.value || !d.epicId)) {
         textNodes.push(h('div', { class: 'mt-1 flex flex-wrap gap-1' },
           issueLinks.map(issue => issue.url
             ? h('a', {
@@ -2325,7 +2471,24 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableColumnFilter: false,
     size: 96,
     meta: { style: { td: () => ({ width: listColWidth('kpis', 96) }), th: () => ({ width: listColWidth('kpis', 96) }) } },
-    cell: () => h('span', { class: 'text-xs text-muted' }, '—')
+    cell: ({ row }) => {
+      if (isCollapsedRepresentative(row.original))
+        return h('span', { class: 'text-xs text-muted' }, '—')
+
+      const summary = getDemandKpiSummary(row.original)
+      const isClickable = summary.actionLabel !== 'Associe a demanda a um épico'
+
+      return h('button', {
+        type: 'button',
+        class: `inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-semibold ${summary.tone}`,
+        title: summary.actionLabel,
+        disabled: !isClickable,
+        onClick: () => {
+          if (isClickable)
+            openDemandKpiWorkspace(row.original)
+        }
+      }, summary.label)
+    }
   },
   {
     accessorKey: 'quarterLabel',
@@ -2354,9 +2517,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
 
       const quarterNode = demand.quarterYear === 0 && demand.quarterNumber === 0
         ? h('span', {
-          class: 'text-[11px] font-bold uppercase tracking-[0.08em] text-black dark:text-white'
+          class: 'inline-flex items-center rounded-md border border-default bg-elevated px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-highlighted'
         }, 'Backlog')
-        : h('span', { class: 'text-xs font-mono text-highlighted' }, demand.quarterLabel)
+        : h('span', { class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted' }, demand.quarterLabel)
 
       return h('div', { class: 'flex min-w-0 flex-col gap-0.5' }, [
         quarterNode,
@@ -2394,8 +2557,14 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
 
       const prods = row.original.products
       if (!prods.length) return h('span', { class: 'text-xs text-muted' }, '—')
-      return h('div', { class: 'flex flex-col gap-0.5' },
-        prods.map(p => h('span', { class: 'text-xs text-muted' }, p.name))
+      return h('div', { class: 'flex flex-wrap gap-1' },
+        prods.slice(0, 2).map(p => h('span', {
+          class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted'
+        }, p.name)).concat(
+          prods.length > 2
+            ? [h('span', { class: 'text-[11px] text-muted' }, `+${prods.length - 2}`)]
+            : []
+        )
       )
     },
   },
@@ -2415,7 +2584,19 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (isCollapsedRepresentative(row.original))
         return h('span', { class: 'text-xs text-muted' }, '—')
 
-      return h('span', { class: 'text-xs text-muted' }, '—')
+      const customers = getEffectiveDemandCustomers(row.original)
+      if (!customers.length)
+        return h('span', { class: 'text-xs text-muted' }, '—')
+
+      return h('div', { class: 'flex flex-wrap gap-1' },
+        customers.slice(0, 2).map(customer => h('span', {
+          class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted'
+        }, customer)).concat(
+          customers.length > 2
+            ? [h('span', { class: 'text-[11px] text-muted' }, `+${customers.length - 2}`)]
+            : []
+        )
+      )
     },
   },
   {
@@ -2429,7 +2610,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     cell: ({ row }) => isCollapsedRepresentative(row.original)
       ? h('span', { class: 'text-xs text-muted' }, '—')
       : isDemandEstimated(row.original)
-        ? h('span', { class: 'text-xs text-muted' }, `${row.original.hours}h`)
+        ? h('span', {
+          class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold text-highlighted'
+        }, `${row.original.hours}h`)
         : h('span', {
           class: 'inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
         }, '0h'),
@@ -2449,6 +2632,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             size: 'xs',
             variant: 'ghost',
             color: 'neutral',
+            class: 'rounded-md border border-default bg-default',
             onClick: () => toggleEpicCollapse(demand.epicId)
           }, {
             default: () => h(UIconComp, { name: 'i-lucide-chevron-right', class: 'h-4 w-4' })
@@ -2464,7 +2648,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             default: () => h(UButtonComp, {
               size: 'xs',
               variant: 'ghost',
-              color: 'primary'
+              color: 'primary',
+              class: 'rounded-md border border-default bg-default'
             }, {
               default: () => h(UIconComp, { name: 'i-lucide-calendar-range', class: 'h-4 w-4' })
             }),
@@ -2479,13 +2664,13 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       }
 
       actions.push(
-        h(UButtonComp, { size: 'xs', variant: 'ghost', color: 'neutral', onClick: () => openEditModal(demand) }, {
+        h(UButtonComp, { size: 'xs', variant: 'ghost', color: 'neutral', class: 'rounded-md border border-default bg-default', onClick: () => openEditModal(demand) }, {
           default: () => h(UIconComp, { name: 'i-lucide-pencil', class: 'h-4 w-4' })
         })
       )
 
       actions.push(
-        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', onClick: () => promptDelete(demand.id) })
+        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'rounded-md border border-default bg-default', onClick: () => promptDelete(demand.id) })
       )
 
       return h('div', { class: 'flex items-center justify-end gap-1' }, actions)
@@ -2565,6 +2750,10 @@ await Promise.all([
 
 if (activeDemandKpiId.value)
   await kpiStore.fetchKpis()
+
+watch(() => route.query.view, (value) => {
+  viewMode.value = value === 'hierarchy' ? 'hierarchy' : 'list'
+}, { immediate: true })
 
 watch(activeDemandKpiId, async (value) => {
   if (!value) {
@@ -2654,142 +2843,126 @@ watch(activeDemandKpiId, async (value) => {
     </template>
 
     <template v-else>
-    <!-- Header -->
-    <div class="flex items-center justify-between flex-wrap gap-2">
-      <div>
-        <h1 class="text-lg font-semibold text-highlighted tracking-tight">
-          Roadmap
-        </h1>
-        <p class="text-xs text-muted mt-0.5">
-          Planejamento por projeto, quarter e status
-        </p>
-      </div>
-    </div>
+    <template v-if="viewMode === 'list'">
+    <div class="rounded-[24px] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(248,250,252,0.88))] px-4 py-4 shadow-sm dark:bg-[linear-gradient(135deg,rgba(23,23,23,0.94),rgba(31,41,55,0.78))]">
+      <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div class="min-w-0">
+          <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary/70">Estrutura</p>
+          <h1 class="mt-0.5 text-lg font-semibold tracking-tight text-highlighted">Roadmaps, Épicos e Demandas</h1>
+          <p class="mt-1 truncate text-xs text-muted">
+            Planejamento e estrutura do roadmap em uma única visão.
+          </p>
+          <div class="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+            <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ roadmapItems.length }} roadmaps</span>
+            <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ epicItems.length }} épicos</span>
+            <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ demandItems.length }} demandas</span>
+          </div>
+        </div>
 
-    <!-- Project tabs + quarter filter -->
-    <div class="flex items-center gap-2 flex-wrap">
-      <div class="flex items-center gap-2 flex-wrap">
-        <button
-          v-for="project in projects"
-          :key="project.id"
-          class="px-4 py-1.5 rounded-full text-sm font-medium transition-all border"
-          :class="selectedProjectId === project.id
-            ? 'bg-primary text-white border-primary shadow-sm'
-            : 'border-default text-muted hover:border-primary/40 hover:text-highlighted'"
-          @click="roadmapStore.selectProject(project.id)"
-        >
-          {{ project.name }}
-        </button>
+        <div class="flex flex-wrap items-center gap-2">
+          <div class="inline-flex items-center rounded-xl border border-default bg-default/80 p-1 shadow-sm backdrop-blur">
+            <UButton
+              size="sm"
+              color="neutral"
+              icon="i-lucide-layout-list"
+              :variant="viewMode === 'list' ? 'soft' : 'ghost'"
+              label="Planejamento"
+              @click="openListView"
+            />
+            <UButton
+              size="sm"
+              color="neutral"
+              icon="i-lucide-workflow"
+              :variant="viewMode === 'hierarchy' ? 'soft' : 'ghost'"
+              label="Roadmap"
+              @click="openHierarchyView"
+            />
+          </div>
+          <UDropdownMenu :items="createMenuItems">
+            <UButton icon="i-lucide-plus" label="Novo Item" />
+          </UDropdownMenu>
+        </div>
       </div>
-      <div class="flex items-center gap-2 flex-wrap ml-auto">
-        <UPopover>
-          <button class="flex items-center gap-1.5 text-sm border border-default rounded-lg px-3 py-1.5 bg-background hover:border-primary/40 transition-colors min-w-[220px]">
-            <UIcon name="i-lucide-calendar" class="w-3.5 h-3.5 shrink-0 text-muted" />
-            <span class="flex-1 text-left truncate text-highlighted">{{ quarterFilterLabel }}</span>
-            <UBadge v-if="filterQuarters.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ filterQuarters.length }}</UBadge>
-            <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+
+      <div class="mt-4 flex flex-wrap items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <button
+            v-for="project in projects"
+            :key="project.id"
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-all border"
+            :class="selectedProjectId === project.id
+              ? 'bg-primary text-white border-primary shadow-sm'
+              : 'border-default text-muted hover:border-primary/40 hover:text-highlighted'"
+            @click="roadmapStore.selectProject(project.id)"
+          >
+            {{ project.name }}
           </button>
-          <template #content>
-            <div class="py-1 min-w-[260px] max-h-72 overflow-y-auto">
-              <button
-                class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                :class="filterQuarters.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
-                @click="filterQuarters = []"
-              >
-                <UIcon v-if="filterQuarters.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
-                <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                Todos os quarters
-              </button>
-              <button
-                v-for="opt in quarterOptions"
-                :key="opt.value"
-                class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                :class="filterQuarters.includes(opt.value) ? 'text-primary' : 'text-highlighted'"
-                @click="toggleQuarterFilter(opt.value)"
-              >
-                <UIcon v-if="filterQuarters.includes(opt.value)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
-                <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                {{ opt.label }}
-              </button>
-            </div>
-          </template>
-        </UPopover>
+        </div>
 
-        <div class="flex items-center gap-2">
-          <UButton
-            icon="i-lucide-workflow"
-            label="Ver Roadmaps e Épicos"
-            color="neutral"
-            variant="ghost"
-            @click="openHierarchyView"
-          />
-          <UButton
-            icon="i-lucide-plus"
-            label="Novo Item"
-            @click="openCreateModal()"
-          />
+        <div class="flex items-center gap-2 flex-wrap ml-auto">
+          <UPopover>
+            <button class="flex items-center gap-1.5 text-sm border border-default rounded-lg px-3 py-1.5 bg-background hover:border-primary/40 transition-colors min-w-[220px]">
+              <UIcon name="i-lucide-calendar" class="w-3.5 h-3.5 shrink-0 text-muted" />
+              <span class="flex-1 text-left truncate text-highlighted">{{ quarterFilterLabel }}</span>
+              <UBadge v-if="filterQuarters.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ filterQuarters.length }}</UBadge>
+              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+            </button>
+            <template #content>
+              <div class="py-1 min-w-[260px] max-h-72 overflow-y-auto">
+                <button
+                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                  :class="filterQuarters.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
+                  @click="filterQuarters = []"
+                >
+                  <UIcon v-if="filterQuarters.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
+                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                  Todos os quarters
+                </button>
+                <button
+                  v-for="opt in quarterOptions"
+                  :key="opt.value"
+                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                  :class="filterQuarters.includes(opt.value) ? 'text-primary' : 'text-highlighted'"
+                  @click="toggleQuarterFilter(opt.value)"
+                >
+                  <UIcon v-if="filterQuarters.includes(opt.value)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
+                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                  {{ opt.label }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
         </div>
       </div>
     </div>
 
     <div class="rounded-[20px] border border-default bg-default px-3 py-2 shadow-sm">
-      <div class="grid gap-x-3 gap-y-2 xl:grid-cols-[150px_minmax(0,1fr)_86px_112px_auto] xl:items-start">
-        <div class="min-w-0">
-          <p class="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/70">Capacity</p>
-          <div class="mt-0.5 flex items-center gap-2">
-            <span class="text-base font-semibold leading-none text-highlighted">{{ selectedProject?.name ?? 'Projeto' }}</span>
-            <span class="rounded-full border border-default bg-elevated px-2 py-0.5 text-[11px] font-medium text-muted">
-              {{ activeCapacityScope?.quarterLabel ?? 'Selecione 1 quarter' }}
-            </span>
-          </div>
-        </div>
-
-        <div class="min-w-0">
-          <div class="flex flex-wrap items-start gap-x-2.5 gap-y-1">
-            <div>
-              <p class="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/70">Comprometido</p>
-              <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
-                <span class="text-[1.05rem] font-semibold leading-none" :class="capacityCommittedTone">
-                  {{ displayCapacitySummary?.committedHours.toLocaleString('pt-BR') ?? '0' }}h
-                </span>
-                <span class="text-base leading-none text-muted">/ {{ displayCapacitySummary?.capacityHours?.toLocaleString('pt-BR') ?? '—' }}h</span>
-                <span
-                  v-if="capacityConfigured"
-                  class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                  :class="capacityDeltaTone"
-                >
-                  <UIcon :name="capacityIsOver ? 'i-lucide-circle-alert' : 'i-lucide-circle-check'" class="h-3 w-3" />
-                  {{ capacityDeltaLabel }}: {{ capacityDeltaValue?.toLocaleString('pt-BR') ?? '—' }}h
-                </span>
-                <span
-                  class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-                  :class="capacityUnestimatedTone"
-                >
-                  <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
-                  {{ capacityUnestimatedLabel }}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div class="mt-2 h-2 overflow-hidden rounded-full bg-elevated">
-            <div class="h-full rounded-full transition-all duration-300" :class="capacityProgressTone" :style="{ width: `${capacityProgressBarPercent}%` }" />
-          </div>
-        </div>
-
-        <div class="text-left xl:text-right">
-          <p class="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/70">Capacity</p>
-          <p class="mt-0.5 text-lg font-semibold leading-none" :class="capacityPercentTone">
-            {{ capacityConfigured ? `${capacityProgressPercent.toFixed(0)}%` : '—' }}
-          </p>
-        </div>
-
-        <div>
-          <p class="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/70">Adicionais</p>
-          <div class="mt-0.5 flex items-center gap-1 text-base font-semibold leading-none text-highlighted">
-            <UIcon name="i-lucide-bolt" class="h-4 w-4 shrink-0 text-amber-500" />
-            {{ displayCapacitySummary?.additionalHours.toLocaleString('pt-BR') ?? '0' }}h
-          </div>
+      <div class="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
+        <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+          <span class="inline-flex items-center gap-1 rounded-full border border-default bg-elevated px-2.5 py-0.5">
+            <UIcon name="i-lucide-folder-kanban" class="h-3.5 w-3.5 text-primary" />
+            <span class="font-medium text-highlighted">{{ selectedProject?.name ?? 'Projeto' }}</span>
+          </span>
+          <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ activeCapacityScope?.quarterLabel ?? 'Selecione 1 quarter' }}</span>
+          <span class="rounded-full border border-default bg-default px-2.5 py-0.5">
+            Comprometido: <span class="font-semibold" :class="capacityCommittedTone">{{ displayCapacitySummary?.committedHours.toLocaleString('pt-BR') ?? '0' }}h</span>
+            <span class="text-muted"> / {{ displayCapacitySummary?.capacityHours?.toLocaleString('pt-BR') ?? '—' }}h</span>
+          </span>
+          <span v-if="capacityConfigured" class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityDeltaTone">
+            <UIcon :name="capacityIsOver ? 'i-lucide-circle-alert' : 'i-lucide-circle-check'" class="h-3.5 w-3.5" />
+            {{ capacityDeltaLabel }}: {{ capacityDeltaValue?.toLocaleString('pt-BR') ?? '—' }}h
+          </span>
+          <span class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityUnestimatedTone">
+            <UIcon name="i-lucide-triangle-alert" class="h-3.5 w-3.5" />
+            {{ capacityUnestimatedLabel }}
+          </span>
+          <span class="inline-flex items-center gap-1 rounded-full border border-default bg-default px-2.5 py-0.5 text-[11px] font-semibold text-highlighted">
+            <UIcon name="i-lucide-bolt" class="h-3.5 w-3.5 text-amber-500" />
+            {{ displayCapacitySummary?.additionalHours.toLocaleString('pt-BR') ?? '0' }}h adicionais
+          </span>
+          <span class="rounded-full border border-default bg-default px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityPercentTone">
+            {{ capacityConfigured ? `${capacityProgressPercent.toFixed(0)}% do capacity` : 'Capacity não configurado' }}
+          </span>
         </div>
 
         <div class="flex items-start justify-start gap-2 xl:justify-end">
@@ -2835,120 +3008,125 @@ watch(activeDemandKpiId, async (value) => {
 
     <template v-else>
       <!-- ── LIST VIEW ───────────────────────────────────────────────────── -->
-      <UCard
-        :ui="{ header: 'px-3 py-2 sm:px-3 sm:py-2', body: 'p-0 sm:p-0' }"
-        class="ring-default overflow-hidden"
-      >
-        <template #header>
-          <div class="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+      <div class="overflow-hidden rounded-2xl border border-default bg-default shadow-sm">
+        <div class="border-b border-default px-3 py-3">
+          <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
             <div>
-              <p class="text-sm font-semibold text-highlighted">Demandas</p>
-              <p class="mt-0.5 text-[11px] leading-none text-muted">
+              <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary/70">Execução</p>
+              <h2 class="mt-0.5 text-base font-semibold tracking-tight text-highlighted">Demandas em planejamento</h2>
+              <p class="mt-1 text-xs text-muted">
                 <template v-if="listHasActiveFilters">
-                  {{ listFilteredCount.toLocaleString('pt-BR') }} de {{ quarterFilteredDemands.length.toLocaleString('pt-BR') }} demandas
+                  {{ listFilteredCount.toLocaleString('pt-BR') }} de {{ quarterFilteredDemands.length.toLocaleString('pt-BR') }} demandas visíveis
                 </template>
                 <template v-else>
-                  {{ quarterFilteredDemands.length.toLocaleString('pt-BR') }} demandas
+                  {{ quarterFilteredDemands.length.toLocaleString('pt-BR') }} demandas visíveis
                 </template>
               </p>
             </div>
-            <div class="flex items-center gap-2">
-              <UPopover v-if="selectedDemandCount">
-                <UButton
-                  size="sm"
-                  color="primary"
-                  variant="soft"
-                  trailing-icon="i-lucide-chevron-down"
-                  leading-icon="i-lucide-calendar-range"
-                  :loading="isBulkPlanning"
-                >
-                  Mover {{ selectedDemandCount.toLocaleString('pt-BR') }} selecionadas
-                </UButton>
-                <template #content>
-                  <div class="py-1 min-w-[220px]">
-                    <button
-                      v-for="option in bulkMoveQuarterOptions"
-                      :key="option.value"
-                      class="w-full px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
-                      @click="planSelectedDemandsToQuarter(option.value)"
-                    >
-                      {{ option.label }}
-                    </button>
-                  </div>
-                </template>
-              </UPopover>
+
+            <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+              <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ selectedDemandCount.toLocaleString('pt-BR') }} selecionadas</span>
+              <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ visibleEpicIds.length.toLocaleString('pt-BR') }} épicos visíveis</span>
+            </div>
+          </div>
+
+          <div class="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-default pt-2.5">
+            <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Exibição</span>
+            <UPopover v-if="selectedDemandCount">
               <UButton
-                v-if="listHasActiveFilters"
-                size="sm"
-                color="neutral"
-                variant="ghost"
-                leading-icon="i-lucide-filter-x"
-                @click="clearListFilters"
+                size="xs"
+                color="primary"
+                variant="soft"
+                trailing-icon="i-lucide-chevron-down"
+                leading-icon="i-lucide-calendar-range"
+                :loading="isBulkPlanning"
               >
-                Limpar filtros
-                <UBadge size="xs" color="primary" variant="solid" class="ml-1">{{ listColumnFilters.length }}</UBadge>
+                Mover {{ selectedDemandCount.toLocaleString('pt-BR') }}
               </UButton>
-              <UButton
-                size="sm"
-                color="neutral"
-                variant="ghost"
-                :leading-icon="groupDemandsByEpic ? 'i-lucide-layers-3' : 'i-lucide-list'"
-                @click="groupDemandsByEpic = !groupDemandsByEpic"
-              >
-                {{ groupDemandsByEpic ? 'Desagrupar épicos' : 'Agrupar por épico' }}
-              </UButton>
-              <UButton
-                v-if="visibleEpicIds.length"
-                size="sm"
-                color="neutral"
-                variant="ghost"
-                :leading-icon="areAllEpicGroupsCollapsed ? 'i-lucide-unfold-vertical' : 'i-lucide-fold-vertical'"
-                @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
-              >
-                {{ areAllEpicGroupsCollapsed ? 'Expandir tudo' : 'Recolher tudo' }}
-              </UButton>
-              <div class="relative">
-                <UButton
-                  variant="ghost"
-                  size="sm"
-                  trailing-icon="i-lucide-chevron-down"
-                  leading-icon="i-lucide-download"
-                  color="neutral"
-                  @click="toggleListExportMenu"
-                >
-                  Exportar
-                </UButton>
-                <div v-if="listExportMenuOpen" class="fixed inset-0 z-40" @click="closeListExportMenu" />
-                <div
-                  v-show="listExportMenuOpen"
-                  class="absolute right-0 top-full mt-1 z-50 min-w-48 rounded-lg border border-default bg-default shadow-lg p-1 flex flex-col gap-0.5"
-                >
-                  <a
-                    :href="listExportUrlVisible"
-                    download="roadmap-visiveis.xlsx"
-                    class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-highlighted hover:bg-elevated cursor-pointer select-none no-underline"
-                    @click="closeListExportMenu"
+              <template #content>
+                <div class="py-1 min-w-[220px]">
+                  <button
+                    v-for="option in bulkMoveQuarterOptions"
+                    :key="option.value"
+                    class="w-full px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                    @click="planSelectedDemandsToQuarter(option.value)"
                   >
-                    <UIcon name="i-lucide-table-2" class="size-4 text-muted shrink-0" />
-                    Exportar dados visíveis
-                  </a>
-                  <a
-                    :href="listExportUrlFull"
-                    download="roadmap-completo.xlsx"
-                    class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-highlighted hover:bg-elevated cursor-pointer select-none no-underline"
-                    @click="closeListExportMenu"
-                  >
-                    <UIcon name="i-lucide-database" class="size-4 text-muted shrink-0" />
-                    Exportar modelo completo
-                  </a>
+                    {{ option.label }}
+                  </button>
                 </div>
+              </template>
+            </UPopover>
+            <UButton
+              size="xs"
+              color="neutral"
+              variant="outline"
+              :leading-icon="groupDemandsByEpic ? 'i-lucide-layers-3' : 'i-lucide-list'"
+              @click="groupDemandsByEpic = !groupDemandsByEpic"
+            >
+              {{ groupDemandsByEpic ? 'Desagrupar épicos' : 'Agrupar por épico' }}
+            </UButton>
+            <UButton
+              v-if="visibleEpicIds.length"
+              size="xs"
+              color="neutral"
+              variant="outline"
+              :leading-icon="areAllEpicGroupsCollapsed ? 'i-lucide-unfold-vertical' : 'i-lucide-fold-vertical'"
+              @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
+            >
+              {{ areAllEpicGroupsCollapsed ? 'Expandir tudo' : 'Recolher tudo' }}
+            </UButton>
+            <UButton
+              v-if="listHasActiveFilters"
+              size="xs"
+              color="neutral"
+              variant="ghost"
+              leading-icon="i-lucide-filter-x"
+              @click="clearListFilters"
+            >
+              Limpar filtros
+              <UBadge size="xs" color="primary" variant="solid" class="ml-1">{{ listColumnFilters.length }}</UBadge>
+            </UButton>
+            <div class="relative ml-auto">
+              <UButton
+                variant="ghost"
+                size="xs"
+                trailing-icon="i-lucide-chevron-down"
+                leading-icon="i-lucide-download"
+                color="neutral"
+                @click="toggleListExportMenu"
+              >
+                Exportar
+              </UButton>
+              <div v-if="listExportMenuOpen" class="fixed inset-0 z-40" @click="closeListExportMenu" />
+              <div
+                v-show="listExportMenuOpen"
+                class="absolute right-0 top-full mt-1 z-50 min-w-48 rounded-lg border border-default bg-default shadow-lg p-1 flex flex-col gap-0.5"
+              >
+                <a
+                  :href="listExportUrlVisible"
+                  download="roadmap-visiveis.xlsx"
+                  class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-highlighted hover:bg-elevated cursor-pointer select-none no-underline"
+                  @click="closeListExportMenu"
+                >
+                  <UIcon name="i-lucide-table-2" class="size-4 text-muted shrink-0" />
+                  Exportar dados visíveis
+                </a>
+                <a
+                  :href="listExportUrlFull"
+                  download="roadmap-completo.xlsx"
+                  class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-highlighted hover:bg-elevated cursor-pointer select-none no-underline"
+                  @click="closeListExportMenu"
+                >
+                  <UIcon name="i-lucide-database" class="size-4 text-muted shrink-0" />
+                  Exportar modelo completo
+                </a>
               </div>
             </div>
           </div>
-        </template>
+        </div>
 
         <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'">
-          <div class="sticky top-0 z-10 border-b border-accented bg-default overflow-hidden">
+          <div class="sticky top-0 z-10 border-b border-default bg-elevated/95 overflow-hidden">
             <table class="table-fixed text-sm" :style="{ width: listTableWidth }">
               <thead>
                 <tr ref="listHeaderRowRef">
@@ -2956,7 +3134,7 @@ watch(activeDemandKpiId, async (value) => {
                     v-for="col in listOrderedCols"
                     :key="col.id"
                     :data-col-id="col.id"
-                    class="relative px-3 py-2.5 text-xs text-highlighted font-medium overflow-hidden"
+                    class="relative overflow-hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted"
                     :class="col.alignRight ? 'text-right' : 'text-left'"
                     :style="{ width: listColWidth(col.id, col.defaultWidth) }"
                   >
@@ -3048,7 +3226,7 @@ watch(activeDemandKpiId, async (value) => {
               :columns="listTanstackColumns"
               :get-row-id="(row: RoadmapDemand) => row.id"
               :column-sizing-options="{ enableColumnResizing: true, columnResizeMode: 'onChange' }"
-              :ui="{ base: 'w-full table-fixed', thead: 'hidden', td: 'py-2 overflow-hidden' }"
+              :ui="{ base: 'w-full table-fixed', thead: 'hidden', td: 'border-b border-default py-2.5 align-top overflow-hidden' }"
             >
               <template #status-cell="{ row }">
                 <div
@@ -3123,7 +3301,7 @@ watch(activeDemandKpiId, async (value) => {
             </tfoot>
           </table>
         </div>
-      </UCard>
+      </div>
 
       <section class="-mt-1 space-y-3">
         <div>
@@ -3247,6 +3425,11 @@ watch(activeDemandKpiId, async (value) => {
         Nenhum projeto encontrado.
       </p>
     </div>
+    </template>
+
+    <template v-else>
+      <RoadmapHierarchyPage />
+    </template>
 
     <!-- Create / Edit modal -->
     <RoadmapDemandFormModal

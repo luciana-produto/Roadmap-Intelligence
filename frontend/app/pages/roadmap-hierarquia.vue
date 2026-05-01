@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
+definePageMeta({
+  middleware: to => navigateTo({
+    path: '/roadmap',
+    query: {
+      ...to.query,
+      view: 'hierarchy'
+    }
+  }, {
+    redirectCode: 301
+  })
+})
 </script>
-
-<template>
-  <RoadmapHierarchyPage />
-</template>

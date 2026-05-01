@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
 
-useSeoMeta({ title: 'Hierarquia do Roadmap · ProductHub' })
+useSeoMeta({ title: 'Roadmap · ProductHub' })
 
 const route = useRoute()
 const toast = useToast()
@@ -356,29 +356,40 @@ watch(selectedProjectId, async (projectId) => {
 
 <template>
   <div class="space-y-4">
-    <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-      <div>
+    <div class="rounded-[24px] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(248,250,252,0.88))] px-4 py-4 shadow-sm dark:bg-[linear-gradient(135deg,rgba(23,23,23,0.94),rgba(31,41,55,0.78))]">
+      <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+      <div class="min-w-0">
         <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary/70">Estrutura</p>
         <h1 class="mt-0.5 text-lg font-semibold tracking-tight text-highlighted">Roadmaps, Épicos e Demandas</h1>
-        <p class="mt-1 max-w-3xl text-xs text-muted">
-          Visualização hierárquica completa do roadmap. Aqui você acompanha a estrutura entre roadmap, épico e demanda em um formato mais próximo de backlog.
+        <p class="mt-1 truncate text-xs text-muted">
+          Planejamento e estrutura do roadmap em uma única visão.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center gap-1.5">
-        <UButton
-          color="neutral"
-          variant="ghost"
-          icon="i-lucide-arrow-left"
-          @click="navigateTo({ path: '/roadmap', query: selectedProjectId ? { projectId: selectedProjectId } : undefined })"
-        >
-          Voltar para Demandas
-        </UButton>
-        <UDropdownMenu :items="createMenuItems">
-          <UButton color="primary" variant="soft" icon="i-lucide-plus">
-            Novo
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="inline-flex items-center rounded-xl border border-default bg-default/80 p-1 shadow-sm backdrop-blur">
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-layout-list"
+            @click="navigateTo({ path: '/roadmap', query: selectedProjectId ? { projectId: selectedProjectId } : undefined })"
+          >
+            Planejamento
           </UButton>
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="soft"
+            icon="i-lucide-workflow"
+          >
+            Roadmap
+          </UButton>
+        </div>
+        <UDropdownMenu :items="createMenuItems">
+          <UButton icon="i-lucide-plus" label="Novo Item" />
         </UDropdownMenu>
+      </div>
       </div>
     </div>
 
@@ -492,7 +503,7 @@ watch(selectedProjectId, async (projectId) => {
                         <div class="mt-0.5 flex items-start gap-1.5">
                           <UIcon name="i-lucide-map" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
                           <div class="min-w-0">
-                            <p class="truncate text-[13px] font-semibold text-highlighted">{{ group.roadmap.title }}</p>
+                            <p class="truncate text-[13px] font-semibold text-highlighted" :title="group.roadmap.description || undefined">{{ group.roadmap.title }}</p>
                           </div>
                         </div>
                       </div>
@@ -596,7 +607,7 @@ watch(selectedProjectId, async (projectId) => {
                               {{ getDemandsForEpic(epic.id).length }} demandas
                             </span>
                           </div>
-                          <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted">{{ epic.title }}</p>
+                          <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
                         </div>
                       </div>
                     </td>
@@ -778,7 +789,7 @@ watch(selectedProjectId, async (projectId) => {
                       <span class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
                         Épico órfão
                       </span>
-                      <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted">{{ epic.title }}</p>
+                      <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
                     </div>
                   </div>
                 </td>
