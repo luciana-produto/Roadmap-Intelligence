@@ -119,13 +119,37 @@ public sealed class CreateRoadmapDemandCommandHandler(
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
+        var currentDemand = await demandRepository.GetByIdWithProductsAsync(demand.Id, cancellationToken)
+            ?? demand;
+
+        var hierarchyDemandIds = new HashSet<Guid>(dependencyDemandIds);
+        if (currentDemand.ParentDemandId.HasValue)
+            hierarchyDemandIds.Add(currentDemand.ParentDemandId.Value);
+
+        var hierarchyDemands = (await demandRepository.GetByIdsAsync(hierarchyDemandIds, cancellationToken)).ToList();
+        var parentDemand = currentDemand.ParentDemandId.HasValue
+            ? hierarchyDemands.FirstOrDefault(item => item.Id == currentDemand.ParentDemandId.Value)
+            : null;
+
+        if (parentDemand?.ParentDemandId.HasValue == true)
+        {
+            var ancestorDemands = await demandRepository.GetByIdsAsync([parentDemand.ParentDemandId.Value], cancellationToken);
+            hierarchyDemands = hierarchyDemands
+                .Concat(ancestorDemands)
+                .GroupBy(item => item.Id)
+                .Select(group => group.First())
+                .ToList();
+        }
+
         var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
             .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync([demand.Id, .. dependencyDemandIds], cancellationToken);
         var demandsById = dependencyDemands
-            .Concat([demand])
-            .ToDictionary(item => item.Id, item => item);
+            .Concat(hierarchyDemands)
+            .Concat([currentDemand])
+            .GroupBy(item => item.Id)
+            .ToDictionary(group => group.Key, group => group.First());
 
-        return RoadmapDemandDtoMapper.Map(demand, productMap, demandsById, projectNamesById, dependencyLinks);
+        return RoadmapDemandDtoMapper.Map(currentDemand, productMap, demandsById, projectNamesById, dependencyLinks);
     }
 }

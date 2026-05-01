@@ -35,6 +35,8 @@ public interface IRoadmapDemandRepository : IRepository<RoadmapDemand>
 
     Task ReplaceProductsAsync(Guid demandId, IEnumerable<Guid> productIds, CancellationToken cancellationToken = default);
 
+    Task ReplaceProjectLinksAsync(Guid demandId, IEnumerable<Guid> projectIds, CancellationToken cancellationToken = default);
+
     Task ReplaceDependenciesAsync(
         Guid demandId,
         IEnumerable<Guid> dependsOnDemandIds,

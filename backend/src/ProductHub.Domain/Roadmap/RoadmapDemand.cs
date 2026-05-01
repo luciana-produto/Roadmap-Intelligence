@@ -175,9 +175,6 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;
         NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
-        _projectLinks = normalizedProjectIds
-            .Select(id => RoadmapDemandProject.Create(Id, id))
-            .ToList();
     }
 
     public void ReplaceProducts(IEnumerable<Guid>? productIds)

@@ -1589,7 +1589,13 @@ const roadmapParentOptions = computed(() =>
   roadmapItems.value.map(item => ({ id: item.id, title: item.title }))
 )
 const epicParentOptions = computed(() =>
-  epicItems.value.map(item => ({ id: item.id, title: item.title, roadmapTitle: item.roadmapTitle }))
+  epicItems.value.map(item => ({
+    id: item.id,
+    title: item.title,
+    roadmapTitle: item.roadmapTitle,
+    projectId: item.projectId,
+    projectIds: item.projectIds
+  }))
 )
 
 function openCreateModal(itemType?: RoadmapItemType) {
@@ -1682,6 +1688,9 @@ async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) 
 }
 
 async function handleSubmit(data: DemandFormData) {
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
   try {
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
@@ -1692,9 +1701,7 @@ async function handleSubmit(data: DemandFormData) {
       toast.add({ title: 'Item criado', color: 'success' })
     }
     modalOpen.value = false
-    await nextTick()
-    syncListSectionDividers()
-    initListSortable()
+    await refreshListPresentation(listScrollTop, listScrollLeft)
   }
   catch {
     // error handled by useApi

@@ -123,6 +123,25 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
                 RoadmapDemandProduct.FromRepository(demandId, pid), cancellationToken);
     }
 
+    public async Task ReplaceProjectLinksAsync(
+        Guid demandId,
+        IEnumerable<Guid> projectIds,
+        CancellationToken cancellationToken = default)
+    {
+        var existing = await context.RoadmapDemandProjects
+            .Where(link => link.DemandId == demandId)
+            .ToListAsync(cancellationToken);
+
+        context.RoadmapDemandProjects.RemoveRange(existing);
+
+        foreach (var projectId in projectIds.Distinct())
+        {
+            await context.RoadmapDemandProjects.AddAsync(
+                RoadmapDemandProject.FromRepository(demandId, projectId),
+                cancellationToken);
+        }
+    }
+
     public async Task ReplaceDependenciesAsync(
         Guid demandId,
         IEnumerable<Guid> dependsOnDemandIds,

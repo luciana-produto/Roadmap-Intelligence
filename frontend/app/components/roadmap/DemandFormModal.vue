@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { ApiResponse } from '~/types/api'
 import type {
   RoadmapDemand,
   RoadmapProject,
@@ -42,6 +43,15 @@ type MeasurementEditorState = {
   observation: string
 }
 
+type EpicParentOption = {
+  id: string
+  title: string
+  roadmapTitle?: string
+  projectId?: string
+  projectIds?: string[]
+}
+
+const api = useApi()
 const kpiStore = useKpiStore()
 const roadmapStore = useRoadmapStore()
 const toast = useToast()
@@ -51,7 +61,7 @@ const props = defineProps<{
   projects: RoadmapProject[]
   defaultItemType?: RoadmapItemType
   roadmapOptions?: Array<{ id: string, title: string }>
-  epicOptions?: Array<{ id: string, title: string, roadmapTitle?: string }>
+  epicOptions?: EpicParentOption[]
   dependencyOptions: DemandDependencyOption[]
   customerSuggestions: string[]
   demand?: RoadmapDemand | null
@@ -216,10 +226,11 @@ const parentOptions = computed(() => {
   }
 
   if (form.itemType === 'Demand') {
-    return (props.epicOptions ?? []).map(option => ({
-      value: option.id,
-      label: option.roadmapTitle ? `${option.roadmapTitle} · ${option.title}` : option.title
-    }))
+    return availableEpicOptions.value
+      .map(option => ({
+        value: option.id,
+        label: option.roadmapTitle ? `${option.roadmapTitle} · ${option.title}` : option.title
+      }))
   }
 
   return []
@@ -230,6 +241,59 @@ const kpiMeasurements = ref<KpiMeasurement[]>([])
 const measurementDrafts = ref<Record<string, MeasurementEditorState>>({})
 const measurementSavingKpiId = ref<string | null>(null)
 const measurementDeletingId = ref<string | null>(null)
+const epicOptionsByProjectId = ref<Record<string, EpicParentOption[]>>({})
+
+function mapEpicParentOptions(items: RoadmapDemand[]): EpicParentOption[] {
+  return items
+    .filter(item => item.itemType === 'Epic')
+    .map(item => ({
+      id: item.id,
+      title: item.title,
+      roadmapTitle: item.roadmapTitle,
+      projectId: item.projectId,
+      projectIds: item.projectIds
+    }))
+}
+
+async function ensureEpicOptionsLoaded(projectId?: string) {
+  if (!projectId || epicOptionsByProjectId.value[projectId])
+    return
+
+  try {
+    const params = new URLSearchParams({ projectId })
+    const response = await api.get<ApiResponse<RoadmapDemand[]>>(`/api/roadmap/demands?${params}`)
+    epicOptionsByProjectId.value = {
+      ...epicOptionsByProjectId.value,
+      [projectId]: mapEpicParentOptions(response.data ?? [])
+    }
+  }
+  catch {
+    epicOptionsByProjectId.value = {
+      ...epicOptionsByProjectId.value,
+      [projectId]: []
+    }
+  }
+}
+
+const availableEpicOptions = computed(() => {
+  if (form.itemType !== 'Demand')
+    return props.epicOptions ?? []
+
+  if (!form.projectId)
+    return props.epicOptions ?? []
+
+  const cachedOptions = epicOptionsByProjectId.value[form.projectId]
+  if (cachedOptions)
+    return cachedOptions
+
+  return (props.epicOptions ?? []).filter((option) => {
+    const optionProjectIds = option.projectId
+      ? [option.projectId]
+      : (option.projectIds ?? [])
+
+    return optionProjectIds.includes(form.projectId)
+  })
+})
 
 const selectedDeprioritizationExample = computed(() => {
   const reason = form.deprioritizationReason
@@ -405,6 +469,25 @@ watch(() => props.open, (open) => {
 
 watch(() => form.projectId, () => {
   syncSingleProductSelection()
+})
+
+watch(
+  () => [props.open, form.itemType, form.projectId] as const,
+  async ([open, itemType, projectId]) => {
+    if (!open || itemType !== 'Demand' || !projectId)
+      return
+
+    await ensureEpicOptionsLoaded(projectId)
+  },
+  { immediate: true }
+)
+
+watch(parentOptions, (options) => {
+  if (isRoadmap.value || !form.parentDemandId)
+    return
+
+  if (!options.some(option => option.value === form.parentDemandId))
+    form.parentDemandId = undefined
 })
 
 watch(() => form.itemType, (itemType) => {
@@ -1278,7 +1361,7 @@ async function handleSubmit() {
           <UFormField :label="isRoadmap ? 'Issues' : 'Issues (Jira)'"><div class="space-y-2">
             <div
               v-for="(issue, index) in form.issueLinks"
-              :key="`${index}-${issue.key}-${issue.url}`"
+              :key="index"
               class="grid gap-2 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)_auto]"
             >
               <UInput

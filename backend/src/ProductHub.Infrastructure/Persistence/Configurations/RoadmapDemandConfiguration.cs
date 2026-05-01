@@ -151,11 +151,18 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
 
         try
         {
-            return JsonSerializer.Deserialize<List<RoadmapIssueLink>>(value) ?? [];
+            var parsed = JsonSerializer.Deserialize<List<IssueLinkJsonModel>>(value) ?? [];
+
+            return parsed
+                .Where(link => !string.IsNullOrWhiteSpace(link.Key) && !string.IsNullOrWhiteSpace(link.Url))
+                .Select(link => RoadmapIssueLink.Create(link.Key!, link.Url!))
+                .ToList();
         }
         catch (JsonException)
         {
             return [];
         }
     }
+
+    private sealed record IssueLinkJsonModel(string? Key, string? Url);
 }
