@@ -13,13 +13,6 @@ public sealed class GetProjectsQueryHandler(IRoadmapProjectRepository repository
     {
         var projects = await repository.GetAllWithProductsAsync(cancellationToken);
 
-        return projects.Select(p => new RoadmapProjectDto(
-            p.Id,
-            p.Name,
-            p.Slug,
-            p.Products
-                .Select(pr => new RoadmapProductDto(pr.Id, pr.Name, pr.ProjectId))
-                .ToList()
-                .AsReadOnly()));
+        return projects.Select(RoadmapProjectDtoMapper.Map);
     }
 }

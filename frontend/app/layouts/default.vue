@@ -88,7 +88,7 @@ const userMenuItems = computed(() => [[
 const navLinks = [
   { label: 'Home', icon: 'i-lucide-layout-dashboard', to: '/home' },
   { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' },
-  { label: 'Produtos', icon: 'i-lucide-package', to: '/products' },
+  { label: 'Cadastros', icon: 'i-lucide-package', to: '/products' },
   { label: 'KPIs', icon: 'i-lucide-bar-chart-2', to: '/kpis' },
   { label: 'Indicadores', icon: 'i-lucide-trending-up', to: '/indicators' }
 ]

@@ -135,11 +135,72 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     upsertDependencyOptionFromDemand(updatedDemand)
   }
 
+  function syncSelectedProject() {
+    if (projects.value.length === 0) {
+      selectedProjectId.value = null
+      return
+    }
+
+    if (!selectedProjectId.value || !projects.value.some(project => project.id === selectedProjectId.value))
+      selectedProjectId.value = projects.value[0].id
+  }
+
   async function fetchProjects() {
     const res = await api.get<ApiResponse<RoadmapProject[]>>('/api/projects')
     projects.value = res.data ?? []
-    if (projects.value.length > 0 && !selectedProjectId.value)
-      selectedProjectId.value = projects.value[0].id
+    syncSelectedProject()
+  }
+
+  async function createProject(payload: { name: string }): Promise<RoadmapProject> {
+    const res = await api.post<ApiResponse<RoadmapProject>>(
+      '/api/projects',
+      {
+        name: payload.name
+      }
+    )
+
+    await fetchProjects()
+    return res.data
+  }
+
+  async function updateProject(id: string, payload: { name: string }): Promise<RoadmapProject> {
+    const res = await api.put<ApiResponse<RoadmapProject>>(
+      `/api/projects/${id}`,
+      {
+        name: payload.name
+      }
+    )
+
+    await fetchProjects()
+    return res.data
+  }
+
+  async function deleteProject(id: string) {
+    await api.del(`/api/projects/${id}`)
+    await fetchProjects()
+  }
+
+  async function createProduct(projectId: string, payload: { name: string }): Promise<void> {
+    await api.post<ApiResponse<unknown>>(
+      `/api/projects/${projectId}/products`,
+      { name: payload.name }
+    )
+
+    await fetchProjects()
+  }
+
+  async function updateProduct(projectId: string, productId: string, payload: { name: string }): Promise<void> {
+    await api.put<ApiResponse<unknown>>(
+      `/api/projects/${projectId}/products/${productId}`,
+      { name: payload.name }
+    )
+
+    await fetchProjects()
+  }
+
+  async function deleteProduct(projectId: string, productId: string) {
+    await api.del(`/api/projects/${projectId}/products/${productId}`)
+    await fetchProjects()
   }
 
   async function fetchDemands() {
@@ -295,6 +356,12 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     selectedQuarterNumber,
     selectedProject,
     fetchProjects,
+    createProject,
+    updateProject,
+    deleteProject,
+    createProduct,
+    updateProduct,
+    deleteProduct,
     fetchDemands,
     fetchDependencyOptions,
     fetchCustomerSuggestions,

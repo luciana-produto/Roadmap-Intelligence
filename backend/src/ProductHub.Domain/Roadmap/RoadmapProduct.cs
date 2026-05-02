@@ -9,6 +9,11 @@ public sealed class RoadmapProduct : BaseEntity
 
     private RoadmapProduct() { }
 
-    internal static RoadmapProduct Create(string name, Guid projectId) =>
-        new() { Name = name, ProjectId = projectId };
+    public static RoadmapProduct Create(string name, Guid projectId) =>
+        new() { Name = name.Trim(), ProjectId = projectId };
+
+    public void Update(string name)
+    {
+        Name = name.Trim();
+    }
 }
