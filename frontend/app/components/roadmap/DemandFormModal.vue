@@ -21,6 +21,11 @@ import type {
   UpdateDemandKpiMeasurementInput,
   IssueLinkInput
 } from '~/types/roadmap'
+import {
+  sanitizeCustomersForItem,
+  sanitizeIssueLinksForItem,
+  sanitizePromisedDateForItem
+} from '~/utils/roadmapDemandPayload'
 
 type DemandFormState = Omit<DemandFormData, 'classification'> & {
   itemType: RoadmapItemType | ''
@@ -1175,6 +1180,8 @@ async function handleSubmit() {
     if (!form.itemType)
       return
 
+    const sanitizedIssueLinks = sanitizeIssueLinksForItem(form.itemType, normalizeIssueLinks(form.issueLinks))
+
     emit('submit', {
       ...form,
       itemType: form.itemType,
@@ -1182,8 +1189,10 @@ async function handleSubmit() {
       projectIds: form.itemType === 'Demand' ? [] : (form.projectIds ?? []),
       parentDemandId: form.parentDemandId || undefined,
       jiraIssue: undefined,
-      issueLinks: normalizeIssueLinks(form.issueLinks),
+      issueLinks: sanitizedIssueLinks,
       hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
+      customers: sanitizeCustomersForItem(form.itemType, form.customers),
+      promisedDate: sanitizePromisedDateForItem(form.itemType, form.quarterYear, form.quarterNumber, form.promisedDate),
       problemClarity: form.itemType === 'Epic' ? form.problemClarity : undefined,
       classification: form.classification as DemandClassification
     })
@@ -1358,7 +1367,7 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <UFormField :label="isRoadmap ? 'Issues' : 'Issues (Jira)'"><div class="space-y-2">
+          <UFormField v-if="!isRoadmap" label="Issues (Jira)"><div class="space-y-2">
             <div
               v-for="(issue, index) in form.issueLinks"
               :key="index"
@@ -1366,7 +1375,7 @@ async function handleSubmit() {
             >
               <UInput
                 v-model="issue.key"
-                :placeholder="isEpic ? 'Ex: EPIC-123' : isDemand ? 'Ex: DEM-123' : 'Ex: ROADMAP-123'"
+                :placeholder="isEpic ? 'Ex: EPIC-123' : 'Ex: DEM-123'"
                 class="w-full"
               />
               <UInput

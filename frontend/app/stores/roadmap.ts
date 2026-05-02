@@ -10,6 +10,12 @@ import type {
   DemandStatus,
   RoadmapItemType
 } from '~/types/roadmap'
+import {
+  buildCreateDemandPayload,
+  buildStatusPatchPayload,
+  buildUpdateDemandPayload,
+  sanitizeCustomersForItem
+} from '~/utils/roadmapDemandPayload'
 
 export const useRoadmapStore = defineStore('roadmap', () => {
   const api = useApi()
@@ -28,10 +34,6 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   const selectedProject = computed(() =>
     projects.value.find(p => p.id === selectedProjectId.value) ?? null
   )
-
-  function normalizeCustomers(customers?: string[]) {
-    return [...new Set((customers ?? []).map(customer => customer.trim()).filter(Boolean))]
-  }
 
   function isSameDemandScope(
     left: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>,
@@ -204,32 +206,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   }
 
   async function createDemand(payload: DemandFormData): Promise<RoadmapDemand> {
-    const body = {
-      itemType: payload.itemType,
-      parentDemandId: payload.parentDemandId || undefined,
-      title: payload.title,
-      description: payload.description || undefined,
-      projectId: payload.projectId,
-      projectIds: payload.itemType === 'Demand' ? [] : (payload.projectIds ?? []),
-      quarterYear: payload.quarterYear,
-      quarterNumber: payload.quarterNumber,
-      type: payload.type,
-      classification: payload.classification,
-      productIds: payload.productIds,
-      dependencyDemandIds: payload.dependencyDemandIds ?? [],
-      replacementDemandId: payload.replacementDemandId || undefined,
-      jiraIssue: payload.issueLinks?.[0]?.key || payload.jiraIssue || undefined,
-      issueLinks: payload.issueLinks ?? [],
-      hours: payload.hours ?? undefined,
-      promisedDate: payload.promisedDate || undefined,
-      customers: normalizeCustomers(payload.customers),
-      isBlocked: payload.isBlocked ?? false,
-      blockedReason: payload.blockedReason || undefined,
-      deprioritizationReason: payload.deprioritizationReason || undefined,
-      problemClarity: payload.problemClarity ?? undefined,
-      hasNoKpi: payload.hasNoKpi ?? false,
-      noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
-    }
+    const body = buildCreateDemandPayload(payload)
     const res = await api.post<ApiResponse<RoadmapDemand>>(
       '/api/roadmap/demands',
       body as unknown as Record<string, unknown>
@@ -240,43 +217,14 @@ export const useRoadmapStore = defineStore('roadmap', () => {
 
     customerSuggestions.value = [...new Set([
       ...customerSuggestions.value,
-      ...normalizeCustomers(payload.customers)
+      ...sanitizeCustomersForItem(payload.itemType, payload.customers)
     ])].sort((left, right) => left.localeCompare(right, 'pt-BR'))
 
     return res.data
   }
 
   async function updateDemand(id: string, payload: DemandFormData): Promise<RoadmapDemand> {
-    const body = {
-      id,
-      itemType: payload.itemType,
-      parentDemandId: payload.parentDemandId || undefined,
-      title: payload.title,
-      description: payload.description || undefined,
-      projectId: payload.projectId,
-      projectIds: payload.itemType === 'Demand' ? [] : (payload.projectIds ?? []),
-      quarterYear: payload.quarterYear,
-      quarterNumber: payload.quarterNumber,
-      status: payload.status ?? 'Backlog',
-      type: payload.type,
-      classification: payload.classification,
-      productIds: payload.productIds,
-      dependencyDemandIds: payload.dependencyDemandIds ?? [],
-      observation: payload.observation || undefined,
-      deprioritizationReason: payload.deprioritizationReason || undefined,
-      replacementDemandId: payload.replacementDemandId || undefined,
-      jiraIssue: payload.issueLinks?.[0]?.key || payload.jiraIssue || undefined,
-      issueLinks: payload.issueLinks ?? [],
-      hours: payload.hours ?? undefined,
-      promisedDate: payload.promisedDate || undefined,
-      customers: normalizeCustomers(payload.customers),
-      isBlocked: payload.isBlocked ?? false,
-      blockedReason: payload.blockedReason || undefined,
-      deliveryDate: payload.deliveryDate || undefined,
-      problemClarity: payload.itemType === 'Epic' ? payload.problemClarity ?? undefined : undefined,
-      hasNoKpi: payload.hasNoKpi ?? false,
-      noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
-    }
+    const body = buildUpdateDemandPayload(id, payload)
     const res = await api.put<ApiResponse<RoadmapDemand>>(
       `/api/roadmap/demands/${id}`,
       body as unknown as Record<string, unknown>
@@ -288,7 +236,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
 
     customerSuggestions.value = [...new Set([
       ...customerSuggestions.value,
-      ...normalizeCustomers(payload.customers)
+      ...sanitizeCustomersForItem(payload.itemType, payload.customers)
     ])].sort((left, right) => left.localeCompare(right, 'pt-BR'))
 
     return res.data
@@ -315,32 +263,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   async function patchDemandStatus(id: string, status: DemandStatus) {
     const demand = demands.value.find(d => d.id === id)
     if (!demand) return
-    const body = {
-      id,
-      itemType: demand.itemType,
-      parentDemandId: demand.parentDemandId || undefined,
-      title: demand.title,
-      description: demand.description || undefined,
-      projectId: demand.projectId,
-      projectIds: demand.itemType === 'Demand' ? [] : (demand.projectIds ?? []),
-      quarterYear: demand.quarterYear,
-      quarterNumber: demand.quarterNumber,
-      status,
-      type: demand.type,
-      classification: demand.classification,
-      productIds: demand.products.map(p => p.productId),
-      observation: demand.observation || undefined,
-      jiraIssue: demand.issueLinks?.[0]?.key || demand.jiraIssue || undefined,
-      issueLinks: demand.issueLinks ?? [],
-      hours: demand.hours ?? undefined,
-      customers: normalizeCustomers(demand.customers),
-      isBlocked: demand.isBlocked ?? false,
-      blockedReason: demand.blockedReason || undefined,
-      deliveryDate: demand.deliveryDate || undefined,
-      problemClarity: demand.itemType === 'Epic' ? demand.problemClarity ?? undefined : undefined,
-      hasNoKpi: demand.hasNoKpi ?? false,
-      noKpiClassification: demand.hasNoKpi ? demand.noKpiClassification ?? undefined : undefined
-    }
+    const body = buildStatusPatchPayload(demand, status)
     await api.put<ApiResponse<RoadmapDemand>>(
       `/api/roadmap/demands/${id}`,
       body as unknown as Record<string, unknown>

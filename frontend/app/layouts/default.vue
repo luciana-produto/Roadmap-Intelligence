@@ -97,6 +97,9 @@ const sidebarStyle = computed(() => `background-color: var(--color-${appConfig.u
 const desktopSidebarClasses = computed(() =>
   isSidebarCollapsed.value ? 'md:w-20' : 'md:w-72'
 )
+const mainContentWidthClass = computed(() =>
+  route.path.startsWith('/roadmap') ? 'max-w-none' : 'max-w-[1600px]'
+)
 </script>
 
 <template>
@@ -198,7 +201,7 @@ const desktopSidebarClasses = computed(() =>
       </header>
 
       <main class="flex-1 w-full px-4 py-5 md:px-6 md:py-6">
-        <div class="mx-auto w-full max-w-[1600px]">
+        <div class="mx-auto w-full" :class="mainContentWidthClass">
           <slot />
         </div>
       </main>

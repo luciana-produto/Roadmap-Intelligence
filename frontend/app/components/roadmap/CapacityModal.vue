@@ -22,6 +22,8 @@ const form = reactive<CapacityFormData>({
   observation: ''
 })
 
+const hasValidCapacityHours = computed(() => Number.isFinite(form.capacityHours) && form.capacityHours > 0)
+
 watch(() => props.open, (open) => {
   if (!open || !props.initialValue) return
 
@@ -32,7 +34,7 @@ watch(() => props.open, (open) => {
   form.observation = props.initialValue.observation ?? ''
 })
 
-const isSubmitDisabled = computed(() => !form.projectId || form.capacityHours <= 0)
+const isSubmitDisabled = computed(() => !form.projectId || !hasValidCapacityHours.value)
 
 function handleSubmit() {
   if (isSubmitDisabled.value) return
@@ -64,9 +66,9 @@ function handleSubmit() {
             step="0.5"
             placeholder="Ex: 320"
             class="w-full"
-            :class="form.capacityHours <= 0 ? 'ring-2 ring-red-400' : ''"
+            :class="!hasValidCapacityHours ? 'ring-2 ring-red-400' : ''"
           />
-          <p v-if="form.capacityHours <= 0" class="mt-1 text-xs text-red-500">
+          <p v-if="!hasValidCapacityHours" class="mt-1 text-xs text-red-500">
             Informe um valor maior que zero.
           </p>
         </UFormField>

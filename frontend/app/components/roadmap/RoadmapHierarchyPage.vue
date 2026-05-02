@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
+import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
@@ -123,6 +124,44 @@ function formatDate(value?: string) {
   }).format(new Date(year, month - 1, day))
 }
 
+function getNoKpiClassificationLabel(value: RoadmapDemand['noKpiClassification']) {
+  switch (value) {
+    case 'Relationship':
+      return 'Relacionamento'
+    case 'Mandatory':
+      return 'Mandatório'
+    case 'Technical':
+      return 'Técnico'
+    default:
+      return ''
+  }
+}
+
+function getDerivedPromisedDateFromDemands(items: RoadmapDemand[]) {
+  return getLatestPromisedDate(items)
+}
+
+function getDisplayedPromisedDate(item: RoadmapDemand) {
+  const directPromisedDate = item.effectivePromisedDate ?? item.promisedDate ?? ''
+  if (directPromisedDate || item.itemType === 'Demand')
+    return directPromisedDate
+
+  if (item.itemType === 'Epic')
+    return getDerivedPromisedDateFromDemands(getDemandsForEpic(item.id))
+
+  const roadmapDemands = demandItems.value.filter(demand => demand.roadmapId === item.id)
+  const derivedFromDemands = getDerivedPromisedDateFromDemands(roadmapDemands)
+  if (derivedFromDemands)
+    return derivedFromDemands
+
+  const roadmapEpics = epicItems.value.filter(epic => epic.parentDemandId === item.id)
+  const epicDates = roadmapEpics
+    .map(epic => getDisplayedPromisedDate(epic))
+    .filter((value): value is string => !!value)
+
+  return epicDates.sort().at(-1) ?? ''
+}
+
 function getDisplayIssueLinks(item: Pick<RoadmapDemand, 'issueLinks' | 'jiraIssue'>) {
   if (item.issueLinks?.length)
     return item.issueLinks
@@ -184,11 +223,19 @@ function getKpiSummary(item: RoadmapDemand) {
   }
 
   return {
-    label: 'Sem vínculo',
+    label: 'Incluir KPI',
     tone: 'border-error/40 bg-error/10 text-error',
     actionLabel: 'Incluir KPI',
     clickable: true
   }
+}
+
+function getKpiSecondaryLabel(item: RoadmapDemand) {
+  const targetEpic = getKpiTargetEpic(item)
+  if (!targetEpic?.hasNoKpi)
+    return ''
+
+  return getNoKpiClassificationLabel(targetEpic.noKpiClassification)
 }
 
 function getDemandsForEpic(epicId: string) {
@@ -359,10 +406,9 @@ watch(selectedProjectId, async (projectId) => {
     <div class="rounded-[24px] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(248,250,252,0.88))] px-4 py-4 shadow-sm dark:bg-[linear-gradient(135deg,rgba(23,23,23,0.94),rgba(31,41,55,0.78))]">
       <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
       <div class="min-w-0">
-        <p class="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary/70">Estrutura</p>
-        <h1 class="mt-0.5 text-lg font-semibold tracking-tight text-highlighted">Roadmaps, Épicos e Demandas</h1>
+        <h1 class="text-lg font-semibold tracking-tight text-highlighted">Roadmaps, Épicos e Demandas</h1>
         <p class="mt-1 truncate text-xs text-muted">
-          Planejamento e estrutura do roadmap em uma única visão.
+          Planejamento do roadmap em uma única visão.
         </p>
       </div>
 
@@ -530,35 +576,26 @@ watch(selectedProjectId, async (projectId) => {
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top">
-                    <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[group.roadmap.classification]">
-                      {{ classificationLabels[group.roadmap.classification] }}
-                    </span>
+                    <span class="text-xs text-muted">—</span>
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top">
-                    <div class="flex flex-wrap gap-1.5">
-                      <a
-                        v-for="issue in getDisplayIssueLinks(group.roadmap)"
-                        :key="`${group.roadmap.id}-${issue.key}`"
-                        :href="issue.url || undefined"
-                        :target="issue.url ? '_blank' : undefined"
-                        rel="noreferrer"
-                        class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                      >
-                        {{ issue.key }}
-                      </a>
-                      <span v-if="!getDisplayIssueLinks(group.roadmap).length" class="text-xs text-muted">—</span>
-                    </div>
+                    <span class="text-xs text-muted">—</span>
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                    {{ formatDate(group.roadmap.effectivePromisedDate ?? group.roadmap.promisedDate) }}
+                    {{ formatDate(getDisplayedPromisedDate(group.roadmap)) }}
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top">
-                    <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(group.roadmap).tone" :title="getKpiSummary(group.roadmap).actionLabel">
-                      {{ getKpiSummary(group.roadmap).label }}
-                    </span>
+                    <div class="flex min-w-0 flex-col items-start gap-1">
+                      <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(group.roadmap).tone" :title="getKpiSummary(group.roadmap).actionLabel">
+                        {{ getKpiSummary(group.roadmap).label }}
+                      </span>
+                      <span v-if="getKpiSecondaryLabel(group.roadmap)" class="text-[11px] text-muted">
+                        {{ getKpiSecondaryLabel(group.roadmap) }}
+                      </span>
+                    </div>
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top">
@@ -654,13 +691,18 @@ watch(selectedProjectId, async (projectId) => {
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                      {{ formatDate(epic.effectivePromisedDate ?? epic.promisedDate) }}
+                      {{ formatDate(getDisplayedPromisedDate(epic)) }}
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top">
-                      <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
-                        {{ getKpiSummary(epic).label }}
-                      </button>
+                      <div class="flex min-w-0 flex-col items-start gap-1">
+                        <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
+                          {{ getKpiSummary(epic).label }}
+                        </button>
+                        <span v-if="getKpiSecondaryLabel(epic)" class="text-[11px] text-muted">
+                          {{ getKpiSecondaryLabel(epic) }}
+                        </span>
+                      </div>
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top">
@@ -749,16 +791,21 @@ watch(selectedProjectId, async (projectId) => {
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                      {{ formatDate(demand.effectivePromisedDate ?? demand.promisedDate) }}
+                      {{ formatDate(getDisplayedPromisedDate(demand)) }}
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top">
-                      <button v-if="getKpiSummary(demand).clickable" type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel" @click="openKpiWorkspace(demand)">
-                        {{ getKpiSummary(demand).label }}
-                      </button>
-                      <span v-else class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel">
-                        {{ getKpiSummary(demand).label }}
-                      </span>
+                      <div class="flex min-w-0 flex-col items-start gap-1">
+                        <button v-if="getKpiSummary(demand).clickable" type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel" @click="openKpiWorkspace(demand)">
+                          {{ getKpiSummary(demand).label }}
+                        </button>
+                        <span v-else class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel">
+                          {{ getKpiSummary(demand).label }}
+                        </span>
+                        <span v-if="getKpiSecondaryLabel(demand)" class="text-[11px] text-muted">
+                          {{ getKpiSecondaryLabel(demand) }}
+                        </span>
+                      </div>
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top">
@@ -831,12 +878,17 @@ watch(selectedProjectId, async (projectId) => {
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                  {{ formatDate(epic.effectivePromisedDate ?? epic.promisedDate) }}
+                  {{ formatDate(getDisplayedPromisedDate(epic)) }}
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
-                  <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
-                    {{ getKpiSummary(epic).label }}
-                  </button>
+                  <div class="flex min-w-0 flex-col items-start gap-1">
+                    <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
+                      {{ getKpiSummary(epic).label }}
+                    </button>
+                    <span v-if="getKpiSecondaryLabel(epic)" class="text-[11px] text-muted">
+                      {{ getKpiSecondaryLabel(epic) }}
+                    </span>
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
                   <div class="flex items-center justify-end gap-1">
@@ -912,15 +964,20 @@ watch(selectedProjectId, async (projectId) => {
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                  {{ formatDate(demand.effectivePromisedDate ?? demand.promisedDate) }}
+                  {{ formatDate(getDisplayedPromisedDate(demand)) }}
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
-                  <button v-if="getKpiSummary(demand).clickable" type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel" @click="openKpiWorkspace(demand)">
-                    {{ getKpiSummary(demand).label }}
-                  </button>
-                  <span v-else class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel">
-                    {{ getKpiSummary(demand).label }}
-                  </span>
+                  <div class="flex min-w-0 flex-col items-start gap-1">
+                    <button v-if="getKpiSummary(demand).clickable" type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel" @click="openKpiWorkspace(demand)">
+                      {{ getKpiSummary(demand).label }}
+                    </button>
+                    <span v-else class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel">
+                      {{ getKpiSummary(demand).label }}
+                    </span>
+                    <span v-if="getKpiSecondaryLabel(demand)" class="text-[11px] text-muted">
+                      {{ getKpiSecondaryLabel(demand) }}
+                    </span>
+                  </div>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
                   <div class="flex items-center justify-end gap-1">
