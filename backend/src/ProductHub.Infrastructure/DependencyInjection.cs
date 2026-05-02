@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap.Interfaces;
 using ProductHub.Infrastructure.Persistence;
@@ -14,15 +15,23 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        IHostEnvironment environment)
     {
         services.AddSingleton<AuditSaveChangesInterceptor>();
 
         var connectionString = configuration.GetConnectionString("SqlServer");
+        var useInMemoryFallback = environment.IsDevelopment() && string.IsNullOrWhiteSpace(connectionString);
+
+        if (!useInMemoryFallback && string.IsNullOrWhiteSpace(connectionString))
+        {
+            throw new InvalidOperationException(
+                "ConnectionStrings:SqlServer must be configured when the application is not running in Development.");
+        }
 
         services.AddDbContext<AppDbContext>((sp, options) =>
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
+            if (useInMemoryFallback)
                 options.UseInMemoryDatabase("ProductHub");
             else
                 options.UseSqlServer(connectionString, sqlOptions =>

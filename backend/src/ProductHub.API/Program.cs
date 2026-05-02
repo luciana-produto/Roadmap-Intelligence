@@ -1,6 +1,7 @@
 using Serilog;
 using Serilog.Enrichers.CorrelationId;
 using Microsoft.EntityFrameworkCore;
+using System.Reflection;
 using ProductHub.API.Middleware;
 using ProductHub.Application;
 using ProductHub.Infrastructure;
@@ -31,7 +32,7 @@ try
               .WriteTo.Seq(context.Configuration["Serilog:SeqUrl"] ?? "http://seq:5341"));
 
     builder.Services.AddApplication();
-    builder.Services.AddInfrastructure(builder.Configuration);
+    builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
 
     builder.Services.AddControllers();
     builder.Services.AddOpenApi();
@@ -46,13 +47,14 @@ try
                   .WithExposedHeaders("X-Correlation-ID")));
 
     var sqlConnectionString = builder.Configuration.GetConnectionString("SqlServer");
+    var seedMockData = builder.Configuration.GetValue<bool?>("Roadmap:SeedMockData") ?? builder.Environment.IsDevelopment();
     var healthChecks = builder.Services.AddHealthChecks();
     if (!string.IsNullOrWhiteSpace(sqlConnectionString))
         healthChecks.AddSqlServer(sqlConnectionString, name: "sqlserver", tags: ["db", "ready"]);
 
     var app = builder.Build();
 
-    await InitializeDatabaseAsync(app.Services, !string.IsNullOrWhiteSpace(sqlConnectionString));
+    await InitializeDatabaseAsync(app.Services, !string.IsNullOrWhiteSpace(sqlConnectionString), seedMockData);
 
     app.UseMiddleware<CorrelationIdMiddleware>();
     app.UseMiddleware<ExceptionHandlingMiddleware>();
@@ -84,7 +86,7 @@ finally
     Log.CloseAndFlush();
 }
 
-static async Task InitializeDatabaseAsync(IServiceProvider services, bool hasPersistentDatabase)
+static async Task InitializeDatabaseAsync(IServiceProvider services, bool hasPersistentDatabase, bool seedMockData)
 {
     var attempts = hasPersistentDatabase ? AppConstants.Database.RetryCount : 1;
 
@@ -94,9 +96,9 @@ static async Task InitializeDatabaseAsync(IServiceProvider services, bool hasPer
         {
             using var scope = services.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            await db.Database.EnsureCreatedAsync();
-                await ApplySchemaUpdatesAsync(db, hasPersistentDatabase);
-            await RoadmapSeeder.SeedAsync(db);
+            await EnsureDatabaseReadyAsync(db, hasPersistentDatabase);
+            if (seedMockData)
+                await RoadmapSeeder.SeedAsync(db);
             return;
         }
         catch (Exception ex) when (attempt < attempts)
@@ -113,20 +115,38 @@ static async Task InitializeDatabaseAsync(IServiceProvider services, bool hasPer
 
     using var finalScope = services.CreateScope();
     var finalDb = finalScope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await finalDb.Database.EnsureCreatedAsync();
-        await ApplySchemaUpdatesAsync(finalDb, hasPersistentDatabase);
+    await EnsureDatabaseReadyAsync(finalDb, hasPersistentDatabase);
+    if (seedMockData)
+        await RoadmapSeeder.SeedAsync(finalDb);
+}
 
-    static async Task ApplySchemaUpdatesAsync(AppDbContext db, bool hasPersistentDatabase)
+static async Task EnsureDatabaseReadyAsync(AppDbContext db, bool hasPersistentDatabase)
+{
+    if (!hasPersistentDatabase)
     {
-        if (!hasPersistentDatabase)
-            return;
-
-        await db.Database.ExecuteSqlRawAsync("""
-            IF COL_LENGTH('RoadmapDemands', 'IssueLinksJson') IS NULL
-            BEGIN
-                ALTER TABLE RoadmapDemands ADD IssueLinksJson NVARCHAR(MAX) NULL;
-            END
-            """);
+        await db.Database.EnsureCreatedAsync();
+        return;
     }
-    await RoadmapSeeder.SeedAsync(finalDb);
+
+    var migrations = db.Database.GetMigrations();
+    if (migrations.Any())
+    {
+        await db.Database.MigrateAsync();
+        return;
+    }
+
+    var schemaScriptPath = Path.Combine(AppContext.BaseDirectory, "sql", "producthub-schema.sql");
+    if (!File.Exists(schemaScriptPath))
+    {
+        throw new FileNotFoundException(
+            $"Persistent database initialization requires the bundled schema script when no EF migrations are present. Missing file: {schemaScriptPath}");
+    }
+
+    var schemaScript = await File.ReadAllTextAsync(schemaScriptPath);
+    if (string.IsNullOrWhiteSpace(schemaScript))
+    {
+        throw new InvalidOperationException($"Schema script is empty: {schemaScriptPath}");
+    }
+
+    await db.Database.ExecuteSqlRawAsync(schemaScript);
 }

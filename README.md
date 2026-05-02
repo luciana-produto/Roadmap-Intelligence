@@ -121,6 +121,22 @@ Visão consolidada por projeto com:
 - Observabilidade via Seq com structured logging
 - Seed automático com dados mock realistas
 
+## Configuração SQL Server
+
+Para ambiente persistente, o backend lê a connection string pela chave `ConnectionStrings__SqlServer`.
+
+Exemplo PowerShell:
+
+```powershell
+$env:ConnectionStrings__SqlServer = "Server=20.51.132.203,1433;Database=ProductHub;User ID=product_team;Password=<senha>;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30"
+```
+
+Observações:
+
+- Em banco persistente, o startup agora prioriza EF Migrations quando elas existirem.
+- Enquanto não houver migrations versionadas no repositório, o backend aplica o script idempotente `backend/sql/producthub-schema.sql` como bootstrap inicial do schema.
+- Para desenvolvimento sem SQL Server configurado, o sistema continua com fallback para InMemory.
+
 ## Estrutura do Projeto
 
 ```
