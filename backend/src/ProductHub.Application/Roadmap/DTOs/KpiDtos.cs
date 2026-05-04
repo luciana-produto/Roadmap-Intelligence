@@ -2,7 +2,7 @@ namespace ProductHub.Application.Roadmap.DTOs;
 
 public sealed record KpiDto(
     Guid Id,
-    Guid ProjectId,
+    Guid? ProjectId,
     string Name,
     string Type,
     string Lever,

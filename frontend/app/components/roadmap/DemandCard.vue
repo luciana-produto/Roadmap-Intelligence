@@ -9,7 +9,7 @@ const emit = defineEmits<{ edit: [demand: RoadmapDemand], delete: [id: string], 
 
 const statusConfig: Record<DemandStatus, { color: string, dot: string, label: string }> = {
   Backlog:      { color: 'text-muted', dot: 'bg-neutral-400 dark:bg-neutral-500', label: 'Backlog' },
-  InProgress:   { color: 'text-blue-500', dot: 'bg-blue-500 dark:bg-blue-400', label: 'Em andamento' },
+  InProgress:   { color: 'text-blue-500', dot: 'bg-blue-500 dark:bg-blue-400', label: 'Doing' },
   Done:         { color: 'text-green-500', dot: 'bg-green-500 dark:bg-green-400', label: 'Concluído' },
   Deprioritized:{ color: 'text-amber-500', dot: 'bg-amber-500 dark:bg-amber-400', label: 'Despriorizado' }
 }

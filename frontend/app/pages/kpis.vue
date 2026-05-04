@@ -7,29 +7,29 @@ useSeoMeta({ title: 'KPIs · ProductHub' })
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
 const toast = useToast()
-const productKpiName = 'Taxa de Adoção da Funcionalidade'
 
 const { kpis, isLoading } = storeToRefs(kpiStore)
 
 // ─── Init ────────────────────────────────────────────────────────────────────
 onMounted(async () => {
-  await roadmapStore.fetchProjects()
   await kpiStore.fetchKpis()
 })
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const kpiTypeOptions: { value: KpiType, label: string }[] = [
+type KpiSelectOption<T extends string> = { value: T, label: string }
+
+const kpiTypeOptions: KpiSelectOption<KpiType>[] = [
   { value: 'Business', label: 'Negócio' },
   { value: 'Product', label: 'Produto' }
 ]
 
-const kpiLeverOptions: { value: KpiLever, label: string }[] = [
+const kpiLeverOptions: KpiSelectOption<KpiLever>[] = [
   { value: 'Growth', label: 'Crescer' },
   { value: 'Efficiency', label: 'Eficiência' },
   { value: 'Customer', label: 'Cliente' }
 ]
 
-const kpiObjectiveOptions: { value: KpiObjective, label: string }[] = [
+const kpiObjectiveOptions: KpiSelectOption<KpiObjective>[] = [
   { value: 'Increase', label: 'Aumentar' },
   { value: 'Decrease', label: 'Reduzir' }
 ]
@@ -77,6 +77,7 @@ const columns: TableColumn<Kpi>[] = [
 const showFormModal = ref(false)
 const editingKpi = ref<Kpi | null>(null)
 const formData = ref<KpiFormData>(emptyForm())
+const isSubmitting = ref(false)
 
 function emptyForm(): KpiFormData {
   return {
@@ -94,7 +95,6 @@ function emptyForm(): KpiFormData {
 function openCreate() {
   editingKpi.value = null
   formData.value = emptyForm()
-  syncKpiFormByType(formData.value.type)
   showFormModal.value = true
 }
 
@@ -110,25 +110,43 @@ function openEdit(kpi: Kpi) {
     target: kpi.target,
     currentValue: kpi.currentValue
   }
-  syncKpiFormByType(formData.value.type)
   showFormModal.value = true
 }
 
-function syncKpiFormByType(type: KpiType) {
-  if (type === 'Product') {
-    formData.value.name = productKpiName
-    return
-  }
-
-  if (formData.value.name === productKpiName)
-    formData.value.name = ''
+function optionByValue<T extends string>(options: KpiSelectOption<T>[], value: T): KpiSelectOption<T> {
+  return options.find(option => option.value === value) ?? options[0]
 }
 
-watch(() => formData.value.type, (type) => {
-  syncKpiFormByType(type)
+const selectedTypeOption = computed({
+  get: () => optionByValue(kpiTypeOptions, formData.value.type),
+  set: (option: KpiSelectOption<KpiType> | null) => {
+    formData.value.type = option?.value ?? 'Business'
+  }
 })
 
+const selectedLeverOption = computed({
+  get: () => optionByValue(kpiLeverOptions, formData.value.lever),
+  set: (option: KpiSelectOption<KpiLever> | null) => {
+    formData.value.lever = option?.value ?? 'Growth'
+  }
+})
+
+const selectedObjectiveOption = computed({
+  get: () => optionByValue(kpiObjectiveOptions, formData.value.objective),
+  set: (option: KpiSelectOption<KpiObjective> | null) => {
+    formData.value.objective = option?.value ?? 'Increase'
+  }
+})
+
+const submitDisabled = computed(() =>
+  isSubmitting.value || !formData.value.name
+)
+
 async function submitForm() {
+  if (submitDisabled.value)
+    return
+
+  isSubmitting.value = true
   try {
     if (editingKpi.value) {
       await kpiStore.updateKpi(editingKpi.value.id, formData.value)
@@ -141,6 +159,9 @@ async function submitForm() {
     showFormModal.value = false
   }
   catch { /* handled by useApi */ }
+  finally {
+    isSubmitting.value = false
+  }
 }
 
 // ─── Delete ──────────────────────────────────────────────────────────────────
@@ -268,7 +289,7 @@ function getProgressPercent(kpi: Kpi): number | null {
           <button class="font-medium text-highlighted hover:underline text-left" @click="openEdit(row.original)">
             {{ row.original.name }}
           </button>
-          <p v-if="row.original.description" class="text-xs text-muted truncate max-w-xs mt-0.5">
+          <p v-if="row.original.description" :title="row.original.description" class="text-xs text-muted truncate max-w-xs mt-0.5">
             {{ row.original.description }}
           </p>
         </div>
@@ -339,7 +360,7 @@ function getProgressPercent(kpi: Kpi): number | null {
 
     <div v-if="!isLoading && !filteredKpis.length" class="text-center py-12 text-muted">
       <UIcon name="i-lucide-bar-chart-2" class="text-4xl mb-2" />
-      <p>Nenhum KPI cadastrado para este projeto.</p>
+      <p>Nenhum KPI cadastrado.</p>
       <UButton label="Criar primeiro KPI" variant="soft" class="mt-3" @click="openCreate" />
     </div>
 
@@ -356,8 +377,7 @@ function getProgressPercent(kpi: Kpi): number | null {
           <UFormField label="Nome" required>
             <UInput
               v-model="formData.name"
-              :placeholder="formData.type === 'Product' ? productKpiName : 'Ex: Taxa de churn mensal'"
-              :disabled="formData.type === 'Product'"
+              placeholder="Ex: Taxa de churn mensal"
               class="w-full"
             />
           </UFormField>
@@ -365,21 +385,21 @@ function getProgressPercent(kpi: Kpi): number | null {
           <div class="grid grid-cols-3 gap-4">
             <UFormField label="Tipo" required>
               <USelectMenu
-                v-model="formData.type"
+                v-model="selectedTypeOption"
                 :items="kpiTypeOptions"
                 class="w-full"
               />
             </UFormField>
             <UFormField label="Alavanca" required>
               <USelectMenu
-                v-model="formData.lever"
+                v-model="selectedLeverOption"
                 :items="kpiLeverOptions"
                 class="w-full"
               />
             </UFormField>
             <UFormField label="Objetivo" required>
               <USelectMenu
-                v-model="formData.objective"
+                v-model="selectedObjectiveOption"
                 :items="kpiObjectiveOptions"
                 class="w-full"
               />
@@ -410,7 +430,8 @@ function getProgressPercent(kpi: Kpi): number | null {
           <UButton label="Cancelar" variant="ghost" @click="showFormModal = false" />
           <UButton
             :label="editingKpi ? 'Salvar' : 'Criar'"
-            :disabled="!formData.name"
+            :loading="isSubmitting"
+            :disabled="submitDisabled"
             @click="submitForm"
           />
         </div>

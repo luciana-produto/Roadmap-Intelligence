@@ -1,5 +1,4 @@
 using MediatR;
-using ProductHub.Application.Common.Exceptions;
 using ProductHub.Application.Roadmap.DTOs;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap;
@@ -21,7 +20,7 @@ public sealed class CreateKpiCommandHandler(
         Enum.TryParse<KpiObjective>(request.Objective, true, out var objective);
 
         var kpi = Kpi.Create(
-            Guid.Empty,
+            null,
             request.Name,
             type,
             lever,

@@ -90,7 +90,7 @@ const navLinks = [
   { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' },
   { label: 'Cadastros', icon: 'i-lucide-package', to: '/products' },
   { label: 'KPIs', icon: 'i-lucide-bar-chart-2', to: '/kpis' },
-  { label: 'Indicadores', icon: 'i-lucide-trending-up', to: '/indicators' }
+  { label: 'Indicadores', icon: 'i-lucide-trending-up', disabled: true, badge: 'Em breve' }
 ]
 
 const sidebarStyle = computed(() => `background-color: var(--color-${appConfig.ui.colors.primary}-950);`)
@@ -141,22 +141,49 @@ const mainContentWidthClass = computed(() =>
       </div>
 
       <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-        <NuxtLink
-          v-for="link in navLinks"
-          :key="link.to"
-          :to="link.to"
-          :title="isSidebarCollapsed ? link.label : undefined"
-          class="flex rounded-xl px-3 py-2.5 text-sm transition-colors"
-          :class="[
-            isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
-            route.path === link.to
-              ? 'bg-white/12 text-white'
-              : 'text-white/75 hover:bg-white/8 hover:text-white'
-          ]"
-        >
-          <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
-          <span v-if="!isSidebarCollapsed">{{ link.label }}</span>
-        </NuxtLink>
+        <template v-for="link in navLinks" :key="link.label">
+          <button
+            v-if="link.disabled"
+            type="button"
+            :title="isSidebarCollapsed ? (link.badge ? `${link.label} · ${link.badge}` : link.label) : undefined"
+            class="flex rounded-xl px-3 py-2.5 text-sm transition-colors"
+            :class="[
+              isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
+              'cursor-not-allowed text-white/40'
+            ]"
+            disabled
+          >
+            <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
+            <span v-if="!isSidebarCollapsed" class="flex min-w-0 items-center gap-2">
+              <span>{{ link.label }}</span>
+              <UBadge
+                v-if="link.badge"
+                size="xs"
+                color="neutral"
+                variant="solid"
+                class="shrink-0 bg-white/12 text-white/80"
+              >
+                {{ link.badge }}
+              </UBadge>
+            </span>
+          </button>
+
+          <NuxtLink
+            v-else
+            :to="link.to"
+            :title="isSidebarCollapsed ? link.label : undefined"
+            class="flex rounded-xl px-3 py-2.5 text-sm transition-colors"
+            :class="[
+              isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
+              route.path === link.to
+                ? 'bg-white/12 text-white'
+                : 'text-white/75 hover:bg-white/8 hover:text-white'
+            ]"
+          >
+            <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
+            <span v-if="!isSidebarCollapsed">{{ link.label }}</span>
+          </NuxtLink>
+        </template>
       </nav>
 
       <div class="px-3 py-3 border-t border-white/10">

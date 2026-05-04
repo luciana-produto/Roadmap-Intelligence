@@ -173,7 +173,7 @@ IF OBJECT_ID(N'dbo.Kpis', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.Kpis (
         Id UNIQUEIDENTIFIER NOT NULL,
-        ProjectId UNIQUEIDENTIFIER NOT NULL,
+        ProjectId UNIQUEIDENTIFIER NULL,
         Name NVARCHAR(200) NOT NULL,
         Type NVARCHAR(50) NOT NULL,
         Lever NVARCHAR(50) NOT NULL,
@@ -189,6 +189,21 @@ BEGIN
         CONSTRAINT FK_Kpis_RoadmapProjects_ProjectId
             FOREIGN KEY (ProjectId) REFERENCES dbo.RoadmapProjects (Id)
     );
+END;
+
+IF COL_LENGTH(N'dbo.Kpis', N'ProjectId') IS NOT NULL
+   AND EXISTS (
+       SELECT 1
+       FROM sys.columns
+       WHERE object_id = OBJECT_ID(N'dbo.Kpis')
+         AND name = N'ProjectId'
+         AND is_nullable = 0
+   )
+BEGIN
+    ALTER TABLE dbo.Kpis DROP CONSTRAINT FK_Kpis_RoadmapProjects_ProjectId;
+    ALTER TABLE dbo.Kpis ALTER COLUMN ProjectId UNIQUEIDENTIFIER NULL;
+    ALTER TABLE dbo.Kpis ADD CONSTRAINT FK_Kpis_RoadmapProjects_ProjectId
+        FOREIGN KEY (ProjectId) REFERENCES dbo.RoadmapProjects (Id);
 END;
 
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_Kpis_ProjectId' AND object_id = OBJECT_ID(N'dbo.Kpis'))

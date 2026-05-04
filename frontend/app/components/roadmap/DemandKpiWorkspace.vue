@@ -3,6 +3,7 @@ import type {
   RoadmapDemand,
   Kpi,
   DemandFormData,
+  DemandStatus,
   DemandClassification,
   NoKpiClassification,
   DemandKpiLink,
@@ -49,6 +50,7 @@ const formState = reactive({
   noKpiClassification: undefined as NoKpiClassification | undefined
 })
 
+const persistedKpiLinksState = ref<DemandKpiLink[]>([])
 const kpiLinkDrafts = ref<KpiLinkDraftState[]>([])
 const kpiMeasurements = ref<KpiMeasurement[]>([])
 const measurementDrafts = ref<Record<string, MeasurementEditorState>>({})
@@ -78,6 +80,40 @@ const noKpiClassificationOptions = [
   { value: 'Mandatory', label: 'Mandatório' },
   { value: 'Technical', label: 'Técnico' }
 ] as const
+
+const statusLabels: Record<DemandStatus, string> = {
+  Backlog: 'Backlog',
+  InProgress: 'Doing',
+  Done: 'Concluído',
+  Deprioritized: 'Despriorizado'
+}
+
+const statusTone: Record<DemandStatus, string> = {
+  Backlog: 'border-default bg-elevated text-muted',
+  InProgress: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
+  Done: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300',
+  Deprioritized: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300'
+}
+
+const classificationLabels: Record<DemandClassification, string> = {
+  TechnicalDebtSecurity: 'Débito Técnico',
+  Strategic: 'Estratégico',
+  Evolution: 'Evolução',
+  ImprovementGap: 'Melhoria/Gap',
+  Mandatory: 'Mandatório',
+  Homologation: 'Homologação',
+  Customizacao: 'Customização'
+}
+
+const classificationBadgeClass: Record<DemandClassification, string> = {
+  TechnicalDebtSecurity: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700',
+  Strategic: 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800',
+  Evolution: 'bg-sky-100 text-sky-700 border-sky-200 dark:bg-sky-900/30 dark:text-sky-300 dark:border-sky-800',
+  ImprovementGap: 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800',
+  Mandatory: 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800',
+  Homologation: 'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800',
+  Customizacao: 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800'
+}
 
 const confidenceLevelHelp = [
   {
@@ -109,6 +145,7 @@ const confidenceLevelHelp = [
 watch(() => props.demand, (demand) => {
   formState.hasNoKpi = demand?.hasNoKpi ?? false
   formState.noKpiClassification = demand?.noKpiClassification ?? undefined
+  persistedKpiLinksState.value = demand?.kpiLinks ?? []
   kpiLinkDrafts.value = []
   kpiMeasurements.value = sortMeasurements(demand?.kpiMeasurements ?? [])
   measurementDrafts.value = {}
@@ -126,6 +163,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     title: demand.title,
     description: demand.description ?? '',
     projectId: demand.projectId,
+    projectIds: demand.projectIds ?? (demand.projectId ? [demand.projectId] : []),
     quarterYear: demand.quarterYear,
     quarterNumber: demand.quarterNumber,
     type: demand.type,
@@ -134,6 +172,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     status: demand.status,
     observation: demand.observation ?? '',
     jiraIssue: demand.jiraIssue ?? '',
+    issueLinks: demand.issueLinks?.map(issue => ({ key: issue.key, url: issue.url ?? '' })) ?? [],
     hours: demand.hours,
     promisedDate: demand.promisedDate ?? '',
     customers: demand.customers ?? [],
@@ -302,6 +341,15 @@ function createKpiLinkDraft(link?: Partial<DemandKpiLinkInput>): KpiLinkDraftSta
 }
 
 function addKpiLinkDraft() {
+  if (!availableKpisForLink.value.length) {
+    toast.add({
+      title: 'Nenhum KPI disponível',
+      description: 'Todos os KPIs disponíveis já estão vinculados a este épico.',
+      color: 'warning'
+    })
+    return
+  }
+
   kpiLinkDrafts.value.push(createKpiLinkDraft())
 }
 
@@ -444,7 +492,7 @@ async function saveKpiSetup() {
       noKpiClassification: formState.hasNoKpi ? formState.noKpiClassification : undefined
     }))
 
-    await kpiStore.updateDemandKpiLinks(props.demand.id, validLinks)
+    persistedKpiLinksState.value = await kpiStore.updateDemandKpiLinks(props.demand.id, validLinks)
     await roadmapStore.fetchDemands()
     toast.add({ title: 'Registro de KPI atualizado', color: 'success' })
   }
@@ -465,7 +513,7 @@ async function persistKpiLinks(links: DemandKpiLinkInput[]) {
     noKpiClassification: formState.hasNoKpi ? formState.noKpiClassification : undefined
   }))
 
-  await kpiStore.updateDemandKpiLinks(props.demand.id, links)
+  persistedKpiLinksState.value = await kpiStore.updateDemandKpiLinks(props.demand.id, links)
   await roadmapStore.fetchDemands()
 }
 
@@ -646,7 +694,7 @@ function sortMeasurements(measurements: KpiMeasurement[]) {
   })
 }
 
-const persistedKpiLinks = computed(() => props.demand?.kpiLinks ?? [])
+const persistedKpiLinks = computed(() => persistedKpiLinksState.value)
 
 const measurementSectionState = computed(() => {
   if (!props.demand?.id)
@@ -778,18 +826,36 @@ async function deleteMeasurement(measurementId: string) {
 </script>
 
 <template>
-  <div class="space-y-6">
-    <UCard :ui="{ body: 'p-5 sm:p-6' }">
-      <div class="space-y-5">
+  <div class="space-y-4">
+    <UCard v-if="props.demand" :ui="{ body: 'p-4 sm:p-5' }">
+      <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+        <div class="space-y-1">
+          <p class="text-xs font-semibold uppercase tracking-[0.08em] text-primary/70">Épico</p>
+          <h2 class="text-base font-semibold text-highlighted">{{ props.demand.title }}</h2>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <span class="inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium" :class="statusTone[props.demand.status]">
+            {{ statusLabels[props.demand.status] }}
+          </span>
+          <span class="inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium" :class="classificationBadgeClass[props.demand.classification]">
+            {{ classificationLabels[props.demand.classification] }}
+          </span>
+        </div>
+      </div>
+    </UCard>
+
+    <UCard :ui="{ body: 'p-4 sm:p-5' }">
+      <div class="space-y-4">
         <div>
-          <h2 class="text-base font-semibold text-highlighted">Configuração de KPIs</h2>
-          <p class="mt-1 text-sm text-muted">
+          <h2 class="text-sm font-semibold text-highlighted">Configuração de KPIs</h2>
+          <p class="mt-1 text-xs text-muted">
             Defina o vínculo com indicadores e a expectativa de impacto da entrega.
           </p>
         </div>
 
         <div class="grid gap-3 md:grid-cols-[minmax(0,18rem)_minmax(0,29rem)] md:items-start">
-          <UFormField label="Registro de KPI">
+          <UFormField v-if="persistedKpiLinks.length === 0" label="Registro de KPI">
             <label class="flex min-h-9 items-center gap-2 cursor-pointer select-none">
               <input
                 v-model="formState.hasNoKpi"
@@ -838,16 +904,18 @@ async function deleteMeasurement(measurementId: string) {
             <article
               v-for="link in persistedKpiLinks"
               :key="link.id"
-              class="rounded-xl border border-default bg-elevated p-4"
+              class="rounded-xl border border-default bg-elevated p-3"
             >
               <div v-if="editingPersistedKpiLinkId !== link.id" class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div class="space-y-1">
-                  <p class="text-sm font-semibold text-highlighted">{{ link.kpiName }}</p>
+                  <div class="flex flex-wrap items-center gap-2">
+                    <p class="text-sm font-semibold text-highlighted">{{ link.kpiName }}</p>
+                    <p class="text-xs text-muted">
+                      Confiança: {{ confidenceLevelOptions.find(option => option.value === link.confidenceLevel)?.label ?? link.confidenceLevel }}
+                    </p>
+                  </div>
                   <p v-if="getPersistedKpiImpactSummary(link)" class="text-xs text-muted">
                     Impacto esperado: {{ getPersistedKpiImpactSummary(link) }}
-                  </p>
-                  <p class="text-xs text-muted">
-                    Confiança: {{ confidenceLevelOptions.find(option => option.value === link.confidenceLevel)?.label ?? link.confidenceLevel }}
                   </p>
                   <p v-if="link.observation" class="text-xs text-muted">
                     Observação: {{ link.observation }}
@@ -907,49 +975,48 @@ async function deleteMeasurement(measurementId: string) {
                   />
                 </UFormField>
 
-                <UFormField label="">
-                  <div class="space-y-1.5">
-                    <div class="flex items-center gap-1.5">
-                      <span class="text-sm text-highlighted">Nível de confiança</span>
-                      <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
-                        <UButton
-                          type="button"
-                          icon="i-lucide-circle-help"
-                          variant="ghost"
-                          color="neutral"
-                          size="xs"
-                          aria-label="Explicar níveis de confiança"
-                        />
-                        <template #content>
-                          <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
-                            <p class="font-medium text-highlighted">
-                              Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
-                            </p>
-                            <div
-                              v-for="item in confidenceLevelHelp"
-                              :key="item.title"
-                              class="space-y-1 rounded-lg border border-default p-2.5"
-                            >
-                              <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
-                              <p>👉 {{ item.summary }}</p>
-                              <p class="text-muted">{{ item.signals }}</p>
-                              <p class="text-muted">{{ item.detail }}</p>
-                            </div>
+                <div class="relative pt-6">
+                  <div class="absolute inset-x-0 top-0 flex items-center justify-between gap-1.5 text-sm leading-none">
+                    <span class="text-sm text-highlighted">Nível de confiança</span>
+                    <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
+                      <UButton
+                        type="button"
+                        icon="i-lucide-circle-help"
+                        variant="ghost"
+                        color="neutral"
+                        size="xs"
+                        class="h-4 min-h-0 w-4 min-w-0 p-0"
+                        aria-label="Explicar níveis de confiança"
+                      />
+                      <template #content>
+                        <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
+                          <p class="font-medium text-highlighted">
+                            Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
+                          </p>
+                          <div
+                            v-for="item in confidenceLevelHelp"
+                            :key="item.title"
+                            class="space-y-1 rounded-lg border border-default p-2.5"
+                          >
+                            <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
+                            <p>👉 {{ item.summary }}</p>
+                            <p class="text-muted">{{ item.signals }}</p>
+                            <p class="text-muted">{{ item.detail }}</p>
                           </div>
-                        </template>
-                      </UPopover>
-                    </div>
-                    <USelect
-                      :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.confidenceLevel ?? link.confidenceLevel"
-                      :items="confidenceLevelOptions"
-                      class="w-full"
-                      @update:model-value="(value) => {
-                        const draft = kpiLinkDrafts.find(item => item.draftId === link.id)
-                        if (draft) draft.confidenceLevel = (value ?? 'Medium') as ConfidenceLevel
-                      }"
-                    />
+                        </div>
+                      </template>
+                    </UPopover>
                   </div>
-                </UFormField>
+                  <USelect
+                    :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.confidenceLevel ?? link.confidenceLevel"
+                    :items="confidenceLevelOptions"
+                    class="w-full"
+                    @update:model-value="(value) => {
+                      const draft = kpiLinkDrafts.find(item => item.draftId === link.id)
+                      if (draft) draft.confidenceLevel = (value ?? 'Medium') as ConfidenceLevel
+                    }"
+                  />
+                </div>
 
                 <div class="md:col-span-5 flex flex-col gap-2 md:flex-row md:items-end">
                   <UFormField label="Observação" class="flex-1">
@@ -986,7 +1053,7 @@ async function deleteMeasurement(measurementId: string) {
           <article
             v-for="draft in kpiLinkDrafts"
             :key="draft.draftId"
-            class="rounded-xl border border-dashed border-primary/30 bg-primary/5 p-4"
+            class="rounded-xl border border-dashed border-primary/30 bg-primary/5 p-3"
           >
             <div class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto]">
               <UFormField label="KPI relacionado" required>
@@ -1021,45 +1088,44 @@ async function deleteMeasurement(measurementId: string) {
                 />
               </UFormField>
 
-              <UFormField label="">
-                <div class="space-y-1.5">
-                  <div class="flex items-center gap-1.5">
-                    <span class="text-sm text-highlighted">Nível de confiança</span>
-                    <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
-                      <UButton
-                        type="button"
-                        icon="i-lucide-circle-help"
-                        variant="ghost"
-                        color="neutral"
-                        size="xs"
-                        aria-label="Explicar níveis de confiança"
-                      />
-                      <template #content>
-                        <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
-                          <p class="font-medium text-highlighted">
-                            Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
-                          </p>
-                          <div
-                            v-for="item in confidenceLevelHelp"
-                            :key="item.title"
-                            class="space-y-1 rounded-lg border border-default p-2.5"
-                          >
-                            <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
-                            <p>👉 {{ item.summary }}</p>
-                            <p class="text-muted">{{ item.signals }}</p>
-                            <p class="text-muted">{{ item.detail }}</p>
-                          </div>
+              <div class="relative pt-6">
+                <div class="absolute inset-x-0 top-0 flex items-center justify-between gap-1.5 text-sm leading-none">
+                  <span class="text-sm text-highlighted">Nível de confiança</span>
+                  <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
+                    <UButton
+                      type="button"
+                      icon="i-lucide-circle-help"
+                      variant="ghost"
+                      color="neutral"
+                      size="xs"
+                      class="h-4 min-h-0 w-4 min-w-0 p-0"
+                      aria-label="Explicar níveis de confiança"
+                    />
+                    <template #content>
+                      <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
+                        <p class="font-medium text-highlighted">
+                          Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
+                        </p>
+                        <div
+                          v-for="item in confidenceLevelHelp"
+                          :key="item.title"
+                          class="space-y-1 rounded-lg border border-default p-2.5"
+                        >
+                          <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
+                          <p>👉 {{ item.summary }}</p>
+                          <p class="text-muted">{{ item.signals }}</p>
+                          <p class="text-muted">{{ item.detail }}</p>
                         </div>
-                      </template>
-                    </UPopover>
-                  </div>
-                  <USelect
-                    v-model="draft.confidenceLevel"
-                    :items="confidenceLevelOptions"
-                    class="w-full"
-                  />
+                      </div>
+                    </template>
+                  </UPopover>
                 </div>
-              </UFormField>
+                <USelect
+                  v-model="draft.confidenceLevel"
+                  :items="confidenceLevelOptions"
+                  class="w-full"
+                />
+              </div>
 
               <div class="md:col-span-5 flex flex-col gap-2 md:flex-row md:items-end">
                 <UFormField label="Observação" class="flex-1">
@@ -1098,7 +1164,7 @@ async function deleteMeasurement(measurementId: string) {
 
           <div class="flex flex-wrap items-center gap-3">
             <UButton
-              v-if="availableKpisForLink.length"
+              v-if="(props.availableKpis ?? []).length"
               type="button"
               icon="i-lucide-plus"
               label="Adicionar KPI impactado"
@@ -1119,11 +1185,11 @@ async function deleteMeasurement(measurementId: string) {
       </div>
     </UCard>
 
-    <UCard :ui="{ body: 'p-5 sm:p-6' }">
-      <div class="space-y-4">
+    <UCard :ui="{ body: 'p-4 sm:p-5' }">
+      <div class="space-y-3">
         <div>
-          <h2 class="text-base font-semibold text-highlighted">Apuração de KPI</h2>
-          <p class="mt-1 text-sm text-muted">
+          <h2 class="text-sm font-semibold text-highlighted">Apuração de KPI</h2>
+          <p class="mt-1 text-xs text-muted">
             Registre as apurações dos KPIs vinculados a qualquer momento. A mais recente passa a ser considerada a apuração atual.
           </p>
         </div>
@@ -1142,16 +1208,18 @@ async function deleteMeasurement(measurementId: string) {
           <article
             v-for="link in persistedKpiLinks"
             :key="link.id"
-            class="rounded-xl border border-default bg-elevated p-4"
+            class="rounded-xl border border-default bg-elevated p-3"
           >
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div class="space-y-1">
-                <p class="text-sm font-semibold text-highlighted">{{ link.kpiName }}</p>
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-sm font-semibold text-highlighted">{{ link.kpiName }}</p>
+                  <p class="text-xs text-muted">
+                    Confiança: {{ confidenceLevelOptions.find(option => option.value === link.confidenceLevel)?.label ?? link.confidenceLevel }}
+                  </p>
+                </div>
                 <p v-if="getPersistedKpiImpactSummary(link)" class="text-xs text-muted">
                   Impacto esperado: {{ getPersistedKpiImpactSummary(link) }}
-                </p>
-                <p class="text-xs text-muted">
-                  Confiança: {{ confidenceLevelOptions.find(option => option.value === link.confidenceLevel)?.label ?? link.confidenceLevel }}
                 </p>
               </div>
 

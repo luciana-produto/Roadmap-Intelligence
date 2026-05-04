@@ -19,13 +19,15 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
 {
     [HttpGet("demands")]
     public async Task<IActionResult> GetDemands(
-        [FromQuery] Guid projectId,
+        [FromQuery] Guid? projectId,
         [FromQuery] int? quarterYear,
         [FromQuery] int? quarterNumber,
         CancellationToken cancellationToken)
     {
+        var normalizedProjectId = projectId == Guid.Empty ? null : projectId;
+
         var result = await sender.Send(
-            new GetDemandsQuery(projectId, quarterYear, quarterNumber),
+            new GetDemandsQuery(normalizedProjectId, quarterYear, quarterNumber),
             cancellationToken);
         return Ok(ApiResponse<IEnumerable<RoadmapDemandDto>>.Ok(result, CorrelationId));
     }

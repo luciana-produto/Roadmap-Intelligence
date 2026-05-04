@@ -16,12 +16,15 @@ public sealed class GetDemandsQueryHandler(
         GetDemandsQuery request,
         CancellationToken cancellationToken)
     {
-        var project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId, cancellationToken)
-            ?? throw new NotFoundException("RoadmapProject", request.ProjectId);
+        var projects = (await projectRepository.GetAllWithProductsAsync(cancellationToken)).ToList();
+        if (request.ProjectId.HasValue && projects.All(projectItem => projectItem.Id != request.ProjectId.Value))
+            throw new NotFoundException("RoadmapProject", request.ProjectId.Value);
 
-        var productMap = project.Products.ToDictionary(p => p.Id, p => p.Name);
-        var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
-            .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
+        var productMap = projects
+            .SelectMany(project => project.Products)
+            .GroupBy(product => product.Id)
+            .ToDictionary(group => group.Key, group => group.First().Name);
+        var projectNamesById = projects.ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
 
         var projectScopedDemands = (await demandRepository.GetByProjectAsync(
             request.ProjectId,

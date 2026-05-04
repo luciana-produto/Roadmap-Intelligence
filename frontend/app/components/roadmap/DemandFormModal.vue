@@ -27,9 +27,11 @@ import {
   sanitizePromisedDateForItem
 } from '~/utils/roadmapDemandPayload'
 
-type DemandFormState = Omit<DemandFormData, 'classification'> & {
+type DemandFormState = Omit<DemandFormData, 'classification' | 'quarterYear' | 'quarterNumber'> & {
   itemType: RoadmapItemType | ''
   classification: DemandClassification | ''
+  quarterYear: number | null
+  quarterNumber: number | null
 }
 
 type ImpactDisplayType = 'Percentage' | 'Number' | 'Currency'
@@ -52,8 +54,23 @@ type EpicParentOption = {
   id: string
   title: string
   roadmapTitle?: string
+  status?: DemandStatus
   projectId?: string
   projectIds?: string[]
+}
+
+type RoadmapParentOption = {
+  id: string
+  title: string
+  projectId?: string
+  projectIds?: string[]
+}
+
+type ParentSelectOption = {
+  value: string
+  label: string
+  description?: string
+  searchText: string
 }
 
 const api = useApi()
@@ -65,7 +82,9 @@ const props = defineProps<{
   open: boolean
   projects: RoadmapProject[]
   defaultItemType?: RoadmapItemType
-  roadmapOptions?: Array<{ id: string, title: string }>
+  defaultParentDemandId?: string
+  defaultProjectIds?: string[]
+  roadmapOptions?: RoadmapParentOption[]
   epicOptions?: EpicParentOption[]
   dependencyOptions: DemandDependencyOption[]
   customerSuggestions: string[]
@@ -74,6 +93,7 @@ const props = defineProps<{
   defaultQuarterYear?: number
   defaultQuarterNumber?: number
   availableKpis?: Kpi[]
+  isSaving?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -137,7 +157,7 @@ const classificationOptions = [
 
 const statusOptions = [
   { value: 'Backlog',       label: 'Backlog' },
-  { value: 'InProgress',    label: 'Em andamento' },
+  { value: 'InProgress',    label: 'Doing' },
   { value: 'Done',          label: 'Concluído' },
   { value: 'Deprioritized', label: 'Despriorizado' }
 ]
@@ -176,7 +196,7 @@ const resultTabs = computed(() => {
     { value: 'general', label: 'Geral' }
   ]
 
-  if (hasSelectedItemType.value && isEdit.value)
+  if (hasSelectedItemType.value && !isRoadmap.value)
     tabs.push({ value: 'status', label: 'Status' })
 
   return tabs
@@ -184,9 +204,12 @@ const resultTabs = computed(() => {
 
 const customerInput = ref('')
 const dependencySearch = ref('')
+const parentSearch = ref('')
 const activeTab = ref<DemandFormTab>('general')
 const showSubmitHint = ref(false)
 let submitHintTimeout: ReturnType<typeof setTimeout> | null = null
+
+const hasStatusTab = computed(() => resultTabs.value.length > 1)
 
 const observationRequired = computed(() => form.status === 'Deprioritized')
 const deprioritizationReasonRequired = computed(() => form.status === 'Deprioritized')
@@ -199,8 +222,8 @@ const form = reactive<DemandFormState>({
   description: '',
   projectId: '',
   projectIds: [],
-  quarterYear: currentYear,
-  quarterNumber: 1,
+  quarterYear: null,
+  quarterNumber: null,
   type: 'Planned',
   classification: 'Strategic',
   productIds: [],
@@ -222,23 +245,122 @@ const form = reactive<DemandFormState>({
   noKpiClassification: undefined
 })
 
+const projectNameById = computed(() =>
+  new Map(props.projects.map(project => [project.id, project.name] as const))
+)
+
+const selectedProjectNames = computed(() =>
+  (form.projectIds ?? [])
+    .map(projectId => projectNameById.value.get(projectId) ?? '')
+    .filter(Boolean)
+)
+
+const isHydratingForm = ref(false)
+const includeCrossProjectRoadmaps = ref(false)
+const includeCrossProjectEpics = ref(false)
+
+const availableRoadmapOptions = computed(() => {
+  if (!isEpic.value)
+    return props.roadmapOptions ?? []
+
+  const options = props.roadmapOptions ?? []
+  const selectedOption = form.parentDemandId
+    ? options.find(option => option.id === form.parentDemandId)
+    : undefined
+
+  if (includeCrossProjectRoadmaps.value)
+    return options
+
+  const selectedProjectIds = new Set(form.projectIds ?? [])
+  if (!selectedProjectIds.size)
+    return selectedOption ? [selectedOption] : []
+
+  const filteredOptions = options.filter((option) => {
+    const optionProjectIds = option.projectId
+      ? [option.projectId]
+      : (option.projectIds ?? [])
+
+    return optionProjectIds.some(projectId => selectedProjectIds.has(projectId))
+  })
+
+  if (selectedOption && !filteredOptions.some(option => option.id === selectedOption.id))
+    return [selectedOption, ...filteredOptions]
+
+  return filteredOptions
+})
+
 const parentOptions = computed(() => {
   if (!hasSelectedItemType.value)
     return []
 
   if (form.itemType === 'Epic') {
-    return (props.roadmapOptions ?? []).map(option => ({ value: option.id, label: option.title }))
+    return [...availableRoadmapOptions.value]
+      .sort((left, right) => left.title.localeCompare(right.title, 'pt-BR'))
+      .map((option): ParentSelectOption => {
+        const optionProjectIds = option.projectId
+          ? [option.projectId]
+          : (option.projectIds ?? [])
+        const projectNames = optionProjectIds
+          .map(projectId => projectNameById.value.get(projectId) ?? '')
+          .filter(Boolean)
+        const description = projectNames.join(' · ')
+
+        return {
+          value: option.id,
+          label: option.title,
+          description: description || undefined,
+          searchText: `${option.title} ${description}`.toLowerCase()
+        }
+      })
   }
 
   if (form.itemType === 'Demand') {
     return availableEpicOptions.value
-      .map(option => ({
-        value: option.id,
-        label: option.roadmapTitle ? `${option.roadmapTitle} · ${option.title}` : option.title
-      }))
+      .map((option): ParentSelectOption => {
+        const optionProjectIds = option.projectId
+          ? [option.projectId]
+          : (option.projectIds ?? [])
+        const projectNames = optionProjectIds
+          .map(projectId => projectNameById.value.get(projectId) ?? '')
+          .filter(Boolean)
+        const description = [
+          option.roadmapTitle,
+          projectNames.join(' · '),
+          option.status ? statusOptions.find(status => status.value === option.status)?.label : ''
+        ].filter(Boolean).join(' · ')
+
+        return {
+          value: option.id,
+          label: option.title,
+          description: description || undefined,
+          searchText: `${option.title} ${option.roadmapTitle ?? ''} ${projectNames.join(' ')} ${option.status ?? ''}`.toLowerCase()
+        }
+      })
   }
 
   return []
+})
+
+const filteredParentOptions = computed(() => {
+  const query = parentSearch.value.trim().toLowerCase()
+  if (!query)
+    return parentOptions.value
+
+  return parentOptions.value.filter(option => option.searchText.includes(query))
+})
+
+const selectedParentOption = computed(() =>
+  parentOptions.value.find(option => option.value === form.parentDemandId) ?? null
+)
+
+const parentSelectorLabel = computed(() => {
+  if (selectedParentOption.value)
+    return selectedParentOption.value.label
+
+  if (isEpic.value && !selectedProjectNames.value.length)
+    return 'Selecione os projetos primeiro'
+
+  return isEpic.value ? 'Selecione o roadmap pai' : 'Selecione o épico pai'
 })
 
 const kpiLinkEdits = ref<EditableDemandKpiLink[]>([])
@@ -284,20 +406,45 @@ const availableEpicOptions = computed(() => {
   if (form.itemType !== 'Demand')
     return props.epicOptions ?? []
 
+  const options = props.epicOptions ?? []
+  const selectedOption = form.parentDemandId
+    ? options.find(option => option.id === form.parentDemandId)
+    : undefined
+
+  if (includeCrossProjectEpics.value)
+    return options
+
   if (!form.projectId)
-    return props.epicOptions ?? []
+    return selectedOption ? [selectedOption] : []
 
   const cachedOptions = epicOptionsByProjectId.value[form.projectId]
-  if (cachedOptions)
-    return cachedOptions
+  if (cachedOptions) {
+    const filteredOptions = cachedOptions.filter((option) => {
+      const optionProjectIds = option.projectId
+        ? [option.projectId]
+        : (option.projectIds ?? [])
 
-  return (props.epicOptions ?? []).filter((option) => {
+      return optionProjectIds.includes(form.projectId)
+    })
+
+    if (selectedOption && !filteredOptions.some(option => option.id === selectedOption.id))
+      return [selectedOption, ...filteredOptions]
+
+    return filteredOptions
+  }
+
+  const filteredOptions = options.filter((option) => {
     const optionProjectIds = option.projectId
       ? [option.projectId]
       : (option.projectIds ?? [])
 
     return optionProjectIds.includes(form.projectId)
   })
+
+  if (selectedOption && !filteredOptions.some(option => option.id === selectedOption.id))
+    return [selectedOption, ...filteredOptions]
+
+  return filteredOptions
 })
 
 const selectedDeprioritizationExample = computed(() => {
@@ -364,13 +511,28 @@ const confidenceLevelHelp = [
 ] as const
 
 const selectedQuarter = computed({
-  get: () => `${form.quarterNumber}-${form.quarterYear}`,
+  get: () => {
+    if (form.quarterYear == null || form.quarterNumber == null)
+      return ''
+
+    return `${form.quarterNumber}-${form.quarterYear}`
+  },
   set: (val: string) => {
+    if (!val) {
+      form.quarterNumber = null
+      form.quarterYear = null
+      return
+    }
+
     const [q, y] = val.split('-').map(Number)
     form.quarterNumber = q
     form.quarterYear = y
   }
 })
+
+const sortedProjects = computed(() =>
+  [...props.projects].sort((left, right) => right.name.localeCompare(left.name, 'pt-BR'))
+)
 
 const productsForProject = computed(() =>
   props.projects.find(p => p.id === form.projectId)?.products ?? []
@@ -385,92 +547,117 @@ function syncSingleProductSelection() {
     return
   }
 
-  form.productIds = []
+  const availableProductIds = new Set(productsForProject.value.map(product => product.id))
+  form.productIds = form.productIds.filter(productId => availableProductIds.has(productId))
 }
 
-watch(() => props.open, (open) => {
-  if (!open) return
+function populateFormFromDemand(demand: RoadmapDemand) {
+  isHydratingForm.value = true
+  includeCrossProjectRoadmaps.value = false
+  includeCrossProjectEpics.value = false
 
-  activeTab.value = 'general'
-  showSubmitHint.value = false
+  form.itemType = demand.itemType
+  form.parentDemandId = demand.parentDemandId
+  form.title = demand.title
+  form.description = demand.description ?? ''
+  form.projectId = demand.projectId ?? ''
+  form.projectIds = demand.projectIds ?? (demand.projectId ? [demand.projectId] : [])
+  form.quarterYear = demand.quarterYear
+  form.quarterNumber = demand.quarterNumber
+  form.type = demand.type
+  form.classification = demand.classification
+  form.productIds = demand.products.map(p => p.productId)
+  form.status = demand.status
+  form.observation = demand.observation ?? ''
+  form.deprioritizationReason = demand.deprioritizationReason ?? undefined
+  form.replacementDemandId = demand.replacementDemandId ?? undefined
+  form.jiraIssue = demand.jiraIssue ?? ''
+  form.issueLinks = demand.issueLinks?.length
+    ? demand.issueLinks.map(issue => ({ key: issue.key, url: issue.url ?? '' }))
+    : (demand.jiraIssue ? [{ key: demand.jiraIssue, url: '' }] : [])
+  form.hours = demand.hours ?? undefined
+  form.customers = demand.customers ?? []
+  form.dependencyDemandIds = demand.dependsOn.map(item => item.demandId)
+  form.isBlocked = demand.isBlocked
+  form.blockedReason = demand.blockedReason ?? ''
+  form.promisedDate = demand.promisedDate ?? ''
+  form.deliveryDate = demand.deliveryDate ?? ''
+  form.problemClarity = demand.itemType === 'Epic'
+    ? demand.problemClarity ?? undefined
+    : undefined
+  form.hasNoKpi = demand.hasNoKpi ?? false
+  form.noKpiClassification = demand.noKpiClassification ?? undefined
+  kpiLinkEdits.value = (demand.kpiLinks ?? []).map(l => toEditableKpiLink({
+    kpiId: l.kpiId,
+    impactType: l.impactType,
+    estimatedImpact: l.estimatedImpact,
+    confidenceLevel: l.confidenceLevel
+  }))
+  kpiMeasurements.value = sortMeasurements(demand.kpiMeasurements ?? [])
+  measurementDrafts.value = {}
+  customerInput.value = ''
 
-  if (props.demand) {
-    form.itemType = props.demand.itemType
-    form.parentDemandId = props.demand.parentDemandId
-    form.title = props.demand.title
-    form.description = props.demand.description ?? ''
-    form.projectId = props.demand.projectId ?? ''
-    form.projectIds = props.demand.projectIds ?? (props.demand.projectId ? [props.demand.projectId] : [])
-    form.quarterYear = props.demand.quarterYear
-    form.quarterNumber = props.demand.quarterNumber
-    form.type = props.demand.type
-    form.classification = props.demand.classification
-    form.productIds = props.demand.products.map(p => p.productId)
-    form.status = props.demand.status
-    form.observation = props.demand.observation ?? ''
-    form.deprioritizationReason = props.demand.deprioritizationReason ?? undefined
-    form.replacementDemandId = props.demand.replacementDemandId ?? undefined
-    form.jiraIssue = props.demand.jiraIssue ?? ''
-    form.issueLinks = props.demand.issueLinks?.length
-      ? props.demand.issueLinks.map(issue => ({ key: issue.key, url: issue.url ?? '' }))
-      : (props.demand.jiraIssue ? [{ key: props.demand.jiraIssue, url: '' }] : [])
-    form.hours = props.demand.hours ?? undefined
-    form.customers = props.demand.customers ?? []
-    form.dependencyDemandIds = props.demand.dependsOn.map(item => item.demandId)
-    form.isBlocked = props.demand.isBlocked
-    form.blockedReason = props.demand.blockedReason ?? ''
-    form.promisedDate = props.demand.promisedDate ?? ''
-    form.deliveryDate = props.demand.deliveryDate ?? ''
-    form.problemClarity = props.demand.itemType === 'Epic'
-      ? props.demand.problemClarity ?? undefined
-      : undefined
-    form.hasNoKpi = props.demand.hasNoKpi ?? false
-    form.noKpiClassification = props.demand.noKpiClassification ?? undefined
-    kpiLinkEdits.value = (props.demand.kpiLinks ?? []).map(l => toEditableKpiLink({
-      kpiId: l.kpiId,
-      impactType: l.impactType,
-      estimatedImpact: l.estimatedImpact,
-      confidenceLevel: l.confidenceLevel
-    }))
-    kpiMeasurements.value = sortMeasurements(props.demand.kpiMeasurements ?? [])
-    measurementDrafts.value = {}
-    customerInput.value = ''
-  }
-  else {
-    form.itemType = props.defaultItemType ?? ''
-    form.parentDemandId = undefined
-    form.title = ''
-    form.description = ''
-    form.projectId = props.defaultProjectId ?? props.projects[0]?.id ?? ''
-    form.projectIds = props.defaultProjectId ? [props.defaultProjectId] : []
-    form.quarterYear = props.defaultQuarterYear ?? currentYear
-    form.quarterNumber = props.defaultQuarterNumber ?? 1
-    form.type = 'Planned'
-    form.classification = 'Strategic'
-    form.productIds = []
-    form.status = 'Backlog'
-    form.observation = ''
-    form.deprioritizationReason = undefined
-    form.replacementDemandId = undefined
-    form.jiraIssue = ''
-    form.issueLinks = []
-    form.hours = undefined
-    form.customers = []
-    form.dependencyDemandIds = []
-    form.isBlocked = false
-    form.blockedReason = ''
-    form.promisedDate = ''
-    form.deliveryDate = ''
-    form.problemClarity = undefined
-    form.hasNoKpi = false
-    form.noKpiClassification = undefined
-    kpiLinkEdits.value = []
-    kpiMeasurements.value = []
-    measurementDrafts.value = {}
-    customerInput.value = ''
-    syncSingleProductSelection()
-  }
-})
+  queueMicrotask(() => {
+    isHydratingForm.value = false
+  })
+}
+
+function resetFormForCreate() {
+  includeCrossProjectRoadmaps.value = false
+  includeCrossProjectEpics.value = false
+  form.itemType = props.defaultItemType ?? ''
+  form.parentDemandId = props.defaultParentDemandId
+  form.title = ''
+  form.description = ''
+  form.projectId = props.defaultProjectId ?? sortedProjects.value[0]?.id ?? ''
+  form.projectIds = props.defaultProjectIds?.length
+    ? [...props.defaultProjectIds]
+    : (props.defaultProjectId ? [props.defaultProjectId] : [])
+  form.quarterYear = props.defaultQuarterYear ?? null
+  form.quarterNumber = props.defaultQuarterNumber ?? null
+  form.type = 'Planned'
+  form.classification = props.defaultItemType === 'Epic' ? '' : 'Strategic'
+  form.productIds = []
+  form.status = 'Backlog'
+  form.observation = ''
+  form.deprioritizationReason = undefined
+  form.replacementDemandId = undefined
+  form.jiraIssue = ''
+  form.issueLinks = []
+  form.hours = undefined
+  form.customers = []
+  form.dependencyDemandIds = []
+  form.isBlocked = false
+  form.blockedReason = ''
+  form.promisedDate = ''
+  form.deliveryDate = ''
+  form.problemClarity = undefined
+  form.hasNoKpi = false
+  form.noKpiClassification = undefined
+  kpiLinkEdits.value = []
+  kpiMeasurements.value = []
+  measurementDrafts.value = {}
+  customerInput.value = ''
+  syncSingleProductSelection()
+}
+
+watch(
+  () => [props.open, props.demand?.id ?? null] as const,
+  ([open]) => {
+    if (!open) return
+
+    activeTab.value = 'general'
+    showSubmitHint.value = false
+
+    if (props.demand) {
+      populateFormFromDemand(props.demand)
+      return
+    }
+
+    resetFormForCreate()
+  },
+  { immediate: true }
+)
 
 watch(() => form.projectId, () => {
   syncSingleProductSelection()
@@ -495,8 +682,17 @@ watch(parentOptions, (options) => {
     form.parentDemandId = undefined
 })
 
+watch(() => [props.open, form.itemType] as const, () => {
+  parentSearch.value = ''
+})
+
 watch(() => form.itemType, (itemType) => {
+  if (isHydratingForm.value)
+    return
+
   if (!itemType) {
+    includeCrossProjectRoadmaps.value = false
+    includeCrossProjectEpics.value = false
     form.parentDemandId = undefined
     form.projectId = ''
     form.projectIds = []
@@ -504,7 +700,7 @@ watch(() => form.itemType, (itemType) => {
     form.title = ''
     form.description = ''
     form.type = 'Planned'
-    form.classification = 'Strategic'
+    form.classification = ''
     form.status = 'Backlog'
     form.hours = undefined
     form.customers = []
@@ -514,9 +710,13 @@ watch(() => form.itemType, (itemType) => {
   }
 
   if (itemType === 'Roadmap') {
+    includeCrossProjectRoadmaps.value = false
+    includeCrossProjectEpics.value = false
     form.parentDemandId = undefined
     form.projectId = ''
-    form.projectIds = props.defaultProjectId ? [props.defaultProjectId] : []
+    form.projectIds = props.defaultProjectIds?.length
+      ? [...props.defaultProjectIds]
+      : (props.defaultProjectId ? [props.defaultProjectId] : [])
     form.productIds = []
     form.type = 'Planned'
     form.classification = 'Strategic'
@@ -529,22 +729,44 @@ watch(() => form.itemType, (itemType) => {
   }
 
   if (itemType === 'Epic') {
+    includeCrossProjectEpics.value = false
+    if (!isEdit.value)
+      form.parentDemandId = props.defaultParentDemandId
+
     form.projectId = ''
-    form.projectIds = form.projectIds?.length ? form.projectIds : (props.defaultProjectId ? [props.defaultProjectId] : [])
+    form.projectIds = form.projectIds?.length
+      ? form.projectIds
+      : (props.defaultProjectIds?.length
+          ? [...props.defaultProjectIds]
+          : (props.defaultProjectId ? [props.defaultProjectId] : []))
     form.productIds = []
     form.type = 'Planned'
+    if (!isEdit.value)
+      form.classification = ''
+
     form.hours = undefined
-    form.issueLinks = []
+    if (!isEdit.value)
+      form.issueLinks = []
+
     return
   }
 
+  includeCrossProjectRoadmaps.value = false
+  includeCrossProjectEpics.value = false
   form.classification = 'Strategic'
   form.problemClarity = undefined
   form.projectIds = []
   if (!form.projectId)
-    form.projectId = props.defaultProjectId ?? props.projects[0]?.id ?? ''
+    form.projectId = props.defaultProjectId ?? sortedProjects.value[0]?.id ?? ''
 
   syncSingleProductSelection()
+})
+
+watch(() => props.defaultParentDemandId, (parentDemandId) => {
+  if (!props.open || isEdit.value || form.itemType !== 'Epic')
+    return
+
+  form.parentDemandId = parentDemandId
 })
 
 function addIssueLink() {
@@ -623,6 +845,9 @@ const filteredDependencyOptions = computed(() => {
     return []
 
   return props.dependencyOptions.filter(option => {
+    if (option.itemType !== 'Demand')
+      return false
+
     if (props.demand && option.demandId === props.demand.id)
       return false
 
@@ -672,7 +897,7 @@ function removeCustomerTag(tag: string) {
 
 function toggleProduct(id: string, checked: boolean) {
   if (checked) {
-    form.productIds = [id]
+    form.productIds = [...new Set([...(form.productIds ?? []), id])]
     return
   }
 
@@ -1094,12 +1319,18 @@ const missingSubmitReason = computed(() => {
     return 'Selecione o tipo do item'
   if (!form.title)
     return `Informe o título ${isRoadmap.value ? 'do roadmap' : isEpic.value ? 'do épico' : 'da demanda'}`
+  if (!isDemand.value && !(form.projectIds?.length ?? 0))
+    return 'Selecione ao menos um projeto'
   if (!isRoadmap.value && !form.parentDemandId)
     return isEpic.value ? 'Selecione o roadmap pai' : 'Selecione o épico pai'
   if (isDemand.value && !form.projectId)
     return 'Selecione o projeto'
+  if (isDemand.value && (form.quarterYear == null || form.quarterNumber == null))
+    return 'Selecione o quarter'
   if (isEpic.value && !form.classification)
     return 'Selecione a classificação'
+  if (isEpic.value && form.problemClarity == null)
+    return 'Informe a nota de clareza'
   if (isDemand.value && form.productIds.length === 0)
     return 'Selecione ao menos um produto'
   if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
@@ -1121,6 +1352,7 @@ const missingSubmitReason = computed(() => {
 })
 
 const isSubmitDisabled = computed(() => !!missingSubmitReason.value)
+const isSubmitBlocked = computed(() => isSubmitDisabled.value || !!props.isSaving)
 const submitButtonLabel = computed(() => {
   if (!form.itemType)
     return isEdit.value ? 'Salvar item' : 'Criar item'
@@ -1129,8 +1361,6 @@ const submitButtonLabel = computed(() => {
     ? `Salvar ${itemTypeLabels[form.itemType as RoadmapItemType]}`
     : `Criar ${itemTypeLabels[form.itemType as RoadmapItemType]}`
 })
-
-const isSubmitting = ref(false)
 
 function clearSubmitHintTimer() {
   if (submitHintTimeout) {
@@ -1155,7 +1385,7 @@ function focusRelevantTab() {
     || missingSubmitReason.value === 'Informe a data de entrega para concluir a demanda'
     || missingSubmitReason.value === 'Preencha o motivo do impedimento'
   ) {
-    activeTab.value = isEdit.value ? 'status' : 'general'
+    activeTab.value = hasStatusTab.value ? 'status' : 'general'
     return
   }
 
@@ -1163,6 +1393,9 @@ function focusRelevantTab() {
 }
 
 function handleSubmitClick() {
+  if (props.isSaving)
+    return
+
   if (isSubmitDisabled.value) {
     focusRelevantTab()
     openSubmitHint()
@@ -1174,32 +1407,28 @@ function handleSubmitClick() {
 }
 
 async function handleSubmit() {
-  if (isSubmitDisabled.value) return
-  isSubmitting.value = true
-  try {
-    if (!form.itemType)
-      return
+  if (isSubmitBlocked.value || !form.itemType) return
 
-    const sanitizedIssueLinks = sanitizeIssueLinksForItem(form.itemType, normalizeIssueLinks(form.issueLinks))
+  const sanitizedIssueLinks = sanitizeIssueLinksForItem(form.itemType, normalizeIssueLinks(form.issueLinks))
+  const normalizedQuarterYear = form.quarterYear ?? 0
+  const normalizedQuarterNumber = form.quarterNumber ?? 0
 
-    emit('submit', {
-      ...form,
-      itemType: form.itemType,
-      projectId: form.projectId || undefined,
-      projectIds: form.itemType === 'Demand' ? [] : (form.projectIds ?? []),
-      parentDemandId: form.parentDemandId || undefined,
-      jiraIssue: undefined,
-      issueLinks: sanitizedIssueLinks,
-      hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
-      customers: sanitizeCustomersForItem(form.itemType, form.customers),
-      promisedDate: sanitizePromisedDateForItem(form.itemType, form.quarterYear, form.quarterNumber, form.promisedDate),
-      problemClarity: form.itemType === 'Epic' ? form.problemClarity : undefined,
-      classification: form.classification as DemandClassification
-    })
-  }
-  finally {
-    isSubmitting.value = false
-  }
+  emit('submit', {
+    ...form,
+    itemType: form.itemType,
+    projectId: form.projectId || undefined,
+    projectIds: form.itemType === 'Demand' ? [] : (form.projectIds ?? []),
+    quarterYear: normalizedQuarterYear,
+    quarterNumber: normalizedQuarterNumber,
+    parentDemandId: form.parentDemandId || undefined,
+    jiraIssue: undefined,
+    issueLinks: sanitizedIssueLinks,
+    hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
+    customers: sanitizeCustomersForItem(form.itemType, form.customers),
+    promisedDate: sanitizePromisedDateForItem(form.itemType, normalizedQuarterYear, normalizedQuarterNumber, form.promisedDate),
+    problemClarity: form.itemType === 'Epic' ? form.problemClarity : undefined,
+    classification: form.classification as DemandClassification
+  })
 }
 </script>
 
@@ -1215,7 +1444,7 @@ async function handleSubmit() {
         class="min-h-[38rem] space-y-4"
         @submit.prevent="handleSubmit"
       >
-        <div class="flex gap-2 border-b border-default pb-3">
+        <div v-if="hasStatusTab" class="flex gap-2 border-b border-default pb-3">
           <button
             v-for="tab in resultTabs"
             :key="tab.value"
@@ -1228,9 +1457,9 @@ async function handleSubmit() {
           </button>
         </div>
 
-        <template v-if="activeTab === 'general'">
+        <template v-if="!hasStatusTab || activeTab === 'general'">
         <section class="space-y-4">
-          <div>
+          <div v-if="!isDemand">
             <h3 class="text-sm font-semibold text-highlighted">Dados do item</h3>
           </div>
 
@@ -1245,21 +1474,201 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="hasSelectedItemType && !isRoadmap" :label="isEpic ? 'Roadmap pai' : 'Épico pai'" required>
+            <UFormField v-if="hasSelectedItemType" label="Projetos" required>
               <USelect
-                v-model="form.parentDemandId"
-                :items="parentOptions"
+                v-if="isDemand"
+                v-model="form.projectId"
+                :items="sortedProjects.map(p => ({ value: p.id, label: p.name }))"
                 placeholder="Selecione"
                 class="w-full"
+                :disabled="isEdit"
               />
+
+              <UPopover v-else :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                <UButton
+                  type="button"
+                  variant="outline"
+                  color="neutral"
+                  trailing-icon="i-lucide-chevron-down"
+                  class="w-full justify-between"
+                >
+                  <span class="truncate">{{ nonDemandProjectsLabel }}</span>
+                </UButton>
+
+                <template #content>
+                  <div class="min-w-72 space-y-1 p-2">
+                    <label
+                      v-for="project in sortedProjects"
+                      :key="project.id"
+                      class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-highlighted transition-colors hover:bg-elevated"
+                    >
+                      <input
+                        type="checkbox"
+                        class="h-4 w-4 accent-primary"
+                        :checked="form.projectIds?.includes(project.id)"
+                        @change="(event) => toggleProjectAssociation(project.id, (event.target as HTMLInputElement).checked)"
+                      >
+                      <span class="truncate">{{ project.name }}</span>
+                    </label>
+                  </div>
+                </template>
+              </UPopover>
             </UFormField>
+
           </div>
+
+          <UFormField v-if="hasSelectedItemType && isEpic" label="Roadmap pai" required>
+            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+              <UButton
+                type="button"
+                variant="outline"
+                color="neutral"
+                trailing-icon="i-lucide-chevron-down"
+                class="w-full justify-between"
+              >
+                <span class="truncate">{{ parentSelectorLabel }}</span>
+              </UButton>
+
+              <template #content>
+                <div class="min-w-80 space-y-2 p-2">
+                  <div class="flex items-center justify-between gap-3 rounded-lg border border-default bg-elevated/40 px-2.5 py-2">
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-highlighted">Buscar roadmaps de outros projetos</p>
+                      <p class="text-[11px] text-muted">Desmarcado: mostra apenas os roadmaps dos projetos selecionados.</p>
+                    </div>
+                    <USwitch v-model="includeCrossProjectRoadmaps" />
+                  </div>
+
+                  <UInput
+                    v-model="parentSearch"
+                    icon="i-lucide-search"
+                    placeholder="Buscar roadmap pai"
+                    class="w-full"
+                  />
+
+                  <div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-default bg-default p-1">
+                    <button
+                      v-for="option in filteredParentOptions"
+                      :key="option.value"
+                      type="button"
+                      class="flex w-full items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                      :class="form.parentDemandId === option.value ? 'bg-primary/5 text-primary' : 'text-highlighted'"
+                      @click="form.parentDemandId = option.value"
+                    >
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-medium">{{ option.label }}</p>
+                        <p v-if="option.description" class="truncate text-xs text-muted">{{ option.description }}</p>
+                      </div>
+                      <UIcon v-if="form.parentDemandId === option.value" name="i-lucide-check" class="mt-0.5 h-4 w-4 shrink-0" />
+                    </button>
+
+                    <p v-if="!filteredParentOptions.length" class="px-2.5 py-3 text-xs italic text-muted">
+                      {{ !selectedProjectNames.length
+                        ? 'Selecione ao menos um projeto para buscar roadmaps.'
+                        : includeCrossProjectRoadmaps
+                          ? 'Nenhum roadmap encontrado na busca atual.'
+                          : 'Nenhum roadmap encontrado para os projetos selecionados. Ative a busca em outros projetos para ampliar a lista.' }}
+                    </p>
+                  </div>
+                </div>
+              </template>
+            </UPopover>
+          </UFormField>
 
           <div v-if="!hasSelectedItemType" class="rounded-xl border border-dashed border-default bg-elevated/40 px-4 py-6 text-sm text-muted">
             Selecione o tipo do item para carregar os campos de cadastro.
           </div>
 
-          <div v-if="hasSelectedItemType" class="contents">
+          <div v-if="hasSelectedItemType" class="space-y-3">
+          <UFormField v-if="isDemand" label="Épico pai" required>
+            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+              <UButton
+                type="button"
+                variant="outline"
+                color="neutral"
+                trailing-icon="i-lucide-chevron-down"
+                class="w-full justify-between"
+              >
+                <span class="truncate">{{ parentSelectorLabel }}</span>
+              </UButton>
+
+              <template #content>
+                <div class="min-w-80 space-y-2 p-2">
+                  <div class="flex items-center justify-between gap-3 rounded-lg border border-default bg-elevated/40 px-2.5 py-2">
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-highlighted">Buscar épicos de outros projetos</p>
+                      <p class="text-[11px] text-muted">Desmarcado: mostra apenas os épicos do projeto selecionado.</p>
+                    </div>
+                    <USwitch v-model="includeCrossProjectEpics" />
+                  </div>
+
+                  <UInput
+                    v-model="parentSearch"
+                    icon="i-lucide-search"
+                    placeholder="Buscar épico pai"
+                    class="w-full"
+                  />
+
+                  <div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-default bg-default p-1">
+                    <button
+                      v-for="option in filteredParentOptions"
+                      :key="option.value"
+                      type="button"
+                      class="flex w-full items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                      :class="form.parentDemandId === option.value ? 'bg-primary/5 text-primary' : 'text-highlighted'"
+                      @click="form.parentDemandId = option.value"
+                    >
+                      <div class="min-w-0">
+                        <p class="truncate text-sm font-medium">{{ option.label }}</p>
+                        <p v-if="option.description" class="truncate text-xs text-muted">{{ option.description }}</p>
+                      </div>
+                      <UIcon v-if="form.parentDemandId === option.value" name="i-lucide-check" class="mt-0.5 h-4 w-4 shrink-0" />
+                    </button>
+
+                    <p v-if="!filteredParentOptions.length" class="px-2.5 py-3 text-xs italic text-muted">
+                      {{ !form.projectId
+                        ? 'Selecione um projeto para buscar épicos.'
+                        : includeCrossProjectEpics
+                          ? 'Nenhum épico encontrado na busca atual.'
+                          : 'Nenhum épico encontrado para o projeto selecionado. Ative a busca em outros projetos para ampliar a lista.' }}
+                    </p>
+                  </div>
+                </div>
+              </template>
+            </UPopover>
+          </UFormField>
+
+          <UFormField v-if="isDemand" label="Produto" required>
+            <div
+              v-if="productsForProject.length"
+              class="flex flex-wrap gap-2 rounded-lg border border-default bg-elevated p-3"
+            >
+              <label
+                v-for="product in productsForProject"
+                :key="product.id"
+                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors select-none hover:bg-default"
+                :class="form.productIds.includes(product.id)
+                  ? 'bg-primary/10 border border-primary/30'
+                  : 'border border-transparent'"
+              >
+                <input
+                  type="checkbox"
+                  :value="product.id"
+                  :checked="form.productIds.includes(product.id)"
+                  class="h-3.5 w-3.5 accent-primary"
+                  @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
+                >
+                <span class="text-sm">{{ product.name }}</span>
+              </label>
+            </div>
+            <p
+              v-else
+              class="text-xs italic text-muted"
+            >
+              Selecione um projeto primeiro.
+            </p>
+          </UFormField>
+
           <UFormField label="Título" required>
             <UInput
               v-model="form.title"
@@ -1272,55 +1681,13 @@ async function handleSubmit() {
             <UTextarea
               v-model="form.description"
               placeholder="Detalhes adicionais (opcional)"
-              :rows="2"
+              :rows="4"
               class="w-full"
             />
           </UFormField>
 
-          <UFormField v-if="!isDemand" label="Projetos">
-            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-              <UButton
-                type="button"
-                variant="outline"
-                color="neutral"
-                trailing-icon="i-lucide-chevron-down"
-                class="w-full justify-between"
-              >
-                <span class="truncate">{{ nonDemandProjectsLabel }}</span>
-              </UButton>
-
-              <template #content>
-                <div class="min-w-72 space-y-1 p-2">
-                  <label
-                    v-for="project in projects"
-                    :key="project.id"
-                    class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-highlighted transition-colors hover:bg-elevated"
-                  >
-                    <input
-                      type="checkbox"
-                      class="h-4 w-4 accent-primary"
-                      :checked="form.projectIds?.includes(project.id)"
-                      @change="(event) => toggleProjectAssociation(project.id, (event.target as HTMLInputElement).checked)"
-                    >
-                    <span class="truncate">{{ project.name }}</span>
-                  </label>
-                </div>
-              </template>
-            </UPopover>
-          </UFormField>
-
-          <div v-if="!isRoadmap" class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <UFormField v-if="isDemand" label="Projeto" required>
-              <USelect
-                v-model="form.projectId"
-                :items="projects.map(p => ({ value: p.id, label: p.name }))"
-                placeholder="Selecione"
-                class="w-full"
-                :disabled="isEdit"
-              />
-            </UFormField>
-
-            <UFormField v-if="isDemand" label="Quarter" required>
+          <div v-if="isDemand" class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <UFormField label="Quarter" required>
               <USelect
                 v-model="selectedQuarter"
                 :items="quarters"
@@ -1329,7 +1696,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="isDemand" label="Tipo" required>
+            <UFormField label="Tipo" required>
               <USelect
                 v-model="form.type as DemandType"
                 :items="typeOptions"
@@ -1337,7 +1704,29 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="isEpic" label="Classificação" required>
+            <UFormField label="Data prometida">
+              <UInput
+                v-model="form.promisedDate"
+                type="date"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Horas">
+              <UInput
+                :model-value="form.hours ?? ''"
+                type="number"
+                min="0"
+                step="0.5"
+                placeholder="Ex: 8"
+                class="w-full"
+                @update:model-value="updateHours"
+              />
+            </UFormField>
+          </div>
+
+          <div v-if="isEpic" class="grid gap-3 md:grid-cols-3">
+            <UFormField label="Classificação" required>
               <USelect
                 v-model="form.classification"
                 :items="classificationOptions"
@@ -1345,6 +1734,50 @@ async function handleSubmit() {
                 class="w-full"
               />
             </UFormField>
+
+            <UFormField label="Data prometida">
+              <UInput
+                v-model="form.promisedDate"
+                type="date"
+                class="w-full"
+              />
+            </UFormField>
+
+            <div class="relative pt-6">
+              <div class="absolute inset-x-0 top-0 flex items-center justify-between gap-2 text-sm leading-none">
+                <span class="font-medium text-highlighted">
+                  Nota de clareza <span class="text-error">*</span>
+                </span>
+                <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                  <UButton
+                    type="button"
+                    icon="i-lucide-circle-help"
+                    variant="ghost"
+                    color="neutral"
+                    size="xs"
+                    class="h-4 min-h-0 w-4 min-w-0 p-0"
+                    aria-label="Explicar clareza do problema"
+                  />
+                  <template #content>
+                    <div class="max-w-sm p-4 text-sm text-highlighted">
+                      Clareza do Problema: Sabemos qual problema estamos resolvendo - ou so estamos construindo alguma coisa?
+                    </div>
+                  </template>
+                </UPopover>
+              </div>
+              <div>
+                <UInput
+                  :model-value="form.problemClarity ?? ''"
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="1"
+                  placeholder="0 a 10"
+                  class="w-full"
+                  @update:model-value="updateProblemClarity"
+                />
+              </div>
+            </div>
           </div>
 
           <div v-if="isRoadmap" class="grid gap-3 md:grid-cols-2">
@@ -1352,16 +1785,6 @@ async function handleSubmit() {
               <USelect
                 v-model="form.status as DemandStatus"
                 :items="statusOptions"
-                class="w-full"
-              />
-            </UFormField>
-          </div>
-
-          <div v-else class="grid gap-3 md:grid-cols-3">
-            <UFormField v-if="isEpic || isDemand" label="Data prometida">
-              <UInput
-                v-model="form.promisedDate"
-                type="date"
                 class="w-full"
               />
             </UFormField>
@@ -1393,67 +1816,17 @@ async function handleSubmit() {
               />
             </div>
 
-            <div class="flex items-center justify-between gap-3">
-              <p class="text-xs text-muted">Cada issue informada deve ter um link absoluto.</p>
+             <div class="flex flex-wrap items-center gap-3">
               <UButton
                 type="button"
-                size="sm"
-                color="neutral"
-                variant="ghost"
                 icon="i-lucide-plus"
+                label="Adicionar issue"
+                variant="soft"
+                size="sm"
                 @click="addIssueLink"
-              >
-                Adicionar issue
-              </UButton>
+              />
             </div>
           </div></UFormField>
-
-          <div v-if="!isRoadmap" class="grid grid-cols-2 gap-3 md:grid-cols-4">
-            <UFormField v-if="isEpic" label="">
-              <div class="space-y-1.5">
-                <div class="flex items-center gap-1.5">
-                  <span class="text-sm text-highlighted">Nota da clareza</span>
-                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <UButton
-                      type="button"
-                      icon="i-lucide-circle-help"
-                      variant="ghost"
-                      color="neutral"
-                      size="xs"
-                      aria-label="Explicar clareza do problema"
-                    />
-                    <template #content>
-                      <div class="max-w-sm p-4 text-sm text-highlighted">
-                        Clareza do Problema: Sabemos qual problema estamos resolvendo - ou só estamos construindo alguma coisa?
-                      </div>
-                    </template>
-                  </UPopover>
-                </div>
-                <UInput
-                  :model-value="form.problemClarity ?? ''"
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="1"
-                  placeholder="0 a 10"
-                  class="w-full"
-                  @update:model-value="updateProblemClarity"
-                />
-              </div>
-            </UFormField>
-
-            <UFormField v-if="isDemand" label="Horas">
-              <UInput
-                :model-value="form.hours ?? ''"
-                type="number"
-                min="0"
-                step="0.5"
-                placeholder="Ex: 8"
-                class="w-full"
-                @update:model-value="updateHours"
-              />
-            </UFormField>
-          </div>
 
           <UFormField v-if="isEpic" label="Clientes envolvidos">
             <div class="space-y-2">
@@ -1514,36 +1887,6 @@ async function handleSubmit() {
             </div>
           </UFormField>
 
-          <UFormField v-if="isDemand" label="Produto" required>
-            <div
-              v-if="productsForProject.length"
-              class="flex flex-wrap gap-2 p-3 rounded-lg border border-default bg-elevated"
-            >
-              <label
-                v-for="product in productsForProject"
-                :key="product.id"
-                class="flex items-center gap-2 cursor-pointer px-2.5 py-1.5 rounded-lg hover:bg-default transition-colors select-none"
-                :class="form.productIds.includes(product.id)
-                  ? 'bg-primary/10 border border-primary/30'
-                  : 'border border-transparent'"
-              >
-                <input
-                  type="checkbox"
-                  :value="product.id"
-                  :checked="form.productIds.includes(product.id)"
-                  class="accent-primary w-3.5 h-3.5"
-                  @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
-                >
-                <span class="text-sm">{{ product.name }}</span>
-              </label>
-            </div>
-            <p
-              v-else
-              class="text-xs text-muted italic"
-            >
-              Selecione um projeto primeiro.
-            </p>
-          </UFormField>
           </div>
         </section>
 
@@ -1551,7 +1894,7 @@ async function handleSubmit() {
           <div>
             <h3 class="text-sm font-semibold text-highlighted">Dependências entre épicos e demandas</h3>
             <p class="mt-1 text-xs text-muted">
-              Relacione épicos ou demandas que precisam ser concluídos antes deste item seguir adiante.
+              Relacione demandas que precisam ser concluídas antes deste item seguir adiante.
             </p>
           </div>
 
@@ -1614,7 +1957,7 @@ async function handleSubmit() {
         </template>
 
         <template v-else-if="activeTab === 'status'">
-        <section v-if="isEdit" class="space-y-4">
+        <section v-if="!isRoadmap" class="space-y-4">
           <div>
             <h3 class="text-sm font-semibold text-highlighted">Status e acompanhamento</h3>
           </div>
@@ -1752,7 +2095,15 @@ async function handleSubmit() {
     </template>
 
     <template #footer>
-      <div class="flex justify-end gap-2">
+      <div class="flex flex-col items-end gap-2">
+        <div
+          v-if="showSubmitHint && missingSubmitReason"
+          class="w-full rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+        >
+          {{ missingSubmitReason }}
+        </div>
+
+        <div class="flex justify-end gap-2">
         <UButton
           variant="outline"
           color="neutral"
@@ -1760,21 +2111,16 @@ async function handleSubmit() {
           @click="emit('update:open', false)"
         />
         <div class="relative flex items-center">
-          <div
-            v-if="showSubmitHint && missingSubmitReason"
-            class="absolute left-full top-1/2 z-10 ml-2 w-72 -translate-y-1/2 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs text-red-600 shadow-lg dark:border-red-800 dark:bg-neutral-900 dark:text-red-300"
-          >
-            {{ missingSubmitReason }}
-          </div>
-
           <UButton
-            :loading="isSubmitting"
+            :loading="props.isSaving"
             :label="submitButtonLabel"
             icon="i-lucide-check"
-            :color="isSubmitDisabled ? 'neutral' : 'primary'"
-            :class="isSubmitDisabled ? 'opacity-60 cursor-not-allowed' : ''"
+            :color="isSubmitBlocked ? 'neutral' : 'primary'"
+            :class="isSubmitBlocked ? 'opacity-60 cursor-not-allowed' : ''"
+            :disabled="!!props.isSaving"
             @click="handleSubmitClick"
           />
+        </div>
         </div>
       </div>
     </template>

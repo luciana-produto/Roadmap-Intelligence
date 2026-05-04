@@ -40,6 +40,9 @@ public sealed class KpiConfiguration : IEntityTypeConfiguration<Kpi>
         builder.Property(x => x.CurrentValue)
             .HasPrecision(18, 4);
 
+        builder.Property(x => x.ProjectId)
+            .IsRequired(false);
+
         builder.HasIndex(x => x.ProjectId);
         builder.HasIndex(x => new { x.ProjectId, x.Name }).IsUnique();
     }

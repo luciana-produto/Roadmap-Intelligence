@@ -18,7 +18,7 @@ public sealed class DeleteRoadmapProjectCommandHandler(
         if (await projectRepository.HasLinkedDataAsync(request.Id, cancellationToken))
         {
             throw new ValidationException([
-                new ValidationFailure(nameof(request.Id), "Este projeto j\u00e1 est\u00e1 em uso no roadmap e n\u00e3o pode ser removido.")
+                new ValidationFailure(nameof(request.Id), "Este projeto possui épicos ou outros vínculos no roadmap e não pode ser removido.")
             ]);
         }
 

@@ -196,7 +196,7 @@ export interface CapacityFormData {
 
 export interface Kpi {
   id: string
-  projectId: string
+  projectId?: string
   name: string
   type: KpiType
   lever: KpiLever

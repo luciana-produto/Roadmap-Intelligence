@@ -10,7 +10,7 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
     : Repository<RoadmapDemand>(context), IRoadmapDemandRepository
 {
     public async Task<IEnumerable<RoadmapDemand>> GetByProjectAsync(
-        Guid projectId,
+        Guid? projectId,
         int? quarterYear = null,
         int? quarterNumber = null,
         CancellationToken cancellationToken = default)
@@ -18,8 +18,12 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
         var query = context.RoadmapDemands
             .Include(d => d.Products)
             .Include(d => d.ProjectLinks)
-            .AsNoTracking()
-            .Where(d => d.ProjectId == projectId || d.ProjectLinks.Any(link => link.ProjectId == projectId));
+            .AsNoTracking();
+
+        if (projectId.HasValue)
+        {
+            query = query.Where(d => d.ProjectId == projectId.Value || d.ProjectLinks.Any(link => link.ProjectId == projectId.Value));
+        }
 
         if (quarterYear.HasValue)
             query = query.Where(d => d.QuarterYear == quarterYear.Value);
@@ -76,6 +80,13 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
             .Include(d => d.Products)
             .Include(d => d.ProjectLinks)
             .FirstOrDefaultAsync(d => d.Id == id, cancellationToken);
+
+    public async Task<bool> HasChildrenAsync(
+        Guid parentDemandId,
+        CancellationToken cancellationToken = default) =>
+        await context.RoadmapDemands
+            .AsNoTracking()
+            .AnyAsync(demand => demand.ParentDemandId == parentDemandId, cancellationToken);
 
     public async Task<IReadOnlyList<RoadmapDemand>> GetByIdsAsync(
         IEnumerable<Guid> ids,

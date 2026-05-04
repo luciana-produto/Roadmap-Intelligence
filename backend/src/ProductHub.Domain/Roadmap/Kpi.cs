@@ -5,7 +5,7 @@ namespace ProductHub.Domain.Roadmap;
 
 public sealed class Kpi : AggregateRoot, IAuditableEntity
 {
-    public Guid ProjectId { get; private set; }
+    public Guid? ProjectId { get; private set; }
     public string Name { get; private set; } = default!;
     public KpiType Type { get; private set; }
     public KpiLever Lever { get; private set; }
@@ -20,7 +20,7 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
     private Kpi() { }
 
     public static Kpi Create(
-        Guid projectId,
+        Guid? projectId,
         string name,
         KpiType type,
         KpiLever lever,

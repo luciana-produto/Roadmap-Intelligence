@@ -1,28 +1,106 @@
 <script setup lang="ts">
+import type { ApiResponse } from '~/types/api'
 import type { DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
+
+type HierarchySortKey = 'item' | 'status' | 'products' | 'classification' | 'due'
+
+type DisplayEpicGroup = {
+  epic: RoadmapDemand
+  demands: RoadmapDemand[]
+}
+
+type DisplayRoadmapGroup = {
+  roadmap: RoadmapDemand
+  epics: DisplayEpicGroup[]
+}
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
 const route = useRoute()
 const toast = useToast()
+const api = useApi()
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
 
-const { projects, demands, dependencyOptions, customerSuggestions, selectedProjectId, isLoading } = storeToRefs(roadmapStore)
+const { projects, dependencyOptions, customerSuggestions } = storeToRefs(roadmapStore)
 const { kpis: availableKpis } = storeToRefs(kpiStore)
+
+const projectFilterOptions = computed(() =>
+  [...projects.value]
+    .sort((left, right) => right.name.localeCompare(left.name, 'pt-BR'))
+    .map(project => ({ value: project.id, label: project.name }))
+)
 
 const modalOpen = ref(false)
 const editingDemand = ref<RoadmapDemand | null>(null)
 const createItemType = ref<RoadmapItemType | undefined>()
+const defaultParentDemandId = ref<string | undefined>()
+const defaultProjectId = ref<string | undefined>()
+const defaultProjectIds = ref<string[]>([])
 const deleteTarget = ref<RoadmapDemand | null>(null)
 const confirmDeleteOpen = ref(false)
 const collapsedRoadmapIds = ref<string[]>([])
 const collapsedEpicIds = ref<string[]>([])
+const isSavingDemand = ref(false)
+const isHierarchyLoading = ref(false)
+const hierarchyDemands = ref<RoadmapDemand[]>([])
+const selectedProjectIds = ref<string[]>([])
+const hierarchyItemFilter = ref('')
+const hierarchyStatusFilter = ref<string[]>([])
+const hierarchyClassificationFilter = ref<string[]>([])
+const hierarchyProductsFilter = ref<string[]>([])
+const hierarchyDueFilter = ref('')
+const hierarchySort = ref<{ key: HierarchySortKey | null, direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' })
 
-const roadmapItems = computed(() => demands.value.filter(item => item.itemType === 'Roadmap'))
-const epicItems = computed(() => demands.value.filter(item => item.itemType === 'Epic'))
-const demandItems = computed(() => demands.value.filter(item => item.itemType === 'Demand'))
+const allRoadmapItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Roadmap'))
+const allEpicItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Epic'))
+const allDemandItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Demand'))
+const selectedProjectIdSet = computed(() => new Set(selectedProjectIds.value))
+const currentPrimaryProjectId = computed(() => selectedProjectIds.value[0] ?? null)
+
+const epicAncestorIdsFromMatchingDemands = computed(() =>
+  new Set(
+    allDemandItems.value
+      .filter(demand => hasProjectIntersection(demand))
+      .map(demand => demand.epicId)
+      .filter((value): value is string => !!value)
+  )
+)
+
+const roadmapAncestorIdsFromMatchingEpics = computed(() =>
+  new Set(
+    allEpicItems.value
+      .filter(epic => hasProjectIntersection(epic) || epicAncestorIdsFromMatchingDemands.value.has(epic.id))
+      .map(epic => epic.parentDemandId)
+      .filter((value): value is string => !!value)
+  )
+)
+
+const roadmapItems = computed(() => {
+  if (!selectedProjectIdSet.value.size)
+    return allRoadmapItems.value
+
+  return allRoadmapItems.value.filter(item =>
+    hasProjectIntersection(item) || roadmapAncestorIdsFromMatchingEpics.value.has(item.id)
+  )
+})
+
+const visibleRoadmapIds = computed(() => new Set(roadmapItems.value.map(item => item.id)))
+
+const epicItems = computed(() => allEpicItems.value.filter((epic) => {
+  return hasProjectIntersection(epic)
+    || epicAncestorIdsFromMatchingDemands.value.has(epic.id)
+    || (!!epic.parentDemandId && visibleRoadmapIds.value.has(epic.parentDemandId))
+}))
+
+const visibleEpicIds = computed(() => new Set(epicItems.value.map(item => item.id)))
+
+const demandItems = computed(() => allDemandItems.value.filter((demand) => {
+  return hasProjectIntersection(demand)
+    || (!!demand.epicId && visibleEpicIds.value.has(demand.epicId))
+}))
+
 const roadmapGroups = computed(() =>
   roadmapItems.value.map(roadmap => ({
     roadmap,
@@ -41,25 +119,89 @@ const orphanDemands = computed(() =>
   })
 )
 
-const hasCollapsibleRoadmaps = computed(() => roadmapGroups.value.some(group => group.epics.length > 0))
-const hasCollapsibleEpics = computed(() => epicItems.value.some(epic => getDemandsForEpic(epic.id).length > 0))
+const hasCollapsibleRoadmaps = computed(() => displayRoadmapGroups.value.some(group => group.epics.length > 0))
+const hasCollapsibleEpics = computed(() => displayRoadmapGroups.value.some(group => group.epics.some(epic => epic.demands.length > 0)))
 const areAllRoadmapsCollapsed = computed(() =>
-  hasCollapsibleRoadmaps.value && roadmapGroups.value.every(group => !group.epics.length || collapsedRoadmapIds.value.includes(group.roadmap.id))
+  hasCollapsibleRoadmaps.value && displayRoadmapGroups.value.every(group => !group.epics.length || collapsedRoadmapIds.value.includes(group.roadmap.id))
 )
-const areAllEpicsCollapsed = computed(() =>
-  hasCollapsibleEpics.value && epicItems.value.every(epic => !getDemandsForEpic(epic.id).length || collapsedEpicIds.value.includes(epic.id))
-)
+const areAllEpicsCollapsed = computed(() => {
+  const visibleEpics = displayRoadmapGroups.value.flatMap(group => group.epics)
+  return hasCollapsibleEpics.value && visibleEpics.every(epic => !epic.demands.length || collapsedEpicIds.value.includes(epic.epic.id))
+})
 
 const projectNameById = computed(() =>
   new Map(projects.value.map(project => [project.id, project.name] as const))
 )
 const epicById = computed(() =>
-  new Map(epicItems.value.map(item => [item.id, item] as const))
+  new Map(allEpicItems.value.map(item => [item.id, item] as const))
 )
+
+const projectFilterLabel = computed(() => {
+  if (!selectedProjectIds.value.length)
+    return 'Todos os projetos'
+
+  if (selectedProjectIds.value.length === 1)
+    return projectNameById.value.get(selectedProjectIds.value[0]!) ?? '1 projeto'
+
+  return `${selectedProjectIds.value.length} projetos`
+})
+
+const classificationFilterOptions = computed(() =>
+  Object.entries(classificationLabels).map(([value, label]) => ({ value, label }))
+)
+
+const statusFilterOptions = computed(() =>
+  Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+)
+
+const productFilterOptions = computed(() => {
+  const productsMap = new Map<string, string>()
+
+  hierarchyDemands.value.forEach((item) => {
+    getProductEntries(item).forEach((product) => {
+      if (!productsMap.has(product.value))
+        productsMap.set(product.value, product.label)
+    })
+  })
+
+  return Array.from(productsMap.entries())
+    .map(([value, label]) => ({ value, label }))
+    .sort((left, right) => left.label.localeCompare(right.label, 'pt-BR'))
+})
+
+const hierarchyStatusFilterLabel = computed(() => {
+  if (!hierarchyStatusFilter.value.length)
+    return 'Todos'
+
+  if (hierarchyStatusFilter.value.length === 1)
+    return statusLabels[hierarchyStatusFilter.value[0] as DemandStatus] ?? '1 status'
+
+  return `${hierarchyStatusFilter.value.length} status`
+})
+
+const hierarchyClassificationFilterLabel = computed(() => {
+  if (!hierarchyClassificationFilter.value.length)
+    return 'Todas'
+
+  if (hierarchyClassificationFilter.value.length === 1)
+    return classificationLabels[hierarchyClassificationFilter.value[0] as RoadmapDemand['classification']] ?? '1 classificação'
+
+  return `${hierarchyClassificationFilter.value.length} classificações`
+})
+
+const hierarchyProductsFilterLabel = computed(() => {
+  if (!hierarchyProductsFilter.value.length)
+    return 'Todos'
+
+  if (hierarchyProductsFilter.value.length === 1)
+    return productFilterOptions.value.find(option => option.value === hierarchyProductsFilter.value[0])?.label ?? '1 produto'
+
+  return `${hierarchyProductsFilter.value.length} produtos`
+})
 
 const statusLabels: Record<DemandStatus, string> = {
   Backlog: 'Backlog',
-  InProgress: 'Em andamento',
+  InProgress: 'Doing',
   Done: 'Concluído',
   Deprioritized: 'Despriorizado'
 }
@@ -172,14 +314,84 @@ function getDisplayIssueLinks(item: Pick<RoadmapDemand, 'issueLinks' | 'jiraIssu
   return []
 }
 
+function isOutsideSelectedProject(item: Pick<RoadmapDemand, 'projectId' | 'projectIds'>) {
+  if (!selectedProjectIdSet.value.size)
+    return false
+
+  const ownerProjectId = item.projectId ?? item.projectIds?.[0]
+
+  return !!ownerProjectId && !selectedProjectIdSet.value.has(ownerProjectId)
+}
+
+function getCrossProjectWatermarkClass(item: Pick<RoadmapDemand, 'projectId' | 'projectIds'>) {
+  return isOutsideSelectedProject(item)
+    ? 'opacity-55 saturate-75'
+    : ''
+}
+
 function getProjectNames(item: Pick<RoadmapDemand, 'projectId' | 'projectIds'>) {
-  const ids = item.projectId
-    ? [item.projectId]
-    : (item.projectIds ?? [])
+  const ids = getItemProjectIds(item)
 
   return ids
     .map(id => projectNameById.value.get(id) ?? '')
     .filter(Boolean)
+}
+
+function getProductEntries(item: Pick<RoadmapDemand, 'products'>) {
+  const productsMap = new Map<string, string>()
+
+  for (const product of item.products ?? []) {
+    if (!product.productId || !product.name)
+      continue
+
+    if (!productsMap.has(product.productId))
+      productsMap.set(product.productId, product.name)
+  }
+
+  return Array.from(productsMap.entries()).map(([value, label]) => ({ value, label }))
+}
+
+function getProductNames(item: Pick<RoadmapDemand, 'products'>) {
+  return getProductEntries(item).map(product => product.label)
+}
+
+function getProductNamesLine(names: string[]) {
+  return names.join(' · ')
+}
+
+function getRoadmapGroupProductNames(epics: RoadmapDemand[]) {
+  return getRoadmapGroupProductEntries(epics).map(product => product.label)
+}
+
+function getRoadmapGroupProductEntries(epics: RoadmapDemand[]) {
+  const productsMap = new Map<string, string>()
+
+  epics.flatMap(epic => [
+    ...getProductEntries(epic),
+    ...getDemandsForEpic(epic.id).flatMap(demand => getProductEntries(demand))
+  ]).forEach((product) => {
+    if (!productsMap.has(product.value))
+      productsMap.set(product.value, product.label)
+  })
+
+  return Array.from(productsMap.entries()).map(([value, label]) => ({ value, label }))
+}
+
+function getEpicDisplayProductNames(epic: RoadmapDemand) {
+  return getEpicDisplayProductEntries(epic).map(product => product.label)
+}
+
+function getEpicDisplayProductEntries(epic: RoadmapDemand) {
+  const productsMap = new Map<string, string>()
+  const epicProducts = getProductEntries(epic)
+  const demandProducts = getDemandsForEpic(epic.id).flatMap(demand => getProductEntries(demand))
+
+  ;[...epicProducts, ...demandProducts].forEach((product) => {
+    if (!productsMap.has(product.value))
+      productsMap.set(product.value, product.label)
+  })
+
+  return Array.from(productsMap.entries()).map(([value, label]) => ({ value, label }))
 }
 
 function getKpiTargetEpic(item: RoadmapDemand) {
@@ -238,6 +450,16 @@ function getKpiSecondaryLabel(item: RoadmapDemand) {
   return getNoKpiClassificationLabel(targetEpic.noKpiClassification)
 }
 
+function getDisplayedClassification(item: RoadmapDemand) {
+  if (item.itemType !== 'Demand')
+    return item.classification
+
+  if (!item.epicId)
+    return item.classification
+
+  return epicById.value.get(item.epicId)?.classification ?? item.classification
+}
+
 function getDemandsForEpic(epicId: string) {
   return demandItems.value
     .filter(demand => demand.epicId === epicId)
@@ -251,6 +473,250 @@ function getDemandsForEpic(epicId: string) {
       return left.sortOrder - right.sortOrder
     })
 }
+
+function getDisplayedHours(item: RoadmapDemand) {
+  const values = (item.itemType === 'Roadmap'
+    ? demandItems.value.filter(demand => demand.roadmapId === item.id)
+    : item.itemType === 'Epic'
+      ? getDemandsForEpic(item.id)
+      : [item])
+    .map(entry => entry.hours)
+    .filter((value): value is number => typeof value === 'number')
+
+  if (!values.length)
+    return null
+
+  return values.reduce((total, value) => total + value, 0)
+}
+
+function normalizeSearchText(value?: string | null) {
+  return (value ?? '').trim().toLowerCase()
+}
+
+function hasPlannedQuarter(item: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber'>) {
+  return item.quarterYear > 0 && item.quarterNumber > 0
+}
+
+function getDemandDueSearchText(demand: RoadmapDemand) {
+  return [hasPlannedQuarter(demand) ? demand.quarterLabel : '', formatDate(getDisplayedConclusionDate(demand))]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+}
+
+function getDisplayedConclusionDate(item: RoadmapDemand) {
+  if (item.status === 'Done' && item.deliveryDate)
+    return item.deliveryDate
+
+  return getDisplayedPromisedDate(item)
+}
+
+function matchesTextFilter(haystackParts: Array<string | undefined>, query: string) {
+  if (!query)
+    return true
+
+  return haystackParts.some(part => normalizeSearchText(part).includes(query))
+}
+
+function matchesHierarchyFilters(
+  item: RoadmapDemand,
+  options?: { products?: string[], classification?: string, dueText?: string }
+) {
+  const itemQuery = normalizeSearchText(hierarchyItemFilter.value)
+  const dueQuery = normalizeSearchText(hierarchyDueFilter.value)
+
+  if (hierarchyStatusFilter.value.length && !hierarchyStatusFilter.value.includes(item.status))
+    return false
+
+  if (hierarchyClassificationFilter.value.length && item.itemType !== 'Roadmap') {
+    const classification = item.itemType === 'Demand'
+      ? getDisplayedClassification(item)
+      : item.classification
+    if (!hierarchyClassificationFilter.value.includes(classification))
+      return false
+  }
+
+  if (hierarchyClassificationFilter.value.length && item.itemType === 'Roadmap')
+    return false
+
+  if (!matchesTextFilter([
+    item.title,
+    item.description,
+    ...getProjectNames(item),
+    ...getDisplayIssueLinks(item).map(issue => issue.key)
+  ], itemQuery))
+    return false
+
+  if (hierarchyProductsFilter.value.length && !hierarchyProductsFilter.value.some(productId => options?.products?.includes(productId)))
+    return false
+
+  if (!matchesTextFilter([options?.dueText], dueQuery))
+    return false
+
+  return true
+}
+
+function compareText(left: string, right: string) {
+  return left.localeCompare(right, 'pt-BR')
+}
+
+function compareDates(left?: string, right?: string) {
+  return (left ?? '').localeCompare(right ?? '')
+}
+
+function applySortDirection(result: number) {
+  return hierarchySort.value.direction === 'asc' ? result : -result
+}
+
+function sortItems(items: RoadmapDemand[], level: 'roadmap' | 'epic' | 'demand') {
+  if (!hierarchySort.value.key) {
+    if (level === 'demand') {
+      return [...items].sort((left, right) => {
+        if (left.quarterYear !== right.quarterYear)
+          return left.quarterYear - right.quarterYear
+
+        if (left.quarterNumber !== right.quarterNumber)
+          return left.quarterNumber - right.quarterNumber
+
+        return left.sortOrder - right.sortOrder
+      })
+    }
+
+    return [...items].sort((left, right) => left.sortOrder - right.sortOrder)
+  }
+
+  return [...items].sort((left, right) => {
+    switch (hierarchySort.value.key) {
+      case 'item':
+        return applySortDirection(compareText(left.title, right.title))
+      case 'status':
+        return applySortDirection(compareText(statusLabels[left.status], statusLabels[right.status]))
+      case 'products':
+        return applySortDirection(compareText(
+          getProductNamesLine(left.itemType === 'Roadmap'
+            ? getRoadmapGroupProductNames(roadmapGroups.value.find(group => group.roadmap.id === left.id)?.epics ?? [])
+            : left.itemType === 'Epic'
+              ? getEpicDisplayProductNames(left)
+              : getProductNames(left)),
+          getProductNamesLine(right.itemType === 'Roadmap'
+            ? getRoadmapGroupProductNames(roadmapGroups.value.find(group => group.roadmap.id === right.id)?.epics ?? [])
+            : right.itemType === 'Epic'
+              ? getEpicDisplayProductNames(right)
+              : getProductNames(right))
+        ))
+      case 'classification': {
+        const leftClassification = left.itemType === 'Demand' ? classificationLabels[getDisplayedClassification(left)] : classificationLabels[left.classification] ?? ''
+        const rightClassification = right.itemType === 'Demand' ? classificationLabels[getDisplayedClassification(right)] : classificationLabels[right.classification] ?? ''
+        return applySortDirection(compareText(leftClassification, rightClassification))
+      }
+      case 'due': {
+        const leftDue = left.itemType === 'Demand' ? getDemandDueSearchText(left) : formatDate(getDisplayedConclusionDate(left))
+        const rightDue = right.itemType === 'Demand' ? getDemandDueSearchText(right) : formatDate(getDisplayedConclusionDate(right))
+        return applySortDirection(compareDates(leftDue, rightDue))
+      }
+      default:
+        return 0
+    }
+  })
+}
+
+function toggleHierarchySort(key: HierarchySortKey) {
+  if (hierarchySort.value.key !== key) {
+    hierarchySort.value = { key, direction: 'asc' }
+    return
+  }
+
+  if (hierarchySort.value.direction === 'asc') {
+    hierarchySort.value = { key, direction: 'desc' }
+    return
+  }
+
+  hierarchySort.value = { key: null, direction: 'asc' }
+}
+
+function getHierarchySortIcon(key: HierarchySortKey) {
+  if (hierarchySort.value.key !== key)
+    return 'i-lucide-arrow-up-down'
+
+  return hierarchySort.value.direction === 'asc'
+    ? 'i-lucide-arrow-up'
+    : 'i-lucide-arrow-down'
+}
+
+const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
+  return sortItems(roadmapItems.value, 'roadmap')
+    .map((roadmap) => {
+      const sourceGroup = roadmapGroups.value.find(group => group.roadmap.id === roadmap.id)
+      const sourceEpics = sourceGroup?.epics ?? []
+      const roadmapProjectMatch = hasProjectIntersection(roadmap)
+      const hasActiveProductFilter = hierarchyProductsFilter.value.length > 0
+      const roadmapMatches = matchesHierarchyFilters(roadmap, {
+        products: getRoadmapGroupProductEntries(sourceEpics).map(product => product.value),
+        dueText: formatDate(getDisplayedConclusionDate(roadmap))
+      })
+
+      const epics = sortItems(sourceEpics, 'epic')
+        .map((epic) => {
+          const sourceDemands = getDemandsForEpic(epic.id)
+          const epicProjectMatch = hasProjectIntersection(epic)
+          const projectScopedDemands = roadmapProjectMatch || epicProjectMatch
+            ? sourceDemands
+            : sourceDemands.filter(demand => hasProjectIntersection(demand))
+
+          if (!roadmapProjectMatch && !epicProjectMatch && projectScopedDemands.length === 0)
+            return null
+
+          const epicMatches = matchesHierarchyFilters(epic, {
+            products: getEpicDisplayProductEntries(epic).map(product => product.value),
+            classification: classificationLabels[epic.classification],
+            dueText: formatDate(getDisplayedConclusionDate(epic))
+          })
+
+          const matchingDemands = sortItems(projectScopedDemands, 'demand')
+            .filter(demand => matchesHierarchyFilters(demand, {
+              products: getProductEntries(demand).map(product => product.value),
+              classification: classificationLabels[getDisplayedClassification(demand)],
+              dueText: getDemandDueSearchText(demand)
+            }))
+
+          if (hasActiveProductFilter && !epicMatches && matchingDemands.length === 0)
+            return null
+
+          if (!roadmapMatches && !epicMatches && matchingDemands.length === 0)
+            return null
+
+          return {
+            epic,
+            demands: hasActiveProductFilter
+              ? matchingDemands
+              : (roadmapMatches || epicMatches ? sortItems(projectScopedDemands, 'demand') : matchingDemands)
+          }
+        })
+        .filter((entry): entry is DisplayEpicGroup => !!entry)
+
+      if ((!roadmapMatches && epics.length === 0) || (hasActiveProductFilter && epics.length === 0))
+        return null
+
+      return { roadmap, epics }
+    })
+    .filter((group): group is DisplayRoadmapGroup => !!group)
+})
+
+const displayOrphanEpics = computed(() =>
+  sortItems(orphanEpics.value, 'epic').filter(epic => matchesHierarchyFilters(epic, {
+    products: getEpicDisplayProductEntries(epic).map(product => product.value),
+    classification: classificationLabels[epic.classification],
+    dueText: formatDate(getDisplayedConclusionDate(epic))
+  }))
+)
+
+const displayOrphanDemands = computed(() =>
+  sortItems(orphanDemands.value, 'demand').filter(demand => matchesHierarchyFilters(demand, {
+    products: getProductEntries(demand).map(product => product.value),
+    classification: classificationLabels[getDisplayedClassification(demand)],
+    dueText: getDemandDueSearchText(demand)
+  }))
+)
 
 function isRoadmapCollapsed(roadmapId: string) {
   return collapsedRoadmapIds.value.includes(roadmapId)
@@ -279,7 +745,7 @@ function toggleEpicCollapse(epicId: string) {
 }
 
 function collapseAllRoadmaps() {
-  collapsedRoadmapIds.value = roadmapGroups.value
+  collapsedRoadmapIds.value = displayRoadmapGroups.value
     .filter(group => group.epics.length > 0)
     .map(group => group.roadmap.id)
 }
@@ -289,66 +755,187 @@ function expandAllRoadmaps() {
 }
 
 function collapseAllEpics() {
-  collapsedEpicIds.value = epicItems.value
-    .filter(epic => getDemandsForEpic(epic.id).length > 0)
-    .map(epic => epic.id)
+  collapsedEpicIds.value = displayRoadmapGroups.value
+    .flatMap(group => group.epics)
+    .filter(group => group.demands.length > 0)
+    .map(group => group.epic.id)
 }
 
 function expandAllEpics() {
   collapsedEpicIds.value = []
 }
 
-watch(roadmapGroups, (groups) => {
+watch(displayRoadmapGroups, (groups) => {
   const validIds = new Set(groups.map(group => group.roadmap.id))
   collapsedRoadmapIds.value = collapsedRoadmapIds.value.filter(id => validIds.has(id))
 }, { immediate: true })
 
-watch(epicItems, (items) => {
-  const validIds = new Set(items.map(item => item.id))
+watch(displayRoadmapGroups, (groups) => {
+  const validIds = new Set(groups.flatMap(group => group.epics.map(item => item.epic.id)))
   collapsedEpicIds.value = collapsedEpicIds.value.filter(id => validIds.has(id))
 }, { immediate: true })
 
 async function loadPageData() {
-  await Promise.all([
-    roadmapStore.fetchDemands(),
-    roadmapStore.fetchDependencyOptions(),
-    roadmapStore.fetchCustomerSuggestions(),
-    kpiStore.fetchKpis()
-  ])
+  isHierarchyLoading.value = true
+  try {
+    const response = await api.get<ApiResponse<RoadmapDemand[]>>('/api/roadmap/demands')
+    hierarchyDemands.value = response.data ?? []
+
+    await Promise.all([
+      roadmapStore.fetchDependencyOptions(),
+      roadmapStore.fetchCustomerSuggestions(),
+      kpiStore.fetchKpis()
+    ])
+  }
+  finally {
+    isHierarchyLoading.value = false
+  }
 }
 
-function openCreateModal(itemType?: RoadmapItemType) {
+function getItemProjectIds(item?: Pick<RoadmapDemand, 'projectId' | 'projectIds'> | null) {
+  if (!item)
+    return []
+
+  return [...new Set([
+    ...(item.projectId ? [item.projectId] : []),
+    ...(item.projectIds ?? [])
+  ])]
+}
+
+function hasProjectIntersection(item?: Pick<RoadmapDemand, 'projectId' | 'projectIds'> | null) {
+  if (!selectedProjectIdSet.value.size)
+    return true
+
+  return getItemProjectIds(item).some(projectId => selectedProjectIdSet.value.has(projectId))
+}
+
+function pickDefaultProjectId(projectIds: string[]) {
+  if (currentPrimaryProjectId.value && projectIds.includes(currentPrimaryProjectId.value))
+    return currentPrimaryProjectId.value
+
+  return projectIds[0]
+}
+
+function toggleProjectFilter(projectId: string) {
+  if (selectedProjectIds.value.includes(projectId)) {
+    selectedProjectIds.value = selectedProjectIds.value.filter(id => id !== projectId)
+    return
+  }
+
+  selectedProjectIds.value = [...selectedProjectIds.value, projectId]
+}
+
+function clearProjectFilter() {
+  selectedProjectIds.value = []
+}
+
+function toggleHierarchyStatusFilter(status: string) {
+  if (hierarchyStatusFilter.value.includes(status)) {
+    hierarchyStatusFilter.value = hierarchyStatusFilter.value.filter(value => value !== status)
+    return
+  }
+
+  hierarchyStatusFilter.value = [...hierarchyStatusFilter.value, status]
+}
+
+function clearHierarchyStatusFilter() {
+  hierarchyStatusFilter.value = []
+}
+
+function toggleHierarchyProductsFilter(productId: string) {
+  if (hierarchyProductsFilter.value.includes(productId)) {
+    hierarchyProductsFilter.value = hierarchyProductsFilter.value.filter(value => value !== productId)
+    return
+  }
+
+  hierarchyProductsFilter.value = [...hierarchyProductsFilter.value, productId]
+}
+
+function clearHierarchyProductsFilter() {
+  hierarchyProductsFilter.value = []
+}
+
+function toggleHierarchyClassificationFilter(classification: string) {
+  if (hierarchyClassificationFilter.value.includes(classification)) {
+    hierarchyClassificationFilter.value = hierarchyClassificationFilter.value.filter(value => value !== classification)
+    return
+  }
+
+  hierarchyClassificationFilter.value = [...hierarchyClassificationFilter.value, classification]
+}
+
+function clearHierarchyClassificationFilter() {
+  hierarchyClassificationFilter.value = []
+}
+
+function openCreateModal(
+  itemType?: RoadmapItemType,
+  parentDemandId?: string,
+  defaults?: { projectId?: string, projectIds?: string[] }
+) {
   createItemType.value = itemType
+  defaultParentDemandId.value = parentDemandId
+  defaultProjectId.value = defaults?.projectId
+  defaultProjectIds.value = defaults?.projectIds ?? []
   editingDemand.value = null
   modalOpen.value = true
 }
 
 function openEditModal(item: RoadmapDemand) {
   editingDemand.value = item
+  defaultParentDemandId.value = undefined
+  defaultProjectId.value = undefined
+  defaultProjectIds.value = []
   modalOpen.value = true
 }
 
 function promptDelete(item: RoadmapDemand) {
+  if (item.itemType === 'Roadmap' && hierarchyDemands.value.some(demand => demand.parentDemandId === item.id)) {
+    toast.add({
+      title: 'Exclusão não permitida',
+      description: 'Este roadmap possui épicos vinculados e não pode ser removido.',
+      color: 'warning'
+    })
+    return
+  }
+
+  if (item.itemType === 'Epic' && hierarchyDemands.value.some(demand => demand.parentDemandId === item.id)) {
+    toast.add({
+      title: 'Exclusão não permitida',
+      description: 'Este épico possui demandas vinculadas e não pode ser removido.',
+      color: 'warning'
+    })
+    return
+  }
+
   deleteTarget.value = item
   confirmDeleteOpen.value = true
 }
 
 async function handleSubmit(data: DemandFormData) {
+  if (isSavingDemand.value)
+    return
+
   try {
+    isSavingDemand.value = true
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
+      await loadPageData()
       toast.add({ title: 'Item atualizado', color: 'success' })
     }
     else {
       await roadmapStore.createDemand(data)
+      await loadPageData()
       toast.add({ title: 'Item criado', color: 'success' })
     }
 
     modalOpen.value = false
-    await roadmapStore.fetchDemands()
   }
   catch {
     // handled by useApi
+  }
+  finally {
+    isSavingDemand.value = false
   }
 }
 
@@ -360,8 +947,9 @@ function openKpiWorkspace(item: RoadmapDemand) {
   navigateTo({
     path: '/roadmap',
     query: {
-      projectId: selectedProjectId.value ?? targetEpic.projectId,
-      kpiDemandId: targetEpic.id
+      projectId: currentPrimaryProjectId.value ?? targetEpic.projectId,
+      kpiDemandId: targetEpic.id,
+      view: 'hierarchy'
     }
   })
 }
@@ -372,10 +960,10 @@ async function confirmDelete() {
 
   try {
     await roadmapStore.deleteDemand(deleteTarget.value.id)
+    await loadPageData()
     toast.add({ title: 'Item removido', color: 'success' })
     confirmDeleteOpen.value = false
     deleteTarget.value = null
-    await roadmapStore.fetchDemands()
   }
   catch {
     // handled by useApi
@@ -384,21 +972,19 @@ async function confirmDelete() {
 
 await roadmapStore.fetchProjects()
 
-const queryProjectId = typeof route.query.projectId === 'string'
-  ? route.query.projectId
-  : null
+const initialProjectIds = [
+  ...(typeof route.query.projectIds === 'string'
+    ? route.query.projectIds.split(',')
+    : []),
+  ...(typeof route.query.projectId === 'string'
+    ? [route.query.projectId]
+    : [])
+]
 
-if (queryProjectId && projects.value.some(project => project.id === queryProjectId))
-  selectedProjectId.value = queryProjectId
+selectedProjectIds.value = [...new Set(initialProjectIds)]
+  .filter(projectId => projects.value.some(project => project.id === projectId))
 
 await loadPageData()
-
-watch(selectedProjectId, async (projectId) => {
-  if (!projectId)
-    return
-
-  await loadPageData()
-})
 </script>
 
 <template>
@@ -419,7 +1005,7 @@ watch(selectedProjectId, async (projectId) => {
             color="neutral"
             variant="ghost"
             icon="i-lucide-layout-list"
-            @click="navigateTo({ path: '/roadmap', query: selectedProjectId ? { projectId: selectedProjectId } : undefined })"
+            @click="navigateTo({ path: '/roadmap', query: currentPrimaryProjectId ? { projectId: currentPrimaryProjectId } : undefined })"
           >
             Planejamento
           </UButton>
@@ -441,14 +1027,92 @@ watch(selectedProjectId, async (projectId) => {
 
     <UCard :ui="{ body: 'p-3 sm:p-3' }">
       <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
-        <UFormField label="Projeto" class="w-full lg:max-w-sm">
-          <USelect
-            v-model="selectedProjectId"
-            :items="projects.map(project => ({ value: project.id, label: project.name }))"
-            placeholder="Selecione um projeto"
-            class="w-full"
-          />
-        </UFormField>
+        <div class="flex w-full flex-col gap-2 lg:flex-1 lg:flex-row lg:items-end">
+          <UFormField label="Projeto" class="w-full lg:max-w-sm">
+            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+              <UButton
+                type="button"
+                variant="outline"
+                color="neutral"
+                trailing-icon="i-lucide-chevron-down"
+                class="w-full justify-between"
+              >
+                <span class="truncate">{{ projectFilterLabel }}</span>
+              </UButton>
+
+              <template #content>
+                <div class="min-w-72 space-y-1 p-1">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                    :class="selectedProjectIds.length === 0 ? 'text-primary' : 'text-highlighted'"
+                    @click="clearProjectFilter"
+                  >
+                    <UIcon v-if="selectedProjectIds.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                    <span v-else class="inline-block h-4 w-4 shrink-0" />
+                    Todos os projetos
+                  </button>
+
+                  <button
+                    v-for="project in projectFilterOptions"
+                    :key="project.value"
+                    type="button"
+                    class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                    :class="selectedProjectIds.includes(project.value) ? 'text-primary' : 'text-highlighted'"
+                    @click="toggleProjectFilter(project.value)"
+                  >
+                    <UIcon v-if="selectedProjectIds.includes(project.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                    <span v-else class="inline-block h-4 w-4 shrink-0" />
+                    {{ project.label }}
+                  </button>
+                </div>
+              </template>
+            </UPopover>
+          </UFormField>
+
+          <div class="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:whitespace-nowrap lg:pb-0.5">
+            <UButton
+              size="xs"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-chevrons-up-down"
+              :disabled="!hasCollapsibleRoadmaps"
+              @click="areAllRoadmapsCollapsed ? expandAllRoadmaps() : collapseAllRoadmaps()"
+            >
+              {{ areAllRoadmapsCollapsed ? 'Expandir roadmaps' : 'Recolher roadmaps' }}
+            </UButton>
+            <UButton
+              size="xs"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-chevrons-up-down"
+              :disabled="!hasCollapsibleEpics"
+              @click="areAllEpicsCollapsed ? expandAllEpics() : collapseAllEpics()"
+            >
+              {{ areAllEpicsCollapsed ? 'Expandir épicos' : 'Recolher épicos' }}
+            </UButton>
+            <UButton
+              size="xs"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-fold-vertical"
+              :disabled="!hasCollapsibleRoadmaps && !hasCollapsibleEpics"
+              @click="collapseAllRoadmaps(); collapseAllEpics()"
+            >
+              Recolher tudo
+            </UButton>
+            <UButton
+              size="xs"
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-unfold-vertical"
+              :disabled="(!collapsedRoadmapIds.length && !collapsedEpicIds.length)"
+              @click="expandAllRoadmaps(); expandAllEpics()"
+            >
+              Expandir tudo
+            </UButton>
+          </div>
+        </div>
 
         <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
           <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ roadmapItems.length }} roadmaps</span>
@@ -456,71 +1120,145 @@ watch(selectedProjectId, async (projectId) => {
           <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ demandItems.length }} demandas</span>
         </div>
       </div>
-
-      <div class="mt-2.5 flex flex-wrap items-center gap-1.5 border-t border-default pt-2.5">
-        <span class="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">Exibição</span>
-        <UButton
-          size="xs"
-          color="neutral"
-          variant="outline"
-          icon="i-lucide-chevrons-up-down"
-          :disabled="!hasCollapsibleRoadmaps"
-          @click="areAllRoadmapsCollapsed ? expandAllRoadmaps() : collapseAllRoadmaps()"
-        >
-          {{ areAllRoadmapsCollapsed ? 'Expandir roadmaps' : 'Recolher roadmaps' }}
-        </UButton>
-        <UButton
-          size="xs"
-          color="neutral"
-          variant="outline"
-          icon="i-lucide-chevrons-up-down"
-          :disabled="!hasCollapsibleEpics"
-          @click="areAllEpicsCollapsed ? expandAllEpics() : collapseAllEpics()"
-        >
-          {{ areAllEpicsCollapsed ? 'Expandir épicos' : 'Recolher épicos' }}
-        </UButton>
-        <UButton
-          size="xs"
-          color="neutral"
-          variant="ghost"
-          icon="i-lucide-unfold-vertical"
-          :disabled="(!collapsedRoadmapIds.length && !collapsedEpicIds.length)"
-          @click="expandAllRoadmaps(); expandAllEpics()"
-        >
-          Expandir tudo
-        </UButton>
-      </div>
     </UCard>
 
-    <div v-if="isLoading" class="flex items-center justify-center py-16">
+    <div v-if="isHierarchyLoading" class="flex items-center justify-center py-16">
       <UIcon name="i-lucide-loader-circle" class="h-6 w-6 animate-spin text-primary" />
     </div>
 
     <template v-else>
-      <div v-if="!roadmapGroups.length && !orphanEpics.length && !orphanDemands.length" class="rounded-2xl border border-dashed border-default bg-elevated/30 px-5 py-12 text-center text-sm text-muted">
+      <div v-if="!roadmapItems.length && !epicItems.length && !demandItems.length" class="rounded-2xl border border-dashed border-default bg-elevated/30 px-5 py-12 text-center text-sm text-muted">
         Nenhum item encontrado para o projeto selecionado.
       </div>
 
       <div v-else class="overflow-hidden rounded-2xl border border-default bg-default shadow-sm">
         <div class="overflow-x-auto">
-          <table class="min-w-[1120px] w-full border-separate border-spacing-0 text-[13px]">
+          <table class="min-w-[1080px] w-full table-fixed border-separate border-spacing-0 text-[13px]">
             <thead>
               <tr class="bg-elevated/80 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">Item</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">Status</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">Projetos</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">Classificação</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">Issue</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">Conclusão Prev.</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">KPI</th>
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 text-right bg-elevated/95">Ações</th>
+                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">
+                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('item')">
+                    <span>Item</span>
+                    <UIcon :name="getHierarchySortIcon('item')" class="h-3.5 w-3.5" />
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 w-[120px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('status')">
+                    <span>Status</span>
+                    <UIcon :name="getHierarchySortIcon('status')" class="h-3.5 w-3.5" />
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 w-[210px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('products')">
+                    <span>Produtos</span>
+                    <UIcon :name="getHierarchySortIcon('products')" class="h-3.5 w-3.5" />
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 w-[86px] border-b border-default px-3 py-2 bg-elevated/95">Horas</th>
+                <th class="sticky top-0 z-10 w-[150px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('classification')">
+                    <span>Classificação</span>
+                    <UIcon :name="getHierarchySortIcon('classification')" class="h-3.5 w-3.5" />
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 w-[130px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('due')">
+                    <span>Conclusão</span>
+                    <UIcon :name="getHierarchySortIcon('due')" class="h-3.5 w-3.5" />
+                  </button>
+                </th>
+                <th class="sticky top-0 z-10 w-[96px] border-b border-default px-2 py-2 bg-elevated/95">KPI</th>
+                <th class="sticky top-0 z-10 w-[132px] border-b border-default px-3 py-2 text-right bg-elevated/95">Ações</th>
+              </tr>
+              <tr class="bg-elevated/60 text-left text-[11px] text-muted">
+                <th class="sticky top-[37px] z-10 border-b border-default px-3 py-2 bg-elevated/95">
+                  <input v-model="hierarchyItemFilter" type="text" placeholder="Filtrar..." class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
+                </th>
+                <th class="sticky top-[37px] z-10 w-[120px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
+                      <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyStatusFilterLabel }}</span>
+                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                    <template #content>
+                      <div class="min-w-44 space-y-1 p-1">
+                        <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyStatusFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyStatusFilter">
+                          <UIcon v-if="hierarchyStatusFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          Todos
+                        </button>
+                        <button v-for="status in statusFilterOptions" :key="status.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyStatusFilter.includes(status.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyStatusFilter(status.value)">
+                          <UIcon v-if="hierarchyStatusFilter.includes(status.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ status.label }}
+                        </button>
+                      </div>
+                    </template>
+                  </UPopover>
+                </th>
+                <th class="sticky top-[37px] z-10 w-[210px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
+                      <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyProductsFilterLabel }}</span>
+                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                    <template #content>
+                      <div class="min-w-52 space-y-1 p-1">
+                        <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProductsFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyProductsFilter">
+                          <UIcon v-if="hierarchyProductsFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          Todos
+                        </button>
+                        <button v-for="product in productFilterOptions" :key="product.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProductsFilter.includes(product.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyProductsFilter(product.value)">
+                          <UIcon v-if="hierarchyProductsFilter.includes(product.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ product.label }}
+                        </button>
+                      </div>
+                    </template>
+                  </UPopover>
+                </th>
+                <th class="sticky top-[37px] z-10 w-[86px] border-b border-default px-3 py-2 bg-elevated/95" />
+                <th class="sticky top-[37px] z-10 w-[150px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
+                      <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyClassificationFilterLabel }}</span>
+                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                    <template #content>
+                      <div class="min-w-52 space-y-1 p-1">
+                        <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyClassificationFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyClassificationFilter">
+                          <UIcon v-if="hierarchyClassificationFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          Todas
+                        </button>
+                        <button v-for="classification in classificationFilterOptions" :key="classification.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyClassificationFilter.includes(classification.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyClassificationFilter(classification.value)">
+                          <UIcon v-if="hierarchyClassificationFilter.includes(classification.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ classification.label }}
+                        </button>
+                      </div>
+                    </template>
+                  </UPopover>
+                </th>
+                <th class="sticky top-[37px] z-10 w-[130px] border-b border-default px-3 py-2 bg-elevated/95">
+                  <input v-model="hierarchyDueFilter" type="text" placeholder="Quarter/Data" class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
+                </th>
+                <th class="sticky top-[37px] z-10 w-[96px] border-b border-default px-2 py-2 bg-elevated/95" />
+                <th class="sticky top-[37px] z-10 w-[132px] border-b border-default px-3 py-2 bg-elevated/95" />
               </tr>
             </thead>
 
             <tbody>
-              <template v-for="group in roadmapGroups" :key="group.roadmap.id">
+              <tr v-if="!displayRoadmapGroups.length && !displayOrphanEpics.length && !displayOrphanDemands.length">
+                <td colspan="8" class="px-5 py-12 text-center text-sm text-muted">
+                  Nenhum item encontrado para os filtros aplicados.
+                </td>
+              </tr>
+
+              <template v-for="group in displayRoadmapGroups" :key="group.roadmap.id">
                 <tr class="border-b border-default bg-default hover:bg-elevated/30 transition-colors">
-                  <td class="border-b border-default px-3 py-2 align-top">
+                  <td class="w-[240px] border-b border-default px-3 py-2 align-top">
                     <div class="flex items-start gap-1.5">
                       <button
                         type="button"
@@ -534,7 +1272,7 @@ watch(selectedProjectId, async (projectId) => {
                         />
                       </button>
 
-                      <div class="min-w-0 flex-1">
+                      <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(group.roadmap)">
                         <div class="flex flex-wrap items-center gap-1.5">
                           <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
                             Roadmap
@@ -562,21 +1300,16 @@ watch(selectedProjectId, async (projectId) => {
                     </span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top">
-                    <div class="flex flex-wrap gap-1.5">
-                      <span
-                        v-for="projectName in getProjectNames(group.roadmap)"
-                        :key="projectName"
-                        class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted"
-                      >
-                        {{ projectName }}
-                      </span>
-                      <span v-if="!getProjectNames(group.roadmap).length" class="text-xs text-muted">—</span>
-                    </div>
+                    <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
+                      <p v-if="getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)))">
+                      {{ getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic))) }}
+                    </p>
+                    <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top">
-                    <span class="text-xs text-muted">—</span>
+                  <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                    <span v-if="getDisplayedHours(group.roadmap) !== null">{{ getDisplayedHours(group.roadmap) }}h</span>
+                    <span v-else class="text-xs text-muted">—</span>
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top">
@@ -584,25 +1317,19 @@ watch(selectedProjectId, async (projectId) => {
                   </td>
 
                   <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                    {{ formatDate(getDisplayedPromisedDate(group.roadmap)) }}
+                    {{ formatDate(getDisplayedConclusionDate(group.roadmap)) }}
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top">
-                    <div class="flex min-w-0 flex-col items-start gap-1">
-                      <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(group.roadmap).tone" :title="getKpiSummary(group.roadmap).actionLabel">
-                        {{ getKpiSummary(group.roadmap).label }}
-                      </span>
-                      <span v-if="getKpiSecondaryLabel(group.roadmap)" class="text-[11px] text-muted">
-                        {{ getKpiSecondaryLabel(group.roadmap) }}
-                      </span>
-                    </div>
+                  <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                    <span class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top">
-                    <div class="flex items-center justify-end gap-1">
+                  <td class="w-[132px] border-b border-default px-3 py-2 align-top">
+                      <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                        <span class="h-6 w-6" />
+                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Novo épico" @click="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
                       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar roadmap" @click="openEditModal(group.roadmap)" />
-                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover roadmap" @click="promptDelete(group.roadmap)" />
-                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Novo épico" @click="openCreateModal('Epic')" />
+                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Excluir roadmap" @click="promptDelete(group.roadmap)" />
                     </div>
                   </td>
                 </tr>
@@ -616,7 +1343,7 @@ watch(selectedProjectId, async (projectId) => {
                   </td>
                 </tr>
 
-                <template v-for="epic in group.epics" :key="epic.id">
+                <template v-for="epicEntry in group.epics" :key="epicEntry.epic.id">
                   <tr
                     v-show="!isRoadmapCollapsed(group.roadmap.id)"
                     class="bg-elevated/10 hover:bg-elevated/20 transition-colors"
@@ -626,190 +1353,171 @@ watch(selectedProjectId, async (projectId) => {
                         <button
                           type="button"
                           class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:text-highlighted"
-                          :disabled="!getDemandsForEpic(epic.id).length"
-                          @click="toggleEpicCollapse(epic.id)"
+                          :class="getCrossProjectWatermarkClass(epicEntry.epic)"
+                          :disabled="!epicEntry.demands.length"
+                          @click="toggleEpicCollapse(epicEntry.epic.id)"
                         >
                           <UIcon
-                            :name="getDemandsForEpic(epic.id).length ? (isEpicCollapsed(epic.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down') : 'i-lucide-minus'"
+                            :name="epicEntry.demands.length ? (isEpicCollapsed(epicEntry.epic.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down') : 'i-lucide-minus'"
                             class="h-3.5 w-3.5"
                           />
                         </button>
-                        <UIcon name="i-lucide-star" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
-                        <div class="min-w-0 flex-1">
+                        <UIcon name="i-lucide-star" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" :class="getCrossProjectWatermarkClass(epicEntry.epic)" />
+                        <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(epicEntry.epic)">
                           <div class="flex flex-wrap items-center gap-1.5">
                             <span class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
                               Épico
                             </span>
-                            <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
-                              {{ getDemandsForEpic(epic.id).length }} demandas
+                            <span v-if="isOutsideSelectedProject(epicEntry.epic)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-warning">
+                              Outro projeto
                             </span>
+                            <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
+                              {{ epicEntry.demands.length }} demandas
+                            </span>
+                            <a
+                              v-for="issue in getDisplayIssueLinks(epicEntry.epic)"
+                              :key="`${epicEntry.epic.id}-${issue.key}`"
+                              :href="issue.url || undefined"
+                              :target="issue.url ? '_blank' : undefined"
+                              rel="noreferrer"
+                              class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
+                            >
+                              {{ issue.key }}
+                            </a>
                           </div>
-                          <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
+                          <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epicEntry.epic.description || undefined">{{ epicEntry.epic.title }}</p>
                         </div>
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[epic.status]">
-                        {{ statusLabels[epic.status] }}
+                    <td class="w-[120px] border-b border-default px-3 py-2 align-top">
+                      <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[epicEntry.epic.status]">
+                        {{ statusLabels[epicEntry.epic.status] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex flex-wrap gap-1.5">
-                        <span
-                          v-for="projectName in getProjectNames(epic)"
-                          :key="`${epic.id}-${projectName}`"
-                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] text-highlighted"
-                        >
-                          {{ projectName }}
-                        </span>
-                        <span v-if="!getProjectNames(epic).length" class="text-xs text-muted">—</span>
-                      </div>
+                    <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
+                      <p v-if="getEpicDisplayProductNames(epicEntry.epic).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic))">
+                        {{ getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic)) }}
+                      </p>
+                      <span v-else class="text-xs text-muted">—</span>
+                    </td>
+
+                    <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                      <span v-if="getDisplayedHours(epicEntry.epic) !== null">{{ getDisplayedHours(epicEntry.epic) }}h</span>
+                      <span v-else class="text-xs text-muted">—</span>
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top">
-                      <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epic.classification]">
-                        {{ classificationLabels[epic.classification] }}
+                      <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epicEntry.epic.classification]">
+                        {{ classificationLabels[epicEntry.epic.classification] }}
                       </span>
-                    </td>
-
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex flex-wrap gap-1.5">
-                        <a
-                          v-for="issue in getDisplayIssueLinks(epic)"
-                          :key="`${epic.id}-${issue.key}`"
-                          :href="issue.url || undefined"
-                          :target="issue.url ? '_blank' : undefined"
-                          rel="noreferrer"
-                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                        >
-                          {{ issue.key }}
-                        </a>
-                        <span v-if="!getDisplayIssueLinks(epic).length" class="text-xs text-muted">—</span>
-                      </div>
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                      {{ formatDate(getDisplayedPromisedDate(epic)) }}
+                      {{ formatDate(getDisplayedConclusionDate(epicEntry.epic)) }}
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
+                    <td class="w-[96px] border-b border-default px-2 py-2 align-top">
                       <div class="flex min-w-0 flex-col items-start gap-1">
-                        <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
-                          {{ getKpiSummary(epic).label }}
+                        <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
+                          {{ getKpiSummary(epicEntry.epic).label }}
                         </button>
-                        <span v-if="getKpiSecondaryLabel(epic)" class="text-[11px] text-muted">
-                          {{ getKpiSecondaryLabel(epic) }}
+                        <span v-if="getKpiSecondaryLabel(epicEntry.epic)" class="text-[11px] text-muted">
+                          {{ getKpiSecondaryLabel(epicEntry.epic) }}
                         </span>
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex items-center justify-end gap-1">
-                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epic)" />
-                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epic)" />
-                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover épico" @click="promptDelete(epic)" />
+                    <td class="w-[132px] border-b border-default px-3 py-2 align-top">
+                      <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epicEntry.epic)" />
+                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Nova demanda" @click="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
+                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epicEntry.epic)" />
+                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Excluir épico" @click="promptDelete(epicEntry.epic)" />
                       </div>
                     </td>
                   </tr>
 
                   <tr
-                    v-if="!getDemandsForEpic(epic.id).length && !isRoadmapCollapsed(group.roadmap.id) && !isEpicCollapsed(epic.id)"
-                    class="bg-elevated/5"
-                  >
-                    <td colspan="8" class="border-b border-default px-3 py-2.5 pl-20 text-[11px] text-muted">
-                      Nenhuma demanda vinculada a este épico ainda.
-                    </td>
-                  </tr>
-
-                  <tr
-                    v-for="demand in getDemandsForEpic(epic.id)"
-                    v-show="!isRoadmapCollapsed(group.roadmap.id) && !isEpicCollapsed(epic.id)"
+                    v-for="demand in epicEntry.demands"
+                    v-show="!isRoadmapCollapsed(group.roadmap.id) && !isEpicCollapsed(epicEntry.epic.id)"
                     :key="demand.id"
                     class="bg-default hover:bg-elevated/10 transition-colors"
                   >
                     <td class="border-b border-default px-3 py-2 align-top">
                       <div class="flex items-start gap-1.5 pl-20">
-                        <UIcon name="i-lucide-list-todo" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" />
-                        <div class="min-w-0 flex-1">
+                        <UIcon name="i-lucide-list-todo" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" :class="getCrossProjectWatermarkClass(demand)" />
+                        <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(demand)">
                           <div class="flex flex-wrap items-center gap-1.5">
                             <span class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
                               Demanda
                             </span>
-                            <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
-                              {{ demand.quarterLabel || 'Backlog' }}
+                            <span v-if="isOutsideSelectedProject(demand)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-warning">
+                              Outro projeto
                             </span>
-                            <span v-if="typeof demand.hours === 'number'" class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
-                              {{ demand.hours }}h
-                            </span>
+                            <a
+                              v-for="issue in getDisplayIssueLinks(demand)"
+                              :key="`${demand.id}-${issue.key}`"
+                              :href="issue.url || undefined"
+                              :target="issue.url ? '_blank' : undefined"
+                              rel="noreferrer"
+                              class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
+                            >
+                              {{ issue.key }}
+                            </a>
                           </div>
                           <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
                         </div>
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
+                    <td class="w-[120px] border-b border-default px-3 py-2 align-top">
                       <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[demand.status]">
                         {{ statusLabels[demand.status] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex flex-wrap gap-1.5">
-                        <span
-                          v-for="projectName in getProjectNames(demand)"
-                          :key="`${demand.id}-${projectName}`"
-                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] text-highlighted"
-                        >
-                          {{ projectName }}
-                        </span>
-                        <span v-if="!getProjectNames(demand).length" class="text-xs text-muted">—</span>
-                      </div>
+                    <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
+                      <p v-if="getProductNames(demand).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
+                        {{ getProductNamesLine(getProductNames(demand)) }}
+                      </p>
+                      <span v-else class="text-xs text-muted">—</span>
+                    </td>
+
+                    <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                      <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
+                      <span v-else class="text-xs text-muted">—</span>
                     </td>
 
                     <td class="border-b border-default px-3 py-2 align-top">
-                      <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[demand.classification]">
-                        {{ classificationLabels[demand.classification] }}
+                      <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]">
+                        {{ classificationLabels[getDisplayedClassification(demand)] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex flex-wrap gap-1.5">
-                        <a
-                          v-for="issue in getDisplayIssueLinks(demand)"
-                          :key="`${demand.id}-${issue.key}`"
-                          :href="issue.url || undefined"
-                          :target="issue.url ? '_blank' : undefined"
-                          rel="noreferrer"
-                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                        >
-                          {{ issue.key }}
-                        </a>
-                        <span v-if="!getDisplayIssueLinks(demand).length" class="text-xs text-muted">—</span>
-                      </div>
-                    </td>
-
                     <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                      {{ formatDate(getDisplayedPromisedDate(demand)) }}
-                    </td>
-
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex min-w-0 flex-col items-start gap-1">
-                        <button v-if="getKpiSummary(demand).clickable" type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel" @click="openKpiWorkspace(demand)">
-                          {{ getKpiSummary(demand).label }}
-                        </button>
-                        <span v-else class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel">
-                          {{ getKpiSummary(demand).label }}
+                      <div class="flex flex-col gap-0.5">
+                        <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex max-w-fit items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-highlighted">
+                          {{ demand.quarterLabel }}
                         </span>
-                        <span v-if="getKpiSecondaryLabel(demand)" class="text-[11px] text-muted">
-                          {{ getKpiSecondaryLabel(demand) }}
+                        <span v-if="getDisplayedConclusionDate(demand)" class="text-[11px] text-muted">
+                          {{ formatDate(getDisplayedConclusionDate(demand)) }}
+                        </span>
+                        <span v-else-if="demand.status === 'Backlog'" class="text-xs text-muted">
+                          —
                         </span>
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex items-center justify-end gap-1">
+                    <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                      <span class="text-xs text-muted">—</span>
+                    </td>
+
+                    <td class="w-[132px] border-b border-default px-3 py-2 align-top">
+                      <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                        <span class="h-6 w-6" />
+                        <span class="h-6 w-6" />
                         <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar demanda" @click="openEditModal(demand)" />
                         <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover demanda" @click="promptDelete(demand)" />
                       </div>
@@ -818,14 +1526,14 @@ watch(selectedProjectId, async (projectId) => {
                 </template>
               </template>
 
-              <tr v-if="orphanEpics.length" class="bg-elevated/60">
+              <tr v-if="displayOrphanEpics.length" class="bg-elevated/60">
                 <td colspan="8" class="border-b border-default px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Épicos sem roadmap visível
                 </td>
               </tr>
 
               <tr
-                v-for="epic in orphanEpics"
+                v-for="epic in displayOrphanEpics"
                 :key="`orphan-${epic.id}`"
                 class="bg-rose-50/30 hover:bg-rose-50/50 dark:bg-rose-950/10 dark:hover:bg-rose-950/20 transition-colors"
               >
@@ -837,6 +1545,19 @@ watch(selectedProjectId, async (projectId) => {
                         Épico órfão
                       </span>
                       <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
+                      <div class="mt-1 flex flex-wrap gap-1.5">
+                        <a
+                          v-for="issue in getDisplayIssueLinks(epic)"
+                          :key="`orphan-${epic.id}-${issue.key}`"
+                          :href="issue.url || undefined"
+                          :target="issue.url ? '_blank' : undefined"
+                          rel="noreferrer"
+                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
+                        >
+                          {{ issue.key }}
+                        </a>
+                        <span v-if="!getDisplayIssueLinks(epic).length" class="text-xs text-muted">—</span>
+                      </div>
                     </div>
                   </div>
                 </td>
@@ -845,42 +1566,25 @@ watch(selectedProjectId, async (projectId) => {
                     {{ statusLabels[epic.status] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex flex-wrap gap-1.5">
-                    <span
-                      v-for="projectName in getProjectNames(epic)"
-                      :key="`orphan-${epic.id}-${projectName}`"
-                      class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] text-highlighted"
-                    >
-                      {{ projectName }}
-                    </span>
-                    <span v-if="!getProjectNames(epic).length" class="text-xs text-muted">—</span>
-                  </div>
+                <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
+                  <p v-if="getEpicDisplayProductNames(epic).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epic))">
+                    {{ getProductNamesLine(getEpicDisplayProductNames(epic)) }}
+                  </p>
+                  <span v-else class="text-xs text-muted">—</span>
+                </td>
+                <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                  <span v-if="getDisplayedHours(epic) !== null">{{ getDisplayedHours(epic) }}h</span>
+                  <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
                   <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epic.classification]">
                     {{ classificationLabels[epic.classification] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex flex-wrap gap-1.5">
-                    <a
-                      v-for="issue in getDisplayIssueLinks(epic)"
-                      :key="`orphan-${epic.id}-${issue.key}`"
-                      :href="issue.url || undefined"
-                      :target="issue.url ? '_blank' : undefined"
-                      rel="noreferrer"
-                      class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                    >
-                      {{ issue.key }}
-                    </a>
-                    <span v-if="!getDisplayIssueLinks(epic).length" class="text-xs text-muted">—</span>
-                  </div>
-                </td>
                 <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                  {{ formatDate(getDisplayedPromisedDate(epic)) }}
+                  {{ formatDate(getDisplayedConclusionDate(epic)) }}
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
+                <td class="border-b border-default px-2 py-2 align-top w-[92px]">
                   <div class="flex min-w-0 flex-col items-start gap-1">
                     <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
                       {{ getKpiSummary(epic).label }}
@@ -891,22 +1595,23 @@ watch(selectedProjectId, async (projectId) => {
                   </div>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex items-center justify-end gap-1">
+                  <div class="grid w-[144px] grid-cols-4 justify-items-end gap-1 ml-auto">
                     <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epic)" />
+                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Nova demanda" @click="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
                     <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epic)" />
-                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover épico" @click="promptDelete(epic)" />
+                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Excluir épico" @click="promptDelete(epic)" />
                   </div>
                 </td>
               </tr>
 
-              <tr v-if="orphanDemands.length" class="bg-elevated/60">
+              <tr v-if="displayOrphanDemands.length" class="bg-elevated/60">
                 <td colspan="8" class="border-b border-default px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Demandas sem épico visível
                 </td>
               </tr>
 
               <tr
-                v-for="demand in orphanDemands"
+                v-for="demand in displayOrphanDemands"
                 :key="`orphan-demand-${demand.id}`"
                 class="bg-sky-50/20 hover:bg-sky-50/40 dark:bg-sky-950/10 dark:hover:bg-sky-950/20 transition-colors"
               >
@@ -918,11 +1623,25 @@ watch(selectedProjectId, async (projectId) => {
                         <span class="inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-sky-700 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300">
                           Demanda órfã
                         </span>
-                        <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
-                          {{ demand.quarterLabel || 'Backlog' }}
+                        <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
+                          {{ demand.quarterLabel }}
                         </span>
+                        <span v-else class="text-xs text-muted">—</span>
                       </div>
                       <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
+                      <div class="mt-1 flex flex-wrap gap-1.5">
+                        <a
+                          v-for="issue in getDisplayIssueLinks(demand)"
+                          :key="`orphan-demand-${demand.id}-${issue.key}`"
+                          :href="issue.url || undefined"
+                          :target="issue.url ? '_blank' : undefined"
+                          rel="noreferrer"
+                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
+                        >
+                          {{ issue.key }}
+                        </a>
+                        <span v-if="!getDisplayIssueLinks(demand).length" class="text-xs text-muted">—</span>
+                      </div>
                     </div>
                   </div>
                 </td>
@@ -931,56 +1650,41 @@ watch(selectedProjectId, async (projectId) => {
                     {{ statusLabels[demand.status] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex flex-wrap gap-1.5">
-                    <span
-                      v-for="projectName in getProjectNames(demand)"
-                      :key="`orphan-demand-${demand.id}-${projectName}`"
-                      class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] text-highlighted"
-                    >
-                      {{ projectName }}
-                    </span>
-                    <span v-if="!getProjectNames(demand).length" class="text-xs text-muted">—</span>
-                  </div>
+                <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
+                  <p v-if="getProductNames(demand).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
+                    {{ getProductNamesLine(getProductNames(demand)) }}
+                  </p>
+                  <span v-else class="text-xs text-muted">—</span>
+                </td>
+                <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                  <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
+                  <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-3 py-2 align-top">
-                  <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[demand.classification]">
-                    {{ classificationLabels[demand.classification] }}
+                  <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]">
+                    {{ classificationLabels[getDisplayedClassification(demand)] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex flex-wrap gap-1.5">
-                    <a
-                      v-for="issue in getDisplayIssueLinks(demand)"
-                      :key="`orphan-demand-${demand.id}-${issue.key}`"
-                      :href="issue.url || undefined"
-                      :target="issue.url ? '_blank' : undefined"
-                      rel="noreferrer"
-                      class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                    >
-                      {{ issue.key }}
-                    </a>
-                    <span v-if="!getDisplayIssueLinks(demand).length" class="text-xs text-muted">—</span>
-                  </div>
-                </td>
                 <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
-                  {{ formatDate(getDisplayedPromisedDate(demand)) }}
-                </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex min-w-0 flex-col items-start gap-1">
-                    <button v-if="getKpiSummary(demand).clickable" type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel" @click="openKpiWorkspace(demand)">
-                      {{ getKpiSummary(demand).label }}
-                    </button>
-                    <span v-else class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="getKpiSummary(demand).tone" :title="getKpiSummary(demand).actionLabel">
-                      {{ getKpiSummary(demand).label }}
+                  <div class="flex flex-col gap-0.5">
+                    <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex max-w-fit items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-highlighted">
+                      {{ demand.quarterLabel }}
                     </span>
-                    <span v-if="getKpiSecondaryLabel(demand)" class="text-[11px] text-muted">
-                      {{ getKpiSecondaryLabel(demand) }}
+                    <span v-if="getDisplayedConclusionDate(demand)" class="text-[11px] text-muted">
+                      {{ formatDate(getDisplayedConclusionDate(demand)) }}
+                    </span>
+                    <span v-else-if="demand.status === 'Backlog'" class="text-xs text-muted">
+                      —
                     </span>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="flex items-center justify-end gap-1">
+                <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                  <span class="text-xs text-muted">—</span>
+                </td>
+                <td class="w-[132px] border-b border-default px-3 py-2 align-top">
+                  <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                    <span class="h-6 w-6" />
+                    <span class="h-6 w-6" />
                     <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar demanda" @click="openEditModal(demand)" />
                     <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover demanda" @click="promptDelete(demand)" />
                   </div>
@@ -999,22 +1703,26 @@ watch(selectedProjectId, async (projectId) => {
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
       :default-item-type="createItemType"
-      :roadmap-options="roadmapItems.map(item => ({ id: item.id, title: item.title }))"
-      :epic-options="epicItems.map(item => ({
+      :default-parent-demand-id="defaultParentDemandId"
+      :default-project-id="defaultProjectId ?? currentPrimaryProjectId ?? undefined"
+      :default-project-ids="defaultProjectIds.length ? defaultProjectIds : selectedProjectIds"
+      :roadmap-options="allRoadmapItems.map(item => ({ id: item.id, title: item.title, projectId: item.projectId, projectIds: item.projectIds }))"
+      :epic-options="allEpicItems.map(item => ({
         id: item.id,
         title: item.title,
         roadmapTitle: item.roadmapTitle,
+        status: item.status,
         projectId: item.projectId,
         projectIds: item.projectIds
       }))"
-      :default-project-id="selectedProjectId ?? undefined"
       :available-kpis="availableKpis"
+      :is-saving="isSavingDemand"
       @submit="handleSubmit"
     />
 
     <UModal
       v-model:open="confirmDeleteOpen"
-      :title="deleteTarget?.itemType === 'Roadmap' ? 'Remover Roadmap' : 'Remover Épico'"
+      :title="deleteTarget?.itemType === 'Roadmap' ? 'Excluir Roadmap' : 'Excluir Épico'"
       :description="deleteTarget ? `Tem certeza que deseja remover ${deleteTarget.itemType === 'Roadmap' ? 'este roadmap' : 'este épico'}? Esta ação não pode ser desfeita.` : ''"
     >
       <template #footer>

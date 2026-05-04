@@ -272,7 +272,6 @@ async function executeDeleteProduct() {
             >
               <div class="min-w-0">
                 <p class="font-medium text-highlighted truncate">{{ product.name }}</p>
-                <p class="text-xs text-muted">ID {{ product.id }}</p>
               </div>
               <div class="flex items-center gap-1 shrink-0">
                 <UButton icon="i-lucide-pencil" variant="ghost" size="xs" @click="openEditProduct(project, product)" />

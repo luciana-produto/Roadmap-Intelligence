@@ -108,9 +108,12 @@ internal static class RoadmapDemandDtoMapper
             demand.Title,
             demand.Description,
             demand.ProjectId,
-            demand.ProjectId.HasValue
-                ? [demand.ProjectId.Value]
-                : demand.ProjectLinks.Select(link => link.ProjectId).Distinct().ToList().AsReadOnly(),
+            (demand.ProjectId.HasValue
+                ? demand.ProjectLinks.Select(link => link.ProjectId).Append(demand.ProjectId.Value)
+                : demand.ProjectLinks.Select(link => link.ProjectId))
+                .Distinct()
+                .ToList()
+                .AsReadOnly(),
             demand.Quarter.Label,
             demand.QuarterYear,
             demand.QuarterNumber,

@@ -6,7 +6,7 @@ namespace ProductHub.Domain.Roadmap.Interfaces;
 public interface IRoadmapDemandRepository : IRepository<RoadmapDemand>
 {
     Task<IEnumerable<RoadmapDemand>> GetByProjectAsync(
-        Guid projectId,
+        Guid? projectId,
         int? quarterYear = null,
         int? quarterNumber = null,
         CancellationToken cancellationToken = default);
@@ -26,6 +26,8 @@ public interface IRoadmapDemandRepository : IRepository<RoadmapDemand>
     Task<RoadmapDemand?> GetByIdWithProductsAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task<RoadmapDemand?> GetByIdForUpdateAsync(Guid id, CancellationToken cancellationToken = default);
+
+    Task<bool> HasChildrenAsync(Guid parentDemandId, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<RoadmapDemand>> GetByIdsAsync(IEnumerable<Guid> ids, CancellationToken cancellationToken = default);
 

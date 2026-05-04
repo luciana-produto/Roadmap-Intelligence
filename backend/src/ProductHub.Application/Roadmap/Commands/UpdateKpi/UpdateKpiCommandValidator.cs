@@ -13,10 +13,6 @@ public sealed class UpdateKpiCommandValidator : AbstractValidator<UpdateKpiComma
             .NotEmpty()
             .Must(t => Enum.TryParse<KpiType>(t, true, out _))
             .WithMessage("Type must be Business or Product.");
-        RuleFor(x => x.Name)
-            .Equal("Taxa de Adoção da Funcionalidade")
-            .When(x => string.Equals(x.Type, nameof(KpiType.Product), StringComparison.OrdinalIgnoreCase))
-            .WithMessage("Product KPI must be Taxa de Adoção da Funcionalidade.");
         RuleFor(x => x.Lever)
             .NotEmpty()
             .Must(l => Enum.TryParse<KpiLever>(l, true, out _))

@@ -17,6 +17,9 @@ const toast = useToast()
 
 const { projects, demands, dependencyOptions, customerSuggestions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
 const { kpis: availableKpis } = storeToRefs(kpiStore)
+const sortedProjects = computed(() =>
+  [...projects.value].sort((left, right) => right.name.localeCompare(left.name, 'pt-BR'))
+)
 const roadmapItems = computed(() => demands.value.filter(item => item.itemType === 'Roadmap'))
 const epicItems = computed(() => demands.value.filter(item => item.itemType === 'Epic'))
 const demandItems = computed(() => demands.value.filter(item => item.itemType === 'Demand'))
@@ -99,6 +102,20 @@ function getEffectiveDemandCustomers(demand: Pick<RoadmapDemand, 'itemType' | 'c
   return normalizeCustomerList(epic.customers)
 }
 
+function getEffectiveDemandClassification(demand: Pick<RoadmapDemand, 'itemType' | 'classification' | 'epicId'>): DemandClassification | undefined {
+  if (demand.itemType === 'Epic')
+    return demand.classification
+
+  if (!demand.epicId)
+    return demand.classification
+
+  const epic = itemsById.value.get(demand.epicId) ?? null
+  if (!epic || epic.itemType !== 'Epic')
+    return demand.classification
+
+  return epic.classification
+}
+
 function formatDemandDate(value?: string) {
   if (!value)
     return ''
@@ -115,19 +132,34 @@ function openDemandKpiWorkspace(demand: RoadmapDemand) {
   if (!targetEpicId)
     return
 
+  const query: Record<string, string> = {
+    kpiDemandId: targetEpicId
+  }
+
+  if (selectedProjectId.value ?? demand.projectId)
+    query.projectId = selectedProjectId.value ?? demand.projectId ?? ''
+
+  if (viewMode.value === 'hierarchy')
+    query.view = 'hierarchy'
+
   navigateTo({
     path: '/roadmap',
-    query: {
-      projectId: selectedProjectId.value ?? demand.projectId,
-      kpiDemandId: targetEpicId
-    }
+    query
   })
 }
 
 function closeDemandKpiWorkspace() {
+  const query: Record<string, string> = {}
+
+  if (selectedProjectId.value)
+    query.projectId = selectedProjectId.value
+
+  if (viewMode.value === 'hierarchy')
+    query.view = 'hierarchy'
+
   navigateTo({
     path: '/roadmap',
-    query: selectedProjectId.value ? { projectId: selectedProjectId.value } : undefined
+    query: Object.keys(query).length ? query : undefined
   })
 }
 
@@ -210,6 +242,17 @@ function getVisibleEpicDemandCluster(anchorDemand?: RoadmapDemand) {
   }
 
   return cluster
+}
+
+function getVisibleEpicDemands(epicId?: string) {
+  if (!epicId)
+    return []
+
+  return visibleListRows.value.filter(demand => demand.epicId === epicId)
+}
+
+function getEpicQuarterMoveScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'type'>) {
+  return `${demand.projectId}:${getDemandGroupKey(demand)}`
 }
 
 function getEpicHeaderMeta(anchorDemand?: RoadmapDemand) {
@@ -309,6 +352,13 @@ function getDisplayedPromisedDate(demand: RoadmapDemand) {
     return directPromisedDate
 
   return getDerivedEpicPromisedDate(demand)
+}
+
+function getDisplayedConclusionDate(demand: RoadmapDemand) {
+  if (demand.status === 'Done' && demand.deliveryDate)
+    return demand.deliveryDate
+
+  return getDisplayedPromisedDate(demand)
 }
 
 function showDemandDelayMarker(demand: RoadmapDemand) {
@@ -709,7 +759,7 @@ const classificationTotals = computed(() => {
   const totals = new Map<DemandClassification, { classification: DemandClassification, label: string, hours: number, count: number }>()
 
   for (const demand of quarterFilteredDemands.value) {
-    const classification = String(demand.classification ?? '').trim() as DemandClassification
+    const classification = String(getEffectiveDemandClassification(demand) ?? '').trim() as DemandClassification
     if (!classification || !(classification in classificationLabels)) continue
 
     const current = totals.get(classification) ?? {
@@ -836,7 +886,10 @@ const filteredDemands = computed(() => {
   if (filterTypes.value.length)
     list = list.filter(d => filterTypes.value.includes(d.type))
   if (filterClassifications.value.length)
-    list = list.filter(d => filterClassifications.value.includes(d.classification))
+    list = list.filter((demand) => {
+      const classification = getEffectiveDemandClassification(demand)
+      return classification ? filterClassifications.value.includes(classification) : false
+    })
   return list
 })
 
@@ -1029,8 +1082,7 @@ async function persistEpicClusterPriority(
 
 async function handleEpicSortEnd(item: HTMLElement) {
   const anchorDemandId = item.dataset.anchorDemandId
-  const scopeKey = item.dataset.scopeKey
-  if (!anchorDemandId || !scopeKey)
+  if (!anchorDemandId)
     return
 
   const anchorDemand = visibleListRows.value.find(demand => demand.id === anchorDemandId)
@@ -1044,17 +1096,99 @@ async function handleEpicSortEnd(item: HTMLElement) {
   if (!tbody)
     return
 
-  const epicRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLTableRowElement[]
-  const currentIndex = epicRows.indexOf(item as HTMLTableRowElement)
+  const targetQuarterKey = item.dataset.targetQuarterKey
+  const targetDemandId = item.dataset.targetDemandId
+  const targetInsertAfter = item.dataset.targetInsertAfter === 'true'
+  const targetDemand = targetDemandId
+    ? visibleSortableRows.value.find(demand => demand.id === targetDemandId)
+    : null
+
+  const tbodyRows = Array.from(tbody.children) as HTMLTableRowElement[]
+  const currentIndex = tbodyRows.indexOf(item as HTMLTableRowElement)
   if (currentIndex < 0)
     return
 
-  const nextAnchorRow = epicRows.slice(currentIndex + 1).find(row =>
+  const nextDemandId = tbodyRows.slice(currentIndex + 1)
+    .map(row => row.dataset.demandId)
+    .find((value): value is string => !!value)
+  const previousDemandId = [...tbodyRows.slice(0, currentIndex)].reverse()
+    .map(row => row.dataset.demandId)
+    .find((value): value is string => !!value)
+
+  const nextDemand = nextDemandId
+    ? visibleSortableRows.value.find(demand => demand.id === nextDemandId)
+    : null
+  const previousDemand = previousDemandId
+    ? visibleSortableRows.value.find(demand => demand.id === previousDemandId)
+    : null
+
+  const fallbackQuarterRef = targetDemand ?? nextDemand ?? previousDemand
+  const targetQuarter = targetQuarterKey
+    ? (() => {
+        const [quarterYear, quarterNumber] = targetQuarterKey.split(':').map(Number)
+        return Number.isFinite(quarterYear) && Number.isFinite(quarterNumber)
+          ? { quarterYear, quarterNumber }
+          : null
+      })()
+    : null
+  const targetQuarterRef = targetQuarter ?? (fallbackQuarterRef
+    ? { quarterYear: fallbackQuarterRef.quarterYear, quarterNumber: fallbackQuarterRef.quarterNumber }
+    : null)
+  if (!targetQuarterRef)
+    return
+
+  const quarterChanged = anchorDemand.quarterYear !== targetQuarterRef.quarterYear || anchorDemand.quarterNumber !== targetQuarterRef.quarterNumber
+  if (quarterChanged) {
+    const sameGroupInTarget = (row: RoadmapDemand) =>
+      row.id !== anchorDemand.id
+      && !currentCluster.some(clusterDemand => clusterDemand.id === row.id)
+      && row.quarterYear === targetQuarterRef.quarterYear
+      && row.quarterNumber === targetQuarterRef.quarterNumber
+      && getDemandGroupKey(row) === getDemandGroupKey(anchorDemand)
+
+    const beforeId = targetDemand && sameGroupInTarget(targetDemand) && !targetInsertAfter
+      ? targetDemand.id
+      : (nextDemand && sameGroupInTarget(nextDemand) ? nextDemand.id : null)
+    const afterId = beforeId
+      ? null
+      : (targetDemand && sameGroupInTarget(targetDemand) && targetInsertAfter
+          ? targetDemand.id
+          : (previousDemand && sameGroupInTarget(previousDemand) ? previousDemand.id : null))
+
+    await planEpicDemandsToQuarter(
+      anchorDemand.epicId ?? '',
+      `${targetQuarterRef.quarterNumber}-${targetQuarterRef.quarterYear}`,
+      {
+        anchorDemandId: anchorDemand.id,
+        beforeId,
+        afterId
+      }
+    )
+    return
+  }
+
+  const epicRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLTableRowElement[]
+  const epicRowIndex = epicRows.indexOf(item as HTMLTableRowElement)
+  if (epicRowIndex < 0)
+    return
+
+  const nextAnchorDemand = epicRows.slice(epicRowIndex + 1)
+    .map(row => row.dataset.anchorDemandId)
+    .find((value): value is string => !!value)
+  const previousAnchorDemand = [...epicRows.slice(0, epicRowIndex)].reverse()
+    .map(row => row.dataset.anchorDemandId)
+    .find((value): value is string => !!value)
+
+  const scopeKey = item.dataset.scopeKey
+  if (!scopeKey)
+    return
+
+  const nextAnchorRow = epicRows.slice(epicRowIndex + 1).find(row =>
     row.dataset.scopeKey === scopeKey
     && row.dataset.anchorDemandId
     && row.dataset.anchorDemandId !== anchorDemandId
   )
-  const previousAnchorRow = [...epicRows.slice(0, currentIndex)].reverse().find(row =>
+  const previousAnchorRow = [...epicRows.slice(0, epicRowIndex)].reverse().find(row =>
     row.dataset.scopeKey === scopeKey
     && row.dataset.anchorDemandId
     && row.dataset.anchorDemandId !== anchorDemandId
@@ -1264,8 +1398,28 @@ function initListSortable() {
 
       const draggedIsEpic = !!dragged?.dataset.anchorDemandId
 
-      if (draggedIsEpic)
-        return !!related.dataset.anchorDemandId && dragged?.dataset.scopeKey === related.dataset.scopeKey
+      if (draggedIsEpic) {
+        const draggedAnchor = dragged?.dataset.anchorDemandId
+          ? visibleListRows.value.find(demand => demand.id === dragged.dataset.anchorDemandId)
+          : null
+        const relatedAnchorId = related.dataset.anchorDemandId ?? related.dataset.demandId
+        const relatedDemand = relatedAnchorId
+          ? visibleListRows.value.find(demand => demand.id === relatedAnchorId)
+          : null
+
+        if (!draggedAnchor || !relatedDemand)
+          return false
+
+        if (dragged) {
+          dragged.dataset.targetQuarterKey = relatedDemand.quarterYear != null && relatedDemand.quarterNumber != null
+            ? `${relatedDemand.quarterYear}:${relatedDemand.quarterNumber}`
+            : ''
+          dragged.dataset.targetDemandId = relatedDemand.id
+          dragged.dataset.targetInsertAfter = String(Boolean(event.willInsertAfter))
+        }
+
+        return getEpicQuarterMoveScopeKey(draggedAnchor) === getEpicQuarterMoveScopeKey(relatedDemand)
+      }
 
       if (!related.dataset.demandId)
         return false
@@ -1280,18 +1434,21 @@ function initListSortable() {
       // Same quarter: when grouped, keep demand reordering inside the visible epic group.
       return dragged?.dataset.dragScopeKey === related.dataset.dragScopeKey
     },
-    onEnd: (event) => {
+    onEnd: async (event) => {
+      const draggedItem = event.item as HTMLElement | null
+      if (draggedItem?.dataset.anchorDemandId) {
+        await handleEpicSortEnd(draggedItem)
+        delete draggedItem.dataset.targetQuarterKey
+        delete draggedItem.dataset.targetDemandId
+        delete draggedItem.dataset.targetInsertAfter
+        return
+      }
+
       const oldIndex = event.oldDraggableIndex ?? event.oldIndex
       const newIndex = event.newDraggableIndex ?? event.newIndex
 
       if (oldIndex == null || newIndex == null || oldIndex === newIndex)
         return
-
-      const draggedItem = event.item as HTMLElement | null
-      if (draggedItem?.dataset.anchorDemandId) {
-        handleEpicSortEnd(draggedItem)
-        return
-      }
 
       if (draggedItem)
         handleListSortEnd(draggedItem)
@@ -1481,36 +1638,15 @@ function syncListSectionDividers() {
       }
 
       for (const column of listOrderedCols.value) {
-        if (column.id === 'select') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
-
-          const toggleButton = document.createElement('button')
-          toggleButton.type = 'button'
-          toggleButton.className = 'mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:text-highlighted'
-          toggleButton.addEventListener('click', (event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            toggleEpicCollapse(config.epicId)
-          })
-
-          const toggleIcon = document.createElement('span')
-          toggleIcon.textContent = config.collapsed ? '▸' : '▾'
-          toggleButton.appendChild(toggleIcon)
-          cell.appendChild(toggleButton)
-
-          grid.appendChild(cell)
-          continue
-        }
-
         if (column.id === 'priority') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('px-2 py-2.5 align-top')
 
           if (headerMeta) {
             const handleWrap = document.createElement('div')
-            handleWrap.className = 'flex items-start justify-center'
+            handleWrap.className = 'flex items-start justify-center gap-1.5'
 
             const dragHandle = document.createElement('span')
-            dragHandle.className = 'list-epic-priority-handle inline-flex h-7 w-7 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing'
+            dragHandle.className = 'list-epic-priority-handle inline-flex h-6 w-6 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing'
             dragHandle.title = 'Arrastar para repriorizar o épico'
 
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -1520,7 +1656,7 @@ function syncListSectionDividers() {
             svg.setAttribute('stroke-width', '2')
             svg.setAttribute('stroke-linecap', 'round')
             svg.setAttribute('stroke-linejoin', 'round')
-            svg.setAttribute('class', 'h-4 w-4')
+            svg.setAttribute('class', 'h-3.5 w-3.5')
 
             for (const [cx, cy] of [['9', '6'], ['9', '12'], ['9', '18'], ['15', '6'], ['15', '12'], ['15', '18']] as const) {
               const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
@@ -1532,6 +1668,19 @@ function syncListSectionDividers() {
 
             dragHandle.appendChild(svg)
             handleWrap.appendChild(dragHandle)
+
+            if (config.epicId) {
+              const checkbox = document.createElement('input')
+              checkbox.type = 'checkbox'
+              checkbox.className = 'mt-1 h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary'
+              checkbox.checked = isEpicSelected(config.epicId)
+              checkbox.addEventListener('click', event => event.stopPropagation())
+              checkbox.addEventListener('change', (event) => {
+                toggleEpicSelection(config.epicId!, (event.target as HTMLInputElement).checked)
+              })
+              handleWrap.appendChild(checkbox)
+            }
+
             cell.appendChild(handleWrap)
           }
 
@@ -1571,6 +1720,22 @@ function syncListSectionDividers() {
           const titleWrap = document.createElement('div')
           titleWrap.className = 'flex min-w-0 items-start gap-1.5'
 
+          if (config.epicId) {
+            const toggleButton = document.createElement('button')
+            toggleButton.type = 'button'
+            toggleButton.className = 'mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-default bg-default text-muted transition-colors hover:text-highlighted'
+            toggleButton.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              toggleEpicCollapse(config.epicId)
+            })
+
+            const toggleIcon = document.createElement('span')
+            toggleIcon.textContent = config.collapsed ? '▸' : '▾'
+            toggleButton.appendChild(toggleIcon)
+            titleWrap.appendChild(toggleButton)
+          }
+
           const epicIcon = document.createElement('span')
           epicIcon.className = 'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-amber-500'
           epicIcon.textContent = '★'
@@ -1588,7 +1753,7 @@ function syncListSectionDividers() {
 
           const countNode = document.createElement('span')
           countNode.className = 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
-          countNode.textContent = `${config.count} demanda${config.count === 1 ? '' : 's'}`
+          countNode.textContent = `${config.count} dem.`
           metaRow.appendChild(countNode)
 
           if (headerMeta) {
@@ -1596,21 +1761,38 @@ function syncListSectionDividers() {
             classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
             classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
             metaRow.appendChild(classificationBadge)
+
+            headerMeta.issueLinks.forEach((issueLink) => {
+              const jiraTag = issueLink.url ? document.createElement('a') : document.createElement('span')
+              jiraTag.className = 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
+              jiraTag.textContent = issueLink.key
+
+              if (jiraTag instanceof HTMLAnchorElement) {
+                jiraTag.href = issueLink.url
+                jiraTag.target = '_blank'
+                jiraTag.rel = 'noopener noreferrer'
+              }
+
+              metaRow.appendChild(jiraTag)
+            })
           }
 
           const titleBlock = document.createElement('div')
           titleBlock.className = 'mt-0.5 min-w-0'
 
-          if (config.roadmapTitle) {
+          const roadmapTitleLabel = headerMeta?.epic.roadmapTitle ?? config.roadmapTitle
+          if (roadmapTitleLabel) {
             const roadmapLabel = document.createElement('div')
             roadmapLabel.className = 'truncate text-[11px] text-muted'
-            roadmapLabel.textContent = config.roadmapTitle
+            roadmapLabel.textContent = roadmapTitleLabel
             titleBlock.appendChild(roadmapLabel)
           }
 
           const epicTitle = document.createElement('div')
           epicTitle.className = 'truncate text-[13px] font-medium text-highlighted'
-          epicTitle.textContent = config.epicTitle ?? 'Sem épico'
+          epicTitle.textContent = headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
+          if (headerMeta?.epic.description?.trim())
+            epicTitle.title = headerMeta.epic.description.trim()
           titleBlock.appendChild(epicTitle)
 
           if (headerMeta) {
@@ -1626,7 +1808,7 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'kpis') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('pl-3 pr-2 py-2.5 align-top')
 
           if (headerMeta) {
             const container = document.createElement('div')
@@ -1634,7 +1816,7 @@ function syncListSectionDividers() {
 
             const button = document.createElement('button')
             button.type = 'button'
-            button.className = `inline-flex max-w-full items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80 ${headerMeta.kpiSummary.tone}`
+            button.className = `inline-flex h-6 max-w-full items-center rounded-md border px-1.5 text-[10px] font-medium transition-colors hover:opacity-80 ${headerMeta.kpiSummary.tone}`
             button.textContent = headerMeta.kpiSummary.label
             button.title = headerMeta.kpiSummary.actionLabel
             button.addEventListener('click', (event) => {
@@ -1732,7 +1914,7 @@ function syncListSectionDividers() {
 
             container.appendChild(statusRow)
 
-            const promisedDate = getDisplayedPromisedDate(headerMeta.epic)
+            const promisedDate = getDisplayedConclusionDate(headerMeta.epic)
             if (promisedDate) {
               const promisedRow = document.createElement('div')
               promisedRow.className = 'flex items-center gap-1 text-[11px] text-muted'
@@ -1741,16 +1923,6 @@ function syncListSectionDividers() {
               promisedText.textContent = formatDemandDate(promisedDate)
               promisedRow.appendChild(promisedText)
               container.appendChild(promisedRow)
-            }
-
-            if (headerMeta.epic.status === 'Done' && headerMeta.epic.deliveryDate) {
-              const deliveryRow = document.createElement('div')
-              deliveryRow.className = 'flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400'
-              deliveryRow.appendChild(createSvgIcon(['M8 2v4', 'M16 2v4', 'M3 10h18', 'M9 16l2 2 4-4', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2'], 'h-3 w-3'))
-              const deliveryText = document.createElement('span')
-              deliveryText.textContent = formatDemandDate(headerMeta.epic.deliveryDate)
-              deliveryRow.appendChild(deliveryText)
-              container.appendChild(deliveryRow)
             }
 
             if (showDemandDelayMarker(headerMeta.epic)) {
@@ -1813,41 +1985,55 @@ function syncListSectionDividers() {
           continue
         }
 
-        if (column.id === 'issue') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
-          if (headerMeta?.issueLinks?.length) {
-            const issuesWrap = document.createElement('div')
-            issuesWrap.className = 'flex flex-wrap gap-1.5'
-
-            headerMeta.issueLinks.forEach((issueLink) => {
-              const jiraTag = issueLink.url ? document.createElement('a') : document.createElement('span')
-              jiraTag.className = 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
-              jiraTag.textContent = issueLink.key
-
-              if (jiraTag instanceof HTMLAnchorElement) {
-                jiraTag.href = issueLink.url
-                jiraTag.target = '_blank'
-                jiraTag.rel = 'noopener noreferrer'
-              }
-
-              issuesWrap.appendChild(jiraTag)
-            })
-
-            cell.appendChild(issuesWrap)
-          }
-          grid.appendChild(cell)
-          continue
-        }
-
         if (column.id === '_actions') {
-          const cell = createGridCell('px-4 py-2.5 text-right align-top')
+          const cell = createGridCell('px-2 py-2.5 text-right align-top')
           if (headerMeta) {
             const actions = document.createElement('div')
-            actions.className = 'flex items-center justify-end gap-1'
+            actions.className = 'ml-auto flex items-center justify-end gap-1'
+
+            const createButton = document.createElement('button')
+            createButton.type = 'button'
+            createButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-sm font-semibold leading-none text-primary transition-colors hover:border-primary/50 hover:bg-primary/15'
+            createButton.title = 'Nova demanda neste épico'
+            createButton.textContent = '+'
+            createButton.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openCreateModal('Demand', headerMeta.epic.id, { projectId: headerMeta.epic.projectId })
+            })
+            actions.appendChild(createButton)
+
+            const kpiButton = document.createElement('button')
+            kpiButton.type = 'button'
+            kpiButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-primary transition-colors hover:text-primary/80'
+            kpiButton.title = 'Abrir KPIs do épico'
+            kpiButton.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openDemandKpiWorkspace(headerMeta.epic)
+            })
+
+            const kpiSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+            kpiSvg.setAttribute('viewBox', '0 0 24 24')
+            kpiSvg.setAttribute('fill', 'none')
+            kpiSvg.setAttribute('stroke', 'currentColor')
+            kpiSvg.setAttribute('stroke-width', '2')
+            kpiSvg.setAttribute('stroke-linecap', 'round')
+            kpiSvg.setAttribute('stroke-linejoin', 'round')
+            kpiSvg.setAttribute('class', 'h-3.5 w-3.5')
+
+            const kpiPath1 = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+            kpiPath1.setAttribute('d', 'M3 3v18h18')
+            const kpiPath2 = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+            kpiPath2.setAttribute('d', 'm19 9-5 5-4-4-3 3')
+
+            kpiSvg.append(kpiPath1, kpiPath2)
+            kpiButton.appendChild(kpiSvg)
+            actions.appendChild(kpiButton)
 
             const editButton = document.createElement('button')
             editButton.type = 'button'
-            editButton.className = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
+            editButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
             editButton.title = 'Editar épico'
             editButton.addEventListener('click', (event) => {
               event.preventDefault()
@@ -1862,7 +2048,7 @@ function syncListSectionDividers() {
             editSvg.setAttribute('stroke-width', '2')
             editSvg.setAttribute('stroke-linecap', 'round')
             editSvg.setAttribute('stroke-linejoin', 'round')
-            editSvg.setAttribute('class', 'h-4 w-4')
+            editSvg.setAttribute('class', 'h-3.5 w-3.5')
 
             const editPathBody = document.createElementNS('http://www.w3.org/2000/svg', 'path')
             editPathBody.setAttribute('d', 'M12 20h9')
@@ -1876,7 +2062,7 @@ function syncListSectionDividers() {
 
             const deleteButton = document.createElement('button')
             deleteButton.type = 'button'
-            deleteButton.className = 'inline-flex h-8 w-8 items-center justify-center rounded-md border border-default bg-default text-error transition-colors hover:border-error/40 hover:text-error'
+            deleteButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-error transition-colors hover:text-error/80'
             deleteButton.title = 'Excluir épico'
             deleteButton.addEventListener('click', (event) => {
               event.preventDefault()
@@ -1891,7 +2077,7 @@ function syncListSectionDividers() {
             deleteSvg.setAttribute('stroke-width', '2')
             deleteSvg.setAttribute('stroke-linecap', 'round')
             deleteSvg.setAttribute('stroke-linejoin', 'round')
-            deleteSvg.setAttribute('class', 'h-4 w-4')
+            deleteSvg.setAttribute('class', 'h-3.5 w-3.5')
 
             const deletePathTop = document.createElementNS('http://www.w3.org/2000/svg', 'path')
             deletePathTop.setAttribute('d', 'M3 6h18')
@@ -1987,18 +2173,28 @@ watch(
 const modalOpen = ref(false)
 const capacityModalOpen = ref(false)
 const isSavingCapacity = ref(false)
+const isSavingDemand = ref(false)
 const editingDemand = ref<RoadmapDemand | null>(null)
 const createItemType = ref<RoadmapItemType | undefined>()
+const defaultParentDemandId = ref<string | undefined>()
+const defaultProjectId = ref<string | undefined>()
+const defaultProjectIds = ref<string[]>([])
 const deleteId = ref<string | null>(null)
 const confirmDeleteOpen = ref(false)
 const roadmapParentOptions = computed(() =>
-  roadmapItems.value.map(item => ({ id: item.id, title: item.title }))
+  roadmapItems.value.map(item => ({
+    id: item.id,
+    title: item.title,
+    projectId: item.projectId,
+    projectIds: item.projectIds
+  }))
 )
 const epicParentOptions = computed(() =>
   epicItems.value.map(item => ({
     id: item.id,
     title: item.title,
     roadmapTitle: item.roadmapTitle,
+    status: item.status,
     projectId: item.projectId,
     projectIds: item.projectIds
   }))
@@ -2021,8 +2217,15 @@ const createMenuItems = computed(() => [[
   }
 ]])
 
-function openCreateModal(itemType?: RoadmapItemType) {
+function openCreateModal(
+  itemType?: RoadmapItemType,
+  parentDemandId?: string,
+  defaults?: { projectId?: string, projectIds?: string[] }
+) {
   createItemType.value = itemType
+  defaultParentDemandId.value = parentDemandId
+  defaultProjectId.value = defaults?.projectId
+  defaultProjectIds.value = defaults?.projectIds ?? []
   editingDemand.value = null
   modalOpen.value = true
 }
@@ -2055,10 +2258,32 @@ function openCapacityModal() {
 
 function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus) {
   editingDemand.value = nextStatus ? { ...demand, status: nextStatus } : demand
+  defaultParentDemandId.value = undefined
+  defaultProjectId.value = undefined
+  defaultProjectIds.value = []
   modalOpen.value = true
 }
 
 function promptDelete(id: string) {
+  const targetDemand = demands.value.find(demand => demand.id === id)
+  if (targetDemand?.itemType === 'Roadmap' && demands.value.some(demand => demand.parentDemandId === id)) {
+    toast.add({
+      title: 'Exclusão não permitida',
+      description: 'Este roadmap possui épicos vinculados e não pode ser removido.',
+      color: 'warning'
+    })
+    return
+  }
+
+  if (targetDemand?.itemType === 'Epic' && demands.value.some(demand => demand.parentDemandId === id)) {
+    toast.add({
+      title: 'Exclusão não permitida',
+      description: 'Este épico possui demandas vinculadas e não pode ser removido.',
+      color: 'warning'
+    })
+    return
+  }
+
   deleteId.value = id
   confirmDeleteOpen.value = true
 }
@@ -2128,11 +2353,74 @@ async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) 
   }
 }
 
+async function planEpicDemandsToQuarter(
+  epicId: string,
+  quarterValue: string,
+  placement?: { anchorDemandId?: string, beforeId: string | null, afterId: string | null }
+) {
+  const visibleEpicDemands = getVisibleEpicDemands(epicId)
+  if (!visibleEpicDemands.length || isBulkPlanning.value)
+    return
+
+  const [quarterNumber, quarterYear] = quarterValue.split('-').map(Number)
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  const epicTitle = visibleEpicDemands[0]?.epicTitle ?? 'Épico'
+  const targetDemandIds = new Set(visibleEpicDemands.map(demand => demand.id))
+
+  try {
+    isBulkPlanning.value = true
+
+    let updatedAnchor: RoadmapDemand | null = null
+
+    for (const demand of visibleEpicDemands) {
+      const updatedDemand = await roadmapStore.updateDemand(
+        demand.id,
+        buildDemandFormData(demand, {
+          quarterYear,
+          quarterNumber,
+          status: demand.status
+        })
+      )
+
+      if (placement?.anchorDemandId === demand.id)
+        updatedAnchor = updatedDemand
+      else if (!updatedAnchor)
+        updatedAnchor = updatedDemand
+    }
+
+    if (updatedAnchor && (placement?.beforeId || placement?.afterId)) {
+      const scopedDemandIds = getScopedDemandIds(updatedAnchor)
+      const movedIds = scopedDemandIds.filter(id => targetDemandIds.has(id))
+      const orderedDemandIds = moveDemandCluster(scopedDemandIds, movedIds, placement.beforeId, placement.afterId)
+      await roadmapStore.reorderDemand(updatedAnchor.id, updatedAnchor.status, orderedDemandIds)
+    }
+
+    await refreshListPresentation(listScrollTop, listScrollLeft)
+
+    toast.add({
+      title: 'Épico planejado no quarter',
+      description: `${epicTitle} movido para ${quarterShortLabel(quarterValue)} com ${visibleEpicDemands.length.toLocaleString('pt-BR')} demandas visíveis`,
+      color: 'success'
+    })
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    isBulkPlanning.value = false
+  }
+}
+
 async function handleSubmit(data: DemandFormData) {
+  if (isSavingDemand.value)
+    return
+
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
 
   try {
+    isSavingDemand.value = true
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
       toast.add({ title: 'Item atualizado', color: 'success' })
@@ -2146,6 +2434,9 @@ async function handleSubmit(data: DemandFormData) {
   }
   catch {
     // error handled by useApi
+  }
+  finally {
+    isSavingDemand.value = false
   }
 }
 
@@ -2198,7 +2489,7 @@ async function confirmDelete() {
 
 // ─── List view labels ──────────────────────────────────────────────────────────
 const statusLabels: Record<DemandStatus, string> = {
-  Backlog: 'Backlog', InProgress: 'Em andamento', Done: 'Concluído', Deprioritized: 'Despriorizado'
+  Backlog: 'Backlog', InProgress: 'Doing', Done: 'Concluído', Deprioritized: 'Despriorizado'
 }
 const statusTextClass: Record<DemandStatus, string> = {
   Backlog: 'text-muted',
@@ -2371,13 +2662,29 @@ const priorityRankByDemandId = computed(() => {
   return result
 })
 const selectedDemandIds = ref<string[]>([])
+const selectedEpicIds = ref<string[]>([])
 const isBulkPlanning = ref(false)
 const visibleListDemandIds = computed(() => visibleListRows.value.map(demand => demand.id))
 const selectedDemands = computed(() => {
   const selectedIds = new Set(selectedDemandIds.value)
   return demandItems.value.filter(demand => selectedIds.has(demand.id))
 })
-const selectedDemandCount = computed(() => selectedDemands.value.length)
+const selectedEpicDemands = computed(() => {
+  if (!groupDemandsByEpic.value || !selectedEpicIds.value.length)
+    return []
+
+  const selectedIds = new Set(selectedEpicIds.value)
+  return visibleListRows.value.filter(demand => demand.epicId && selectedIds.has(demand.epicId))
+})
+const selectedPlanningDemands = computed(() => {
+  const selectedById = new Map<string, RoadmapDemand>()
+
+  selectedDemands.value.forEach(demand => selectedById.set(demand.id, demand))
+  selectedEpicDemands.value.forEach(demand => selectedById.set(demand.id, demand))
+
+  return Array.from(selectedById.values())
+})
+const selectedDemandCount = computed(() => selectedPlanningDemands.value.length)
 
 const LIST_COL_MIN = 60
 
@@ -2396,7 +2703,7 @@ interface ListColMeta {
 
 const STATUS_SELECT_OPTIONS = [
   { label: 'Backlog',       value: 'Backlog' },
-  { label: 'Em andamento',  value: 'InProgress' },
+  { label: 'Doing',  value: 'InProgress' },
   { label: 'Concluído',     value: 'Done' },
   { label: 'Despriorizado', value: 'Deprioritized' },
 ]
@@ -2417,15 +2724,14 @@ const classificationBadgeClass: Record<DemandClassification, string> = {
 }
 
 const LIST_COL_DEFS: ListColMeta[] = [
-  { id: 'select',         label: '',             defaultWidth: 42, disableFilter: true, disableSorting: true },
-  { id: 'priority',       label: 'Prioridade',   defaultWidth: 76, disableFilter: true },
-  { id: 'title',          label: 'Demanda',       defaultWidth: 440, filterType: 'text' },
+  { id: 'priority',       label: 'Prioridade',   defaultWidth: 64, disableFilter: true },
+  { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text' },
   { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
-  { id: 'kpis',           label: 'KPI',           defaultWidth: 148, disableFilter: true },
-  { id: 'products',       label: 'Produtos',      defaultWidth: 118, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
+  { id: 'kpis',           label: 'KPI',           defaultWidth: 100, disableFilter: true },
+  { id: 'products',       label: 'Produtos',      defaultWidth: 148, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
-  { id: 'status',         label: 'Status',        defaultWidth: 138, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
-  { id: 'customers',      label: 'Clientes',      defaultWidth: 120, filterType: 'text' },
+  { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
+  { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'text' },
   { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
 ]
 
@@ -2503,6 +2809,9 @@ function clearListFilters() {
 function sanitizeSelectedDemands() {
   const availableIds = new Set(demandItems.value.map(demand => demand.id))
   selectedDemandIds.value = selectedDemandIds.value.filter(id => availableIds.has(id))
+
+  const availableEpicIds = new Set(visibleListRows.value.map(demand => demand.epicId).filter((value): value is string => !!value))
+  selectedEpicIds.value = selectedEpicIds.value.filter(id => availableEpicIds.has(id))
 }
 function isDemandSelected(demandId: string) {
   return selectedDemandIds.value.includes(demandId)
@@ -2517,8 +2826,25 @@ function toggleDemandSelection(demandId: string, selected: boolean) {
 
   selectedDemandIds.value = selectedDemandIds.value.filter(id => id !== demandId)
 }
+
+function isEpicSelected(epicId?: string) {
+  return !!epicId && selectedEpicIds.value.includes(epicId)
+}
+
+function toggleEpicSelection(epicId: string, selected: boolean) {
+  if (selected) {
+    if (!selectedEpicIds.value.includes(epicId))
+      selectedEpicIds.value = [...selectedEpicIds.value, epicId]
+
+    return
+  }
+
+  selectedEpicIds.value = selectedEpicIds.value.filter(id => id !== epicId)
+}
+
 function clearSelectedDemands() {
   selectedDemandIds.value = []
+  selectedEpicIds.value = []
 }
 
 async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: number | null) {
@@ -2535,17 +2861,17 @@ async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: n
 }
 
 async function planSelectedDemandsToQuarter(quarterValue: string) {
-  if (!selectedDemands.value.length || isBulkPlanning.value)
+  if (!selectedPlanningDemands.value.length || isBulkPlanning.value)
     return
 
   const [quarterNumber, quarterYear] = quarterValue.split('-').map(Number)
-  const movedCount = selectedDemands.value.length
+  const movedCount = selectedPlanningDemands.value.length
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
   isBulkPlanning.value = true
 
   try {
-    for (const demand of selectedDemands.value) {
+    for (const demand of selectedPlanningDemands.value) {
       await roadmapStore.updateDemand(
         demand.id,
         buildDemandFormData(demand, {
@@ -2559,6 +2885,7 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
     await refreshListPresentation(listScrollTop, listScrollLeft)
 
     selectedDemandIds.value = []
+    selectedEpicIds.value = []
     toast.add({
       title: 'Demandas planejadas no quarter',
       description: `${movedCount.toLocaleString('pt-BR')} demandas movidas para ${quarterShortLabel(quarterValue)}`,
@@ -2662,46 +2989,33 @@ function renderDependsOnBadge(demand: RoadmapDemand, dependency: DemandDependenc
 
 const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
   {
-    id: 'select',
-    header: '',
-    enableSorting: false,
-    enableColumnFilter: false,
-    size: 42,
-    meta: { style: { td: () => ({ width: listColWidth('select', 42) }), th: () => ({ width: listColWidth('select', 42) }) } },
-    cell: ({ row }) => {
-      const demand = row.original
-      if (isCollapsedRepresentative(demand))
-        return h('span', { class: 'block h-4 w-4' })
-
-      return h('label', { class: 'flex items-center justify-center' }, [
-        h('input', {
-          type: 'checkbox',
-          class: 'h-4 w-4 rounded border-default text-primary focus:ring-primary',
-          checked: isDemandSelected(demand.id),
-          onClick: (event: Event) => event.stopPropagation(),
-          onChange: (event: Event) => toggleDemandSelection(demand.id, (event.target as HTMLInputElement).checked)
-        })
-      ])
-    }
-  },
-  {
     id: 'priority',
     header: 'Prioridade',
     accessorFn: row => row.sortOrder,
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => left.sortOrder - right.sortOrder),
     enableColumnFilter: false,
-    size: 76,
-    meta: { style: { td: () => ({ width: listColWidth('priority', 76) }), th: () => ({ width: listColWidth('priority', 76) }) } },
+    size: 64,
+    meta: { style: { td: () => ({ width: listColWidth('priority', 64) }), th: () => ({ width: listColWidth('priority', 64) }) } },
     cell: ({ row }) => {
-      if (isCollapsedRepresentative(row.original))
+      const demand = row.original
+      if (isCollapsedRepresentative(demand))
         return h('div', { class: 'text-xs text-muted' }, '—')
 
-      return h('div', { class: 'flex items-center justify-center' }, [
+      return h('div', { class: 'flex items-center justify-center gap-1.5' }, [
         h('span', {
-          class: 'list-priority-handle inline-flex h-7 w-7 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
+          class: 'list-priority-handle inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
           title: 'Arrastar para repriorizar'
-        }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-4 w-4' })])
+        }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-3.5 w-3.5' })]),
+        h('label', { class: 'flex shrink-0 items-center justify-center' }, [
+          h('input', {
+            type: 'checkbox',
+            class: 'h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary',
+            checked: isDemandSelected(demand.id),
+            onClick: (event: Event) => event.stopPropagation(),
+            onChange: (event: Event) => toggleDemandSelection(demand.id, (event.target as HTMLInputElement).checked)
+          })
+        ])
       ])
     }
   },
@@ -2714,10 +3028,13 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     filterFn: (row, _colId, filterValue: string) => {
       const d = row.original
       const q = filterValue.trim().toLowerCase()
+      const epic = d.epicId ? itemsById.value.get(d.epicId) : null
+      const epicIssueLinks = epic?.itemType === 'Epic' ? getDisplayIssueLinks(epic) : []
       return d.title.toLowerCase().includes(q)
         || (d.description?.toLowerCase().includes(q) ?? false)
         || (d.jiraIssue?.toLowerCase().includes(q) ?? false)
         || getDisplayIssueLinks(d).some(issue => issue.key.toLowerCase().includes(q))
+        || epicIssueLinks.some(issue => issue.key.toLowerCase().includes(q))
         || (d.epicTitle?.toLowerCase().includes(q) ?? false)
         || (d.roadmapTitle?.toLowerCase().includes(q) ?? false)
     },
@@ -2810,9 +3127,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         textNodes.push(h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title))
       }
 
-      if (issueLinks.length && (!groupDemandsByEpic.value || !d.epicId)) {
-        textNodes.push(h('div', { class: 'mt-1 flex flex-wrap gap-1' },
-          issueLinks.map(issue => issue.url
+      if (!groupDemandsByEpic.value || !d.epicId) {
+        const relationshipNodes = [
+          ...issueLinks.map(issue => issue.url
             ? h('a', {
                 href: issue.url,
                 target: '_blank',
@@ -2822,28 +3139,19 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             : h('span', {
                 class: 'inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
               }, issue.key)
-          )
-        ))
-      }
-      if (d.dependsOn.length && (!groupDemandsByEpic.value || !d.epicId)) {
-        textNodes.push(
-          h('div', { class: 'mt-1 flex flex-wrap gap-1' }, [
-              ...d.dependsOn.slice(0, 2).map(dependency => renderDependsOnBadge(d, dependency)),
-              ...(d.dependsOn.length > 2
-                ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
-                : [])
-          ])
-        )
-      }
-      if (d.dependedOnBy.length && (!groupDemandsByEpic.value || !d.epicId)) {
-        textNodes.push(
-          h('div', { class: 'mt-1 flex flex-wrap gap-1' }, [
-              ...d.dependedOnBy.slice(0, 2).map(dependency => renderDependencyBadge(dependency)),
-              ...(d.dependedOnBy.length > 2
-                ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
-                : [])
-          ])
-        )
+          ),
+          ...d.dependsOn.slice(0, 2).map(dependency => renderDependsOnBadge(d, dependency)),
+          ...(d.dependsOn.length > 2
+            ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
+            : []),
+          ...d.dependedOnBy.slice(0, 2).map(dependency => renderDependencyBadge(dependency)),
+          ...(d.dependedOnBy.length > 2
+            ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
+            : [])
+        ]
+
+        if (relationshipNodes.length)
+          textNodes.push(h('div', { class: 'mt-1 flex flex-wrap items-center gap-1' }, relationshipNodes))
       }
       return h('div', { class: 'min-w-0' }, textNodes)
     },
@@ -2860,8 +3168,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       return getDemandKpiSummary(left).label.localeCompare(getDemandKpiSummary(right).label, 'pt-BR')
     }),
     enableColumnFilter: false,
-    size: 96,
-    meta: { style: { td: () => ({ width: listColWidth('kpis', 96) }), th: () => ({ width: listColWidth('kpis', 96) }) } },
+    size: 100,
+    meta: { style: { td: () => ({ width: listColWidth('kpis', 100) }), th: () => ({ width: listColWidth('kpis', 100) }) } },
     cell: ({ row }) => {
       if (isCollapsedRepresentative(row.original))
         return h('span', { class: 'text-xs text-muted' }, '—')
@@ -2869,16 +3177,18 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const summary = getDemandKpiSummary(row.original)
       const isClickable = summary.actionLabel !== 'Associe a demanda a um épico'
 
-      return h('button', {
-        type: 'button',
-        class: `inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-semibold ${summary.tone}`,
-        title: summary.actionLabel,
-        disabled: !isClickable,
-        onClick: () => {
-          if (isClickable)
-            openDemandKpiWorkspace(row.original)
-        }
-      }, summary.label)
+      return h('div', { class: 'flex min-w-0 flex-col items-start gap-1' }, [
+        h('button', {
+          type: 'button',
+          class: `inline-flex h-6 max-w-full items-center rounded-md border px-1.5 text-[10px] font-medium transition-colors hover:opacity-80 ${summary.tone}`,
+          title: summary.actionLabel,
+          disabled: !isClickable,
+          onClick: () => {
+            if (isClickable)
+              openDemandKpiWorkspace(row.original)
+          }
+        }, summary.label)
+      ])
     }
   },
   {
@@ -2928,8 +3238,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.includes(row.original.status)
     },
-    size: 138,
-    meta: { style: { td: () => ({ width: listColWidth('status', 138) }), th: () => ({ width: listColWidth('status', 138) }) } },
+    size: 124,
+    meta: { style: { td: () => ({ width: listColWidth('status', 124) }), th: () => ({ width: listColWidth('status', 124) }) } },
   },
   {
     accessorKey: 'products',
@@ -2940,8 +3250,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.some(productId => row.original.products.some(product => product.productId === productId))
     },
-    size: 118,
-    meta: { style: { td: () => ({ width: listColWidth('products', 118) }), th: () => ({ width: listColWidth('products', 118) }) } },
+    size: 124,
+    meta: { style: { td: () => ({ width: listColWidth('products', 124) }), th: () => ({ width: listColWidth('products', 124) }) } },
     cell: ({ row }) => {
       if (isCollapsedRepresentative(row.original))
         return h('span', { class: 'text-xs text-muted' }, '—')
@@ -2969,8 +3279,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const query = filterValue.trim().toLowerCase()
       return !query || getEffectiveDemandCustomers(row.original).some(customer => customer.toLowerCase().includes(query))
     },
-    size: 120,
-    meta: { style: { td: () => ({ width: listColWidth('customers', 120) }), th: () => ({ width: listColWidth('customers', 120) }) } },
+    size: 110,
+    meta: { style: { td: () => ({ width: listColWidth('customers', 110) }), th: () => ({ width: listColWidth('customers', 110) }) } },
     cell: ({ row }) => {
       if (isCollapsedRepresentative(row.original))
         return h('span', { class: 'text-xs text-muted' }, '—')
@@ -3014,7 +3324,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableSorting: false,
     enableColumnFilter: false,
     size: 112,
-    meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('_actions', 112) }), th: () => ({ width: listColWidth('_actions', 112) }) } },
+    meta: { class: { td: 'text-right overflow-visible' }, style: { td: () => ({ width: listColWidth('_actions', 112) }), th: () => ({ width: listColWidth('_actions', 112) }) } },
     cell: ({ row }) => {
       const demand = row.original
       if (isCollapsedRepresentative(demand)) {
@@ -3023,7 +3333,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             size: 'xs',
             variant: 'ghost',
             color: 'neutral',
-            class: 'rounded-md border border-default bg-default',
+            class: 'h-6 w-6 rounded-md border border-default bg-default p-0',
             onClick: () => toggleEpicCollapse(demand.epicId)
           }, {
             default: () => h(UIconComp, { name: 'i-lucide-chevron-right', class: 'h-4 w-4' })
@@ -3031,16 +3341,17 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         ])
       }
 
-      const actions = []
+      const actionSlots = []
+      const kpiSummary = getDemandKpiSummary(demand)
 
       if (isBacklogDemand(demand)) {
-        actions.push(
+        actionSlots.push(
           h(UPopoverComp, {}, {
             default: () => h(UButtonComp, {
               size: 'xs',
               variant: 'ghost',
               color: 'primary',
-              class: 'rounded-md border border-default bg-default'
+              class: 'h-6 w-6 p-0'
             }, {
               default: () => h(UIconComp, { name: 'i-lucide-calendar-range', class: 'h-4 w-4' })
             }),
@@ -3053,18 +3364,38 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           })
         )
       }
+      else {
+        actionSlots.push(h('span', { class: 'h-6 w-6' }))
+      }
 
-      actions.push(
-        h(UButtonComp, { size: 'xs', variant: 'ghost', color: 'neutral', class: 'rounded-md border border-default bg-default', onClick: () => openEditModal(demand) }, {
+      if (kpiSummary.actionLabel !== 'Associe a demanda a um épico') {
+        actionSlots.push(
+          h(UButtonComp, {
+            size: 'xs',
+            variant: 'ghost',
+            color: 'primary',
+            class: 'h-6 w-6 p-0',
+            icon: 'i-lucide-line-chart',
+            title: 'Abrir KPIs do épico',
+            onClick: () => openDemandKpiWorkspace(demand)
+          })
+        )
+      }
+      else {
+        actionSlots.push(h('span', { class: 'h-6 w-6' }))
+      }
+
+      actionSlots.push(
+        h(UButtonComp, { size: 'xs', variant: 'ghost', color: 'neutral', class: 'h-6 w-6 p-0', onClick: () => openEditModal(demand) }, {
           default: () => h(UIconComp, { name: 'i-lucide-pencil', class: 'h-4 w-4' })
         })
       )
 
-      actions.push(
-        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'rounded-md border border-default bg-default', onClick: () => promptDelete(demand.id) })
+      actionSlots.push(
+        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'h-6 w-6 p-0', onClick: () => promptDelete(demand.id) })
       )
 
-      return h('div', { class: 'flex items-center justify-end gap-1' }, actions)
+      return h('div', { class: 'ml-auto grid w-[104px] grid-cols-4 justify-items-end gap-0.5' }, actionSlots)
     },
   },
 ]
@@ -3087,7 +3418,10 @@ function buildListBlobUrl(rows: RoadmapDemand[]): string {
     if (c.id === 'kpis') return getDemandKpiSummary(row).label
     if (c.id === 'status') return getDisplayedDemandStatus(row).label
     if (c.id === 'type') return typeLabels[row.type]
-    if (c.id === 'classification') return classificationLabels[row.classification]
+    if (c.id === 'classification') {
+      const classification = getEffectiveDemandClassification(row)
+      return classification ? classificationLabels[classification] : ''
+    }
     if (c.id === 'products') return row.products.map(p => p.name).join(', ')
     if (c.id === 'customers') return formatDemandCustomers(getEffectiveDemandCustomers(row))
     if (c.id === 'hours') return isDemandEstimated(row) ? `${row.hours}h` : 'Não estimada'
@@ -3165,7 +3499,7 @@ watch(activeDemandKpiId, async (value) => {
   <div class="space-y-4">
     <template v-if="activeDemandKpiId">
       <div class="flex flex-wrap items-start justify-between gap-4">
-        <div class="space-y-2">
+        <div class="min-w-0">
           <UButton
             type="button"
             variant="ghost"
@@ -3176,9 +3510,9 @@ watch(activeDemandKpiId, async (value) => {
             @click="closeDemandKpiWorkspace"
           />
 
-          <div>
-            <h1 class="text-2xl font-bold text-highlighted">KPIs do épico</h1>
-            <p class="mt-1 text-sm text-muted">
+          <div class="mt-2">
+            <h1 class="text-lg font-semibold tracking-tight text-highlighted">KPIs do épico</h1>
+            <p class="mt-1 truncate text-xs text-muted">
               Tela dedicada para vínculo de indicadores e apuração contínua do épico.
             </p>
           </div>
@@ -3186,19 +3520,23 @@ watch(activeDemandKpiId, async (value) => {
       </div>
 
       <template v-if="activeDemandKpi">
-        <UCard :ui="{ body: 'p-5 sm:p-6' }">
-          <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <UCard :ui="{ body: 'p-4 sm:p-5' }">
+          <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
             <div class="space-y-1">
               <p class="text-xs font-semibold uppercase tracking-[0.08em] text-primary/70">Épico</p>
-              <h2 class="text-xl font-semibold text-highlighted">{{ activeDemandKpi.title }}</h2>
-              <p class="text-sm text-muted">
+              <h2 class="text-lg font-semibold text-highlighted">{{ activeDemandKpi.title }}</h2>
+              <p class="text-xs text-muted">
                 {{ selectedProject?.name ?? 'Projeto' }} · {{ activeDemandKpi.quarterLabel }}
               </p>
             </div>
 
             <div class="flex flex-wrap gap-2">
-              <UBadge variant="subtle" color="neutral">{{ statusLabels[activeDemandKpi.status] }}</UBadge>
-              <UBadge variant="subtle" color="primary">{{ classificationLabels[activeDemandKpi.classification] }}</UBadge>
+              <span class="inline-flex items-center rounded-md border px-2 py-1 text-xs font-medium" :class="statusTone[activeDemandKpi.status]">
+                {{ statusLabels[activeDemandKpi.status] }}
+              </span>
+              <span class="inline-flex items-center rounded-full border px-2 py-1 text-xs font-medium" :class="classificationBadgeClass[activeDemandKpi.classification]">
+                {{ classificationLabels[activeDemandKpi.classification] }}
+              </span>
               <UBadge v-if="activeDemandKpi.hasNoKpi" variant="subtle" color="warning">
                 {{ activeDemandKpi.noKpiClassification
                   ? `Sem KPI · ${getNoKpiClassificationLabel(activeDemandKpi.noKpiClassification)}`
@@ -3273,7 +3611,16 @@ watch(activeDemandKpiId, async (value) => {
       <div class="mt-4 flex flex-wrap items-center gap-2">
         <div class="flex items-center gap-2 flex-wrap">
           <button
-            v-for="project in projects"
+            class="px-4 py-1.5 rounded-full text-sm font-medium transition-all border"
+            :class="selectedProjectId === null
+              ? 'bg-primary text-white border-primary shadow-sm'
+              : 'border-default text-muted hover:border-primary/40 hover:text-highlighted'"
+            @click="roadmapStore.selectProject(null)"
+          >
+            Todos os projetos
+          </button>
+          <button
+            v-for="project in sortedProjects"
             :key="project.id"
             class="px-4 py-1.5 rounded-full text-sm font-medium transition-all border"
             :class="selectedProjectId === project.id
@@ -3395,12 +3742,9 @@ watch(activeDemandKpiId, async (value) => {
     <template v-else>
       <!-- ── LIST VIEW ───────────────────────────────────────────────────── -->
       <div class="overflow-hidden rounded-2xl border border-default bg-default shadow-sm">
-        <div class="border-b border-default px-3 py-3">
-          <div class="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-            <div class="flex min-w-0 items-center gap-3">
-              <h2 class="text-base font-semibold tracking-tight text-highlighted">Demandas em planejamento</h2>
-            </div>
-            <div class="flex flex-wrap items-center gap-1.5 xl:justify-end">
+        <div class="border-b border-default bg-elevated/35 px-3 py-2.5">
+          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+            <div class="flex flex-wrap items-center justify-end gap-1.5">
               <UPopover v-if="selectedDemandCount">
                 <UButton
                   size="xs"
@@ -3465,9 +3809,9 @@ watch(activeDemandKpiId, async (value) => {
                 Limpar filtros
                 <UBadge size="xs" color="primary" variant="solid" class="ml-1">{{ listColumnFilters.length }}</UBadge>
               </UButton>
-              <div class="relative">
+              <div class="relative shrink-0">
               <UButton
-                variant="ghost"
+                variant="outline"
                 size="xs"
                 trailing-icon="i-lucide-chevron-down"
                 leading-icon="i-lucide-download"
@@ -3539,7 +3883,7 @@ watch(activeDemandKpiId, async (value) => {
                       />
                       <div v-if="col.id !== '_actions' && col.id !== 'select'">
                         <UPopover v-if="col.filterType === 'multi-select'">
-                          <button class="mt-1 flex w-full items-center gap-1.5 rounded-md border border-default px-2 py-1 text-xs bg-background hover:border-primary/40 transition-colors">
+                          <button class="mt-1 flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs hover:border-primary/40 transition-colors">
                             <span class="flex-1 truncate text-left text-highlighted">{{ getListMultiFilterLabel(col) }}</span>
                             <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
                           </button>
@@ -3636,18 +3980,12 @@ watch(activeDemandKpiId, async (value) => {
                     </span>
                   </div>
                   <div
-                    v-if="getDisplayedPromisedDate(row.original)"
-                    class="flex items-center gap-1 text-[11px] text-muted"
+                    v-if="getDisplayedConclusionDate(row.original)"
+                    class="flex items-center gap-1 text-[11px]"
+                    :class="row.original.status === 'Done' && row.original.deliveryDate ? 'text-green-600 dark:text-green-400' : 'text-muted'"
                   >
-                    <UIcon name="i-lucide-calendar-clock" class="h-3 w-3" />
-                    <span>{{ formatDemandDate(getDisplayedPromisedDate(row.original)) }}</span>
-                  </div>
-                  <div
-                    v-if="row.original.status === 'Done' && row.original.deliveryDate"
-                    class="flex items-center gap-1 text-[11px] text-green-600 dark:text-green-400"
-                  >
-                    <UIcon name="i-lucide-calendar-check" class="h-3 w-3" />
-                    <span>{{ formatDemandDate(row.original.deliveryDate) }}</span>
+                    <UIcon :name="row.original.status === 'Done' && row.original.deliveryDate ? 'i-lucide-calendar-check' : 'i-lucide-calendar-clock'" class="h-3 w-3" />
+                    <span>{{ formatDemandDate(getDisplayedConclusionDate(row.original)) }}</span>
                   </div>
                   <div
                     v-if="showDemandDelayMarker(row.original)"
@@ -3820,16 +4158,19 @@ watch(activeDemandKpiId, async (value) => {
     <!-- Create / Edit modal -->
     <RoadmapDemandFormModal
       v-model:open="modalOpen"
-      :projects="projects"
+      :projects="sortedProjects"
       :dependency-options="dependencyOptions"
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
       :default-item-type="createItemType"
+      :default-parent-demand-id="defaultParentDemandId"
+      :default-project-id="defaultProjectId ?? selectedProjectId ?? undefined"
+      :default-project-ids="defaultProjectIds"
       :roadmap-options="roadmapParentOptions"
       :epic-options="epicParentOptions"
-      :default-project-id="selectedProjectId ?? undefined"
-      :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? selectedQuarterYear ?? undefined"
-      :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? selectedQuarterNumber ?? undefined"
+      :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? undefined"
+      :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? undefined"
+      :is-saving="isSavingDemand"
       @submit="handleSubmit"
     />
 

@@ -75,6 +75,20 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     dependencyOptions.value = dependencyOptions.value.filter(option => option.demandId !== demandId)
   }
 
+  function sortDemandsInStore() {
+    demands.value = [...demands.value].sort((left, right) => {
+      if (left.sortOrder !== right.sortOrder)
+        return left.sortOrder - right.sortOrder
+
+      return left.createdAt.localeCompare(right.createdAt)
+    })
+  }
+
+  function removeDemandState(id: string) {
+    demands.value = demands.value.filter(demand => demand.id !== id)
+    removeDependencyOption(id)
+  }
+
   function applyReorderedDemandState(id: string, status: DemandStatus, orderedDemandIds: string[]) {
     const movedDemand = demands.value.find(demand => demand.id === id)
     if (!movedDemand) return
@@ -122,27 +136,28 @@ export const useRoadmapStore = defineStore('roadmap', () => {
         demands.value.splice(existingIndex, 1)
 
       upsertDependencyOptionFromDemand(updatedDemand)
+      sortDemandsInStore()
       return
     }
 
     if (existingIndex >= 0) {
       demands.value.splice(existingIndex, 1, updatedDemand)
       upsertDependencyOptionFromDemand(updatedDemand)
+      sortDemandsInStore()
       return
     }
 
     demands.value.push(updatedDemand)
     upsertDependencyOptionFromDemand(updatedDemand)
+    sortDemandsInStore()
   }
 
   function syncSelectedProject() {
-    if (projects.value.length === 0) {
-      selectedProjectId.value = null
+    if (projects.value.length === 0 || !selectedProjectId.value)
       return
-    }
 
-    if (!selectedProjectId.value || !projects.value.some(project => project.id === selectedProjectId.value))
-      selectedProjectId.value = projects.value[0].id
+    if (!projects.value.some(project => project.id === selectedProjectId.value))
+      selectedProjectId.value = null
   }
 
   async function fetchProjects() {
@@ -204,10 +219,11 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   }
 
   async function fetchDemands() {
-    if (!selectedProjectId.value) return
     isLoading.value = true
     try {
-      const params = new URLSearchParams({ projectId: selectedProjectId.value })
+      const params = new URLSearchParams()
+      if (selectedProjectId.value)
+        params.set('projectId', selectedProjectId.value)
       if (selectedQuarterYear.value) params.set('quarterYear', String(selectedQuarterYear.value))
       if (selectedQuarterNumber.value) params.set('quarterNumber', String(selectedQuarterNumber.value))
       const res = await api.get<ApiResponse<RoadmapDemand[]>>(`/api/roadmap/demands?${params}`)
@@ -272,9 +288,9 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       '/api/roadmap/demands',
       body as unknown as Record<string, unknown>
     )
-    await fetchDemands()
+
     if (res.data)
-      upsertDependencyOptionFromDemand(res.data)
+      applyUpdatedDemandState(res.data)
 
     customerSuggestions.value = [...new Set([
       ...customerSuggestions.value,
@@ -290,10 +306,9 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       `/api/roadmap/demands/${id}`,
       body as unknown as Record<string, unknown>
     )
-    await fetchDemands()
 
     if (res.data)
-      upsertDependencyOptionFromDemand(res.data)
+      applyUpdatedDemandState(res.data)
 
     customerSuggestions.value = [...new Set([
       ...customerSuggestions.value,
@@ -305,8 +320,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
 
   async function deleteDemand(id: string) {
     await api.del(`/api/roadmap/demands/${id}`)
-    await fetchDemands()
-    removeDependencyOption(id)
+    removeDemandState(id)
   }
 
   async function reorderDemand(id: string, status: DemandStatus, orderedDemandIds: string[]) {
@@ -325,14 +339,16 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     const demand = demands.value.find(d => d.id === id)
     if (!demand) return
     const body = buildStatusPatchPayload(demand, status)
-    await api.put<ApiResponse<RoadmapDemand>>(
+    const res = await api.put<ApiResponse<RoadmapDemand>>(
       `/api/roadmap/demands/${id}`,
       body as unknown as Record<string, unknown>
     )
-    await fetchDemands()
+
+    if (res.data)
+      applyUpdatedDemandState(res.data)
   }
 
-  function selectProject(id: string) {
+  function selectProject(id: string | null) {
     selectedProjectId.value = id
     fetchDemands()
   }
