@@ -3,6 +3,7 @@
 ## Scope
 
 - Final quality audit of the roadmap/planning frontend changes
+- Additional final-pass audit on roadmap `Conclusão` consistency and planning table density after the latest UI refinements
 - Verification of backend standards for Correlation ID, friendly error messaging, slow alert logging, and database retry/initialization
 - Clean Code review focused on duplication, reuse, payload consistency, and cyclomatic hotspots
 - Minimum regression coverage review for the most recent roadmap fixes
@@ -50,6 +51,8 @@ Files reviewed:
 - `frontend/app/components/roadmap/DemandFormModal.vue`
 - `frontend/app/pages/roadmap.vue`
 - `frontend/app/components/roadmap/RoadmapHierarchyPage.vue`
+- `frontend/app/utils/roadmapDue.ts`
+- `frontend/app/utils/roadmapDue.test.ts`
 
 ## Findings And Corrections Applied
 
@@ -130,6 +133,76 @@ Quality impact:
 
 - The most fragile roadmap rules are now isolated in pure helpers with direct coverage
 
+### 4. Roadmap `Conclusão` mixed quarter/date rule was tied to status instead of the actual quarter
+
+Problem:
+
+- In the roadmap hierarchy, several `Demand` rows with a real quarter assigned were not showing the quarter badge in `Conclusão`.
+- The display rule depended on `status !== 'Backlog'` instead of the actual persisted quarter values.
+- That made the UI inconsistent whenever a demand carried a planned quarter but its status did not match that assumption.
+
+Correction:
+
+- Extracted reusable due helpers into `frontend/app/utils/roadmapDue.ts`.
+- Replaced the status-based condition with a quarter-based rule (`quarterYear > 0 && quarterNumber > 0`).
+- Updated all roadmap hierarchy render paths and due-search text generation to consume the same helper.
+
+Files changed:
+
+- `frontend/app/components/roadmap/RoadmapHierarchyPage.vue`
+- `frontend/app/utils/roadmapDue.ts`
+- `frontend/app/utils/roadmapDue.test.ts`
+
+Quality impact:
+
+- Correct and consistent `Conclusão` rendering
+- Better rule reuse
+- Lower risk of future UI drift between filter/search/display paths
+
+### 5. Roadmap `Conclusão` sorting compared formatted text instead of real sortable values
+
+Problem:
+
+- The hierarchy sort for `Conclusão` compared localized display text (`dd/mm` or formatted labels), not raw sortable values.
+- That could produce incorrect ordering even when the displayed values looked valid.
+
+Correction:
+
+- Added a dedicated sortable due-key builder in `frontend/app/utils/roadmapDue.ts`.
+- Updated hierarchy sorting to compare raw due/quarter keys instead of formatted display strings.
+
+Files changed:
+
+- `frontend/app/components/roadmap/RoadmapHierarchyPage.vue`
+- `frontend/app/utils/roadmapDue.ts`
+- `frontend/app/utils/roadmapDue.test.ts`
+
+Quality impact:
+
+- More reliable chronological sorting
+- Lower hidden behavioral risk in a user-facing table
+
+### 6. Planning table density improved by merging drag and selection controls
+
+Problem:
+
+- The planning table used separate columns for drag and selection, which consumed disproportionate horizontal space.
+
+Correction:
+
+- Merged drag and selection into a single column for both standard demand rows and grouped epic headers.
+- Tuned the combined column width afterward to reclaim space without sacrificing usability.
+
+Files changed:
+
+- `frontend/app/pages/roadmap.vue`
+
+Quality impact:
+
+- Better reuse of column space
+- Less visual waste
+- Simpler table structure
+
 ## Standards Status
 
 ### Correlation ID and user messaging
@@ -154,16 +227,19 @@ Quality impact:
 
 - Improved during this pass.
 - Payload construction and promised-date rules are now centralized instead of duplicated.
+- Due/conclusion display and sorting rules are now also centralized in a dedicated helper.
 
 ## Tests Added
 
 ### Frontend unit tests
 
 - Added coverage for roadmap payload and promised-date helper rules.
+- Added coverage for roadmap due/conclusion helper rules.
 
 File:
 
 - `frontend/app/utils/roadmapDemandPayload.test.ts`
+- `frontend/app/utils/roadmapDue.test.ts`
 
 ## Validation Result
 
@@ -173,6 +249,8 @@ File:
 	- `frontend/app/utils/roadmapDemandPayload.ts`
 	- `frontend/app/utils/roadmapPromisedDate.ts`
 	- `frontend/app/utils/roadmapDemandPayload.test.ts`
+	- `frontend/app/utils/roadmapDue.ts`
+	- `frontend/app/utils/roadmapDue.test.ts`
 	- `frontend/app/stores/roadmap.ts`
 	- `frontend/app/components/roadmap/DemandFormModal.vue`
 	- `frontend/app/pages/roadmap.vue`
@@ -180,12 +258,13 @@ File:
 
 ### Executable validation
 
-- Frontend focused unit test execution was attempted, but the local Node runtime is too old for the installed Vitest version and fails on the `??=` operator before running tests.
-- Backend test execution was attempted, but the environment does not have a .NET SDK installed.
+- Frontend focused unit test execution could not be completed in this environment because `pnpm` is not installed and the local Node runtime is `v14.20.1`, which is below the current project toolchain expectations.
+- Backend test execution could not be completed because no .NET SDK is installed in the current environment.
 
 Environment blockers observed:
 
-- Node runtime incompatible with current Vitest CLI syntax
+- `pnpm` missing from the current shell/session
+- Node runtime is `v14.20.1`
 - Missing .NET SDK in the current machine/session
 
 ## Residual Risks / Follow-up
@@ -198,5 +277,6 @@ Environment blockers observed:
 ## Final Status
 
 - This quality pass found and corrected concrete inconsistencies in frontend payload handling and duplicated date-derivation rules.
+- This final addendum also corrected roadmap `Conclusão` quarter display/sort inconsistencies and improved planning table density by merging drag/selection controls.
 - Correlation ID propagation, friendly error handling, slow alert logging, and database retry behavior remain aligned with the project standards based on code inspection.
 - The codebase is in a better state for reuse and maintainability than before this pass, but full executable validation is still pending environment readiness.

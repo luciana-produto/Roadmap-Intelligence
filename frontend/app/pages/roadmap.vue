@@ -897,11 +897,16 @@ const filteredDemands = computed(() => {
 const listScrollContainerRef = ref<HTMLElement | null>(null)
 const listTableRootRef = ref<HTMLElement | null>(null)
 const listViewportWidth = ref(0)
+const listHeaderScrollLeft = ref(0)
 let listBodySortable: Sortable | null = null
 let listWidthObserver: ResizeObserver | null = null
 
 function updateListViewportWidth() {
   listViewportWidth.value = listScrollContainerRef.value?.clientWidth ?? 0
+}
+
+function syncListHeaderScroll() {
+  listHeaderScrollLeft.value = listScrollContainerRef.value?.scrollLeft ?? 0
 }
 
 function moveDemandId(
@@ -2135,12 +2140,14 @@ watch(listScrollContainerRef, async (element) => {
 
   if (!element || typeof ResizeObserver === 'undefined') {
     updateListViewportWidth()
+    syncListHeaderScroll()
     await nextTick()
     syncListSectionDividers()
     return
   }
 
   updateListViewportWidth()
+  syncListHeaderScroll()
   await nextTick()
   syncListSectionDividers()
 
@@ -2857,6 +2864,7 @@ async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: n
   if (listScrollContainerRef.value && scrollTop != null) {
     listScrollContainerRef.value.scrollTop = scrollTop
     listScrollContainerRef.value.scrollLeft = scrollLeft ?? 0
+    syncListHeaderScroll()
   }
 }
 
@@ -3741,7 +3749,7 @@ watch(activeDemandKpiId, async (value) => {
 
     <template v-else>
       <!-- ── LIST VIEW ───────────────────────────────────────────────────── -->
-      <div class="overflow-hidden rounded-2xl border border-default bg-default shadow-sm">
+      <div class="overflow-visible rounded-2xl border border-default bg-default shadow-sm">
         <div class="border-b border-default bg-elevated/35 px-3 py-2.5">
           <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
             <div class="flex flex-wrap items-center justify-end gap-1.5">
@@ -3849,96 +3857,96 @@ watch(activeDemandKpiId, async (value) => {
           </div>
         </div>
 
-        <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'">
-          <div class="sticky top-0 z-10 border-b border-default bg-elevated/95 overflow-hidden">
-            <table class="table-fixed text-sm" :style="{ width: listTableWidth }">
-              <thead>
-                <tr ref="listHeaderRowRef">
-                  <th
-                    v-for="col in listOrderedCols"
-                    :key="col.id"
-                    :data-col-id="col.id"
-                    class="relative overflow-hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted"
-                    :class="col.alignRight ? 'text-right' : 'text-left'"
-                    :style="{ width: listColWidth(col.id, col.defaultWidth) }"
-                  >
-                    <span
-                      class="list-col-drag absolute left-1 top-1/2 -translate-y-1/2 cursor-grab text-muted opacity-25 hover:opacity-80 select-none"
-                      title="Arrastar coluna"
-                    >⠿</span>
-                    <div class="flex min-h-[58px] flex-col justify-between pl-2" :class="col.alignRight ? 'items-end' : ''">
-                      <span v-if="col.id === 'select'" class="block h-4 w-4" />
-                      <UButton
-                        v-else-if="col.id !== '_actions'"
-                        :color="listSorting[0]?.id === col.id ? 'primary' : 'neutral'"
-                        variant="ghost"
-                        size="xs"
-                        :label="col.label"
-                        :trailing-icon="listSorting[0]?.id === col.id
-                          ? (listSorting[0]?.desc ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up')
-                          : 'i-lucide-arrow-up-down'"
-                        class="-mx-2 text-xs font-medium"
-                        :disabled="col.disableSorting"
-                        @click="!col.disableSorting && toggleListSort(col.id)"
-                      />
-                      <div v-if="col.id !== '_actions' && col.id !== 'select'">
-                        <UPopover v-if="col.filterType === 'multi-select'">
-                          <button class="mt-1 flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs hover:border-primary/40 transition-colors">
-                            <span class="flex-1 truncate text-left text-highlighted">{{ getListMultiFilterLabel(col) }}</span>
-                            <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
-                          </button>
-                          <template #content>
-                            <div class="py-1 min-w-[220px] max-h-72 overflow-y-auto">
-                              <button
-                                class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                                :class="getListMultiFilter(col.id).length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
-                                @click="setListMultiFilter(col.id, [])"
-                              >
-                                <UIcon v-if="getListMultiFilter(col.id).length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
-                                <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                                {{ col.allLabel ?? 'Todos' }}
-                              </button>
-                              <button
-                                v-for="option in (col.id === 'quarterLabel'
-                                  ? quarterOptions
-                                  : col.id === 'products'
-                                  ? selectedProjectProducts.map(product => ({ value: product.id, label: product.name }))
-                                  : (col.selectOptions ?? []))"
-                                :key="option.value"
-                                class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                                :class="getListMultiFilter(col.id).includes(option.value) ? 'text-primary' : 'text-highlighted'"
-                                @click="toggleListMultiFilterValue(col.id, option.value)"
-                              >
-                                <UIcon v-if="getListMultiFilter(col.id).includes(option.value)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
-                                <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                                {{ option.label }}
-                              </button>
-                            </div>
-                          </template>
-                        </UPopover>
-                        <UInput
-                          v-else-if="col.filterType === 'text'"
-                          :model-value="getListColFilter(col.id)"
-                          placeholder="Filtrar…"
-                          size="xs"
-                          class="mt-1"
-                          :class="col.alignRight ? 'text-right' : ''"
-                          @update:model-value="(v: string) => setListColFilter(col.id, v)"
-                        />
-                        <div v-else class="mt-1 h-7" />
-                      </div>
-                    </div>
-                    <span
-                      v-if="col.id !== '_actions'"
-                      class="absolute right-0 top-0 h-full w-[4px] cursor-col-resize hover:bg-primary active:bg-primary select-none"
-                      @mousedown.prevent.stop="startListResize(col.id, $event)"
+        <div class="sticky top-14 z-20 overflow-hidden rounded-t-2xl border-b border-default bg-elevated/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-elevated/85 md:top-0">
+          <table class="table-fixed text-sm will-change-transform" :style="{ width: listTableWidth, transform: `translateX(-${listHeaderScrollLeft}px)` }">
+            <thead>
+              <tr ref="listHeaderRowRef">
+                <th
+                  v-for="col in listOrderedCols"
+                  :key="col.id"
+                  :data-col-id="col.id"
+                  class="relative overflow-hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted"
+                  :class="col.alignRight ? 'text-right' : 'text-left'"
+                  :style="{ width: listColWidth(col.id, col.defaultWidth) }"
+                >
+                  <span
+                    class="list-col-drag absolute left-1 top-1/2 -translate-y-1/2 cursor-grab text-muted opacity-25 hover:opacity-80 select-none"
+                    title="Arrastar coluna"
+                  >⠿</span>
+                  <div class="flex min-h-[58px] flex-col justify-between pl-2" :class="col.alignRight ? 'items-end' : ''">
+                    <span v-if="col.id === 'select'" class="block h-4 w-4" />
+                    <UButton
+                      v-else-if="col.id !== '_actions'"
+                      :color="listSorting[0]?.id === col.id ? 'primary' : 'neutral'"
+                      variant="ghost"
+                      size="xs"
+                      :label="col.label"
+                      :trailing-icon="listSorting[0]?.id === col.id
+                        ? (listSorting[0]?.desc ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up')
+                        : 'i-lucide-arrow-up-down'"
+                      class="-mx-2 text-xs font-medium"
+                      :disabled="col.disableSorting"
+                      @click="!col.disableSorting && toggleListSort(col.id)"
                     />
-                  </th>
-                </tr>
-              </thead>
-            </table>
-          </div>
+                    <div v-if="col.id !== '_actions' && col.id !== 'select'">
+                      <UPopover v-if="col.filterType === 'multi-select'">
+                        <button class="mt-1 flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs hover:border-primary/40 transition-colors">
+                          <span class="flex-1 truncate text-left text-highlighted">{{ getListMultiFilterLabel(col) }}</span>
+                          <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+                        </button>
+                        <template #content>
+                          <div class="py-1 min-w-[220px] max-h-72 overflow-y-auto">
+                            <button
+                              class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                              :class="getListMultiFilter(col.id).length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
+                              @click="setListMultiFilter(col.id, [])"
+                            >
+                              <UIcon v-if="getListMultiFilter(col.id).length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
+                              <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                              {{ col.allLabel ?? 'Todos' }}
+                            </button>
+                            <button
+                              v-for="option in (col.id === 'quarterLabel'
+                                ? quarterOptions
+                                : col.id === 'products'
+                                ? selectedProjectProducts.map(product => ({ value: product.id, label: product.name }))
+                                : (col.selectOptions ?? []))"
+                              :key="option.value"
+                              class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                              :class="getListMultiFilter(col.id).includes(option.value) ? 'text-primary' : 'text-highlighted'"
+                              @click="toggleListMultiFilterValue(col.id, option.value)"
+                            >
+                              <UIcon v-if="getListMultiFilter(col.id).includes(option.value)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
+                              <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                              {{ option.label }}
+                            </button>
+                          </div>
+                        </template>
+                      </UPopover>
+                      <UInput
+                        v-else-if="col.filterType === 'text'"
+                        :model-value="getListColFilter(col.id)"
+                        placeholder="Filtrar…"
+                        size="xs"
+                        class="mt-1 w-full min-w-0"
+                        :class="col.alignRight ? 'text-right' : ''"
+                        @update:model-value="(v: string) => setListColFilter(col.id, v)"
+                      />
+                      <div v-else class="mt-1 h-7" />
+                    </div>
+                  </div>
+                  <span
+                    v-if="col.id !== '_actions'"
+                    class="absolute right-0 top-0 h-full w-[4px] cursor-col-resize hover:bg-primary active:bg-primary select-none"
+                    @mousedown.prevent.stop="startListResize(col.id, $event)"
+                  />
+                </th>
+              </tr>
+            </thead>
+          </table>
+        </div>
 
+        <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'" @scroll="syncListHeaderScroll">
           <div ref="listTableRootRef" :style="{ width: listTableWidth }">
             <UTable
               :key="listTableKey"

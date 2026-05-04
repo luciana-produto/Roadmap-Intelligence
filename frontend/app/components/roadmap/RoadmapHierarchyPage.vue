@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { ApiResponse } from '~/types/api'
 import type { DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
+import { buildDemandDueSearchText, buildDueSortKey, hasPlannedQuarter } from '~/utils/roadmapDue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 
 type HierarchySortKey = 'item' | 'status' | 'products' | 'classification' | 'due'
+type HierarchyColumnId = 'item' | 'status' | 'products' | 'hours' | 'classification' | 'customers' | 'due' | 'kpi' | 'actions'
 
 type DisplayEpicGroup = {
   epic: RoadmapDemand
@@ -50,8 +52,99 @@ const hierarchyItemFilter = ref('')
 const hierarchyStatusFilter = ref<string[]>([])
 const hierarchyClassificationFilter = ref<string[]>([])
 const hierarchyProductsFilter = ref<string[]>([])
+const hierarchyCustomersFilter = ref('')
 const hierarchyDueFilter = ref('')
 const hierarchySort = ref<{ key: HierarchySortKey | null, direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' })
+const hierarchyTableContainerRef = ref<HTMLElement | null>(null)
+const hierarchyContainerWidth = ref(0)
+const hierarchyHeaderScrollLeft = ref(0)
+let hierarchyWidthObserver: ResizeObserver | null = null
+
+const HIERARCHY_COL_MIN = 60
+const hierarchyColumnOrder: HierarchyColumnId[] = ['item', 'status', 'products', 'hours', 'classification', 'customers', 'due', 'kpi', 'actions']
+const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
+  item: 360,
+  status: 88,
+  products: 128,
+  hours: 56,
+  classification: 104,
+  customers: 128,
+  due: 112,
+  kpi: 64,
+  actions: 116
+}
+const hierarchyColumnSizing = ref<Partial<Record<HierarchyColumnId, number>>>({})
+
+function updateHierarchyContainerWidth() {
+  hierarchyContainerWidth.value = hierarchyTableContainerRef.value?.clientWidth ?? 0
+}
+
+function syncHierarchyHeaderScroll() {
+  hierarchyHeaderScrollLeft.value = hierarchyTableContainerRef.value?.scrollLeft ?? 0
+}
+
+function getHierarchyColSize(columnId: HierarchyColumnId) {
+  if (columnId === 'item' && hierarchyColumnSizing.value.item == null) {
+    const otherColumnsTotal = hierarchyColumnOrder
+      .filter(currentColumnId => currentColumnId !== 'item')
+      .reduce((total, currentColumnId) => total + (hierarchyColumnSizing.value[currentColumnId] ?? hierarchyColumnDefaults[currentColumnId]), 0)
+
+    return Math.max(HIERARCHY_COL_MIN, hierarchyContainerWidth.value - otherColumnsTotal)
+  }
+
+  return hierarchyColumnSizing.value[columnId] ?? hierarchyColumnDefaults[columnId]
+}
+
+function getHierarchyColWidth(columnId: HierarchyColumnId) {
+  return `${getHierarchyColSize(columnId)}px`
+}
+
+function startHierarchyResize(columnId: HierarchyColumnId, event: MouseEvent) {
+  event.preventDefault()
+  event.stopPropagation()
+
+  const startX = event.clientX
+  const startWidth = getHierarchyColSize(columnId)
+
+  const onMove = (moveEvent: MouseEvent) => {
+    hierarchyColumnSizing.value = {
+      ...hierarchyColumnSizing.value,
+      [columnId]: Math.max(HIERARCHY_COL_MIN, startWidth + (moveEvent.clientX - startX))
+    }
+  }
+
+  const onUp = () => {
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+  }
+
+  window.addEventListener('mousemove', onMove)
+  window.addEventListener('mouseup', onUp)
+}
+
+watch(hierarchyTableContainerRef, async (element) => {
+  hierarchyWidthObserver?.disconnect()
+  hierarchyWidthObserver = null
+
+  if (!element || typeof ResizeObserver === 'undefined') {
+    updateHierarchyContainerWidth()
+    syncHierarchyHeaderScroll()
+    return
+  }
+
+  updateHierarchyContainerWidth()
+  syncHierarchyHeaderScroll()
+  await nextTick()
+
+  hierarchyWidthObserver = new ResizeObserver(() => {
+    updateHierarchyContainerWidth()
+  })
+  hierarchyWidthObserver.observe(element)
+}, { flush: 'post' })
+
+onUnmounted(() => {
+  hierarchyWidthObserver?.disconnect()
+})
 
 const allRoadmapItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Roadmap'))
 const allEpicItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Epic'))
@@ -355,6 +448,33 @@ function getProductNames(item: Pick<RoadmapDemand, 'products'>) {
   return getProductEntries(item).map(product => product.label)
 }
 
+function normalizeCustomers(customers?: string[]) {
+  return (customers ?? []).map(customer => customer.trim()).filter(Boolean)
+}
+
+function getDisplayedCustomers(item: RoadmapDemand) {
+  if (item.itemType === 'Epic')
+    return normalizeCustomers(item.customers)
+
+  if (item.itemType === 'Demand' && item.epicId)
+    return normalizeCustomers(epicById.value.get(item.epicId)?.customers)
+
+  return normalizeCustomers(item.customers)
+}
+
+function getCustomersLine(customers: string[]) {
+  return customers.join(' · ')
+}
+
+function getRoadmapGroupCustomerNames(epics: RoadmapDemand[]) {
+  return Array.from(new Set(
+    epics.flatMap(epic => [
+      ...getDisplayedCustomers(epic),
+      ...getDemandsForEpic(epic.id).flatMap(demand => getDisplayedCustomers(demand))
+    ])
+  ))
+}
+
 function getProductNamesLine(names: string[]) {
   return names.join(' · ')
 }
@@ -493,15 +613,8 @@ function normalizeSearchText(value?: string | null) {
   return (value ?? '').trim().toLowerCase()
 }
 
-function hasPlannedQuarter(item: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber'>) {
-  return item.quarterYear > 0 && item.quarterNumber > 0
-}
-
 function getDemandDueSearchText(demand: RoadmapDemand) {
-  return [hasPlannedQuarter(demand) ? demand.quarterLabel : '', formatDate(getDisplayedConclusionDate(demand))]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
+  return buildDemandDueSearchText(demand, formatDate(getDisplayedConclusionDate(demand)))
 }
 
 function getDisplayedConclusionDate(item: RoadmapDemand) {
@@ -520,9 +633,10 @@ function matchesTextFilter(haystackParts: Array<string | undefined>, query: stri
 
 function matchesHierarchyFilters(
   item: RoadmapDemand,
-  options?: { products?: string[], classification?: string, dueText?: string }
+  options?: { products?: string[], classification?: string, customerText?: string, dueText?: string }
 ) {
   const itemQuery = normalizeSearchText(hierarchyItemFilter.value)
+  const customerQuery = normalizeSearchText(hierarchyCustomersFilter.value)
   const dueQuery = normalizeSearchText(hierarchyDueFilter.value)
 
   if (hierarchyStatusFilter.value.length && !hierarchyStatusFilter.value.includes(item.status))
@@ -548,6 +662,9 @@ function matchesHierarchyFilters(
     return false
 
   if (hierarchyProductsFilter.value.length && !hierarchyProductsFilter.value.some(productId => options?.products?.includes(productId)))
+    return false
+
+  if (!matchesTextFilter([options?.customerText], customerQuery))
     return false
 
   if (!matchesTextFilter([options?.dueText], dueQuery))
@@ -610,8 +727,8 @@ function sortItems(items: RoadmapDemand[], level: 'roadmap' | 'epic' | 'demand')
         return applySortDirection(compareText(leftClassification, rightClassification))
       }
       case 'due': {
-        const leftDue = left.itemType === 'Demand' ? getDemandDueSearchText(left) : formatDate(getDisplayedConclusionDate(left))
-        const rightDue = right.itemType === 'Demand' ? getDemandDueSearchText(right) : formatDate(getDisplayedConclusionDate(right))
+        const leftDue = buildDueSortKey(getDisplayedConclusionDate(left), left)
+        const rightDue = buildDueSortKey(getDisplayedConclusionDate(right), right)
         return applySortDirection(compareDates(leftDue, rightDue))
       }
       default:
@@ -652,6 +769,7 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
       const hasActiveProductFilter = hierarchyProductsFilter.value.length > 0
       const roadmapMatches = matchesHierarchyFilters(roadmap, {
         products: getRoadmapGroupProductEntries(sourceEpics).map(product => product.value),
+        customerText: getCustomersLine(getRoadmapGroupCustomerNames(sourceEpics)),
         dueText: formatDate(getDisplayedConclusionDate(roadmap))
       })
 
@@ -669,6 +787,7 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
           const epicMatches = matchesHierarchyFilters(epic, {
             products: getEpicDisplayProductEntries(epic).map(product => product.value),
             classification: classificationLabels[epic.classification],
+            customerText: getCustomersLine(getDisplayedCustomers(epic)),
             dueText: formatDate(getDisplayedConclusionDate(epic))
           })
 
@@ -676,6 +795,7 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
             .filter(demand => matchesHierarchyFilters(demand, {
               products: getProductEntries(demand).map(product => product.value),
               classification: classificationLabels[getDisplayedClassification(demand)],
+              customerText: getCustomersLine(getDisplayedCustomers(demand)),
               dueText: getDemandDueSearchText(demand)
             }))
 
@@ -706,6 +826,7 @@ const displayOrphanEpics = computed(() =>
   sortItems(orphanEpics.value, 'epic').filter(epic => matchesHierarchyFilters(epic, {
     products: getEpicDisplayProductEntries(epic).map(product => product.value),
     classification: classificationLabels[epic.classification],
+    customerText: getCustomersLine(getDisplayedCustomers(epic)),
     dueText: formatDate(getDisplayedConclusionDate(epic))
   }))
 )
@@ -714,6 +835,7 @@ const displayOrphanDemands = computed(() =>
   sortItems(orphanDemands.value, 'demand').filter(demand => matchesHierarchyFilters(demand, {
     products: getProductEntries(demand).map(product => product.value),
     classification: classificationLabels[getDisplayedClassification(demand)],
+    customerText: getCustomersLine(getDisplayedCustomers(demand)),
     dueText: getDemandDueSearchText(demand)
   }))
 )
@@ -1131,50 +1253,59 @@ await loadPageData()
         Nenhum item encontrado para o projeto selecionado.
       </div>
 
-      <div v-else class="overflow-hidden rounded-2xl border border-default bg-default shadow-sm">
-        <div class="overflow-x-auto">
-          <table class="min-w-[1080px] w-full table-fixed border-separate border-spacing-0 text-[13px]">
+      <div v-else class="overflow-visible rounded-2xl border border-default bg-default shadow-sm">
+        <div class="sticky top-14 z-20 overflow-hidden rounded-t-2xl border-b border-default bg-elevated/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-elevated/85 md:top-0">
+          <table class="w-full table-fixed border-separate border-spacing-0 text-[13px] will-change-transform" :style="{ transform: `translateX(-${hierarchyHeaderScrollLeft}px)` }">
+            <colgroup>
+              <col v-for="columnId in hierarchyColumnOrder" :key="columnId" :style="{ width: getHierarchyColWidth(columnId) }">
+            </colgroup>
             <thead>
               <tr class="bg-elevated/80 text-left text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
-                <th class="sticky top-0 z-10 border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('item') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('item')">
                     <span>Item</span>
                     <UIcon :name="getHierarchySortIcon('item')" class="h-3.5 w-3.5" />
                   </button>
+                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('item', $event)" />
                 </th>
-                <th class="sticky top-0 z-10 w-[120px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('status') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('status')">
                     <span>Status</span>
                     <UIcon :name="getHierarchySortIcon('status')" class="h-3.5 w-3.5" />
                   </button>
+                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('status', $event)" />
                 </th>
-                <th class="sticky top-0 z-10 w-[210px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('products') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('products')">
                     <span>Produtos</span>
                     <UIcon :name="getHierarchySortIcon('products')" class="h-3.5 w-3.5" />
                   </button>
+                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('products', $event)" />
                 </th>
-                <th class="sticky top-0 z-10 w-[86px] border-b border-default px-3 py-2 bg-elevated/95">Horas</th>
-                <th class="sticky top-0 z-10 w-[150px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('hours') }">HR<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('hours', $event)" /></th>
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('classification') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('classification')">
                     <span>Classificação</span>
                     <UIcon :name="getHierarchySortIcon('classification')" class="h-3.5 w-3.5" />
                   </button>
+                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('classification', $event)" />
                 </th>
-                <th class="sticky top-0 z-10 w-[130px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('customers') }">Clientes<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('customers', $event)" /></th>
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('due') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('due')">
                     <span>Conclusão</span>
                     <UIcon :name="getHierarchySortIcon('due')" class="h-3.5 w-3.5" />
                   </button>
+                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('due', $event)" />
                 </th>
-                <th class="sticky top-0 z-10 w-[96px] border-b border-default px-2 py-2 bg-elevated/95">KPI</th>
-                <th class="sticky top-0 z-10 w-[132px] border-b border-default px-3 py-2 text-right bg-elevated/95">Ações</th>
+                <th class="relative border-b border-default bg-elevated/95 px-2 py-2" :style="{ width: getHierarchyColWidth('kpi') }">KPI<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('kpi', $event)" /></th>
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2 text-right" :style="{ width: getHierarchyColWidth('actions') }">Ações<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('actions', $event)" /></th>
               </tr>
               <tr class="bg-elevated/60 text-left text-[11px] text-muted">
-                <th class="sticky top-[37px] z-10 border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('item') }">
                   <input v-model="hierarchyItemFilter" type="text" placeholder="Filtrar..." class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
                 </th>
-                <th class="sticky top-[37px] z-10 w-[120px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('status') }">
                   <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                     <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
                       <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyStatusFilterLabel }}</span>
@@ -1196,7 +1327,7 @@ await loadPageData()
                     </template>
                   </UPopover>
                 </th>
-                <th class="sticky top-[37px] z-10 w-[210px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('products') }">
                   <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                     <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
                       <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyProductsFilterLabel }}</span>
@@ -1218,8 +1349,8 @@ await loadPageData()
                     </template>
                   </UPopover>
                 </th>
-                <th class="sticky top-[37px] z-10 w-[86px] border-b border-default px-3 py-2 bg-elevated/95" />
-                <th class="sticky top-[37px] z-10 w-[150px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('hours') }" />
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('classification') }">
                   <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                     <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
                       <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyClassificationFilterLabel }}</span>
@@ -1241,24 +1372,36 @@ await loadPageData()
                     </template>
                   </UPopover>
                 </th>
-                <th class="sticky top-[37px] z-10 w-[130px] border-b border-default px-3 py-2 bg-elevated/95">
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('customers') }">
+                  <input v-model="hierarchyCustomersFilter" type="text" placeholder="Clientes" class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
+                </th>
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('due') }">
                   <input v-model="hierarchyDueFilter" type="text" placeholder="Quarter/Data" class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
                 </th>
-                <th class="sticky top-[37px] z-10 w-[96px] border-b border-default px-2 py-2 bg-elevated/95" />
-                <th class="sticky top-[37px] z-10 w-[132px] border-b border-default px-3 py-2 bg-elevated/95" />
+                <th class="border-b border-default bg-elevated/95 px-2 py-2" :style="{ width: getHierarchyColWidth('kpi') }" />
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('actions') }" />
               </tr>
             </thead>
 
+          </table>
+        </div>
+
+        <div ref="hierarchyTableContainerRef" class="overflow-x-auto overflow-y-visible" @scroll="syncHierarchyHeaderScroll">
+          <table class="w-full table-fixed border-separate border-spacing-0 text-[13px]">
+            <colgroup>
+              <col v-for="columnId in hierarchyColumnOrder" :key="columnId" :style="{ width: getHierarchyColWidth(columnId) }">
+            </colgroup>
+
             <tbody>
               <tr v-if="!displayRoadmapGroups.length && !displayOrphanEpics.length && !displayOrphanDemands.length">
-                <td colspan="8" class="px-5 py-12 text-center text-sm text-muted">
+                <td colspan="9" class="px-5 py-12 text-center text-sm text-muted">
                   Nenhum item encontrado para os filtros aplicados.
                 </td>
               </tr>
 
               <template v-for="group in displayRoadmapGroups" :key="group.roadmap.id">
                 <tr class="border-b border-default bg-default hover:bg-elevated/30 transition-colors">
-                  <td class="w-[240px] border-b border-default px-3 py-2 align-top">
+                  <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
                     <div class="flex items-start gap-1.5">
                       <button
                         type="button"
@@ -1300,32 +1443,36 @@ await loadPageData()
                     </span>
                   </td>
 
-                    <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
-                      <p v-if="getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)))">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                      <p v-if="getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)))">
                       {{ getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic))) }}
                     </p>
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                  <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                     <span v-if="getDisplayedHours(group.roadmap) !== null">{{ getDisplayedHours(group.roadmap) }}h</span>
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top">
+                  <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                     <span class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                  <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                    <span class="text-xs text-muted">—</span>
+                  </td>
+
+                  <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                     {{ formatDate(getDisplayedConclusionDate(group.roadmap)) }}
                   </td>
 
-                  <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                  <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                     <span class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="w-[132px] border-b border-default px-3 py-2 align-top">
-                      <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
                         <span class="h-6 w-6" />
                       <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Novo épico" @click="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
                       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar roadmap" @click="openEditModal(group.roadmap)" />
@@ -1338,7 +1485,7 @@ await loadPageData()
                   v-if="!group.epics.length && !isRoadmapCollapsed(group.roadmap.id)"
                   class="bg-elevated/10"
                 >
-                  <td colspan="8" class="border-b border-default px-3 py-3 text-xs text-muted">
+                  <td colspan="9" class="border-b border-default px-3 py-3 text-xs text-muted">
                     Nenhum épico vinculado a este roadmap ainda.
                   </td>
                 </tr>
@@ -1348,7 +1495,7 @@ await loadPageData()
                     v-show="!isRoadmapCollapsed(group.roadmap.id)"
                     class="bg-elevated/10 hover:bg-elevated/20 transition-colors"
                   >
-                    <td class="border-b border-default px-3 py-2 align-top">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
                       <div class="flex items-start gap-1.5 pl-8">
                         <button
                           type="button"
@@ -1390,35 +1537,42 @@ await loadPageData()
                       </div>
                     </td>
 
-                    <td class="w-[120px] border-b border-default px-3 py-2 align-top">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
                       <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[epicEntry.epic.status]">
                         {{ statusLabels[epicEntry.epic.status] }}
                       </span>
                     </td>
 
-                    <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
-                      <p v-if="getEpicDisplayProductNames(epicEntry.epic).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic))">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                      <p v-if="getEpicDisplayProductNames(epicEntry.epic).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic))">
                         {{ getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic)) }}
                       </p>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                       <span v-if="getDisplayedHours(epicEntry.epic) !== null">{{ getDisplayedHours(epicEntry.epic) }}h</span>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                       <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epicEntry.epic.classification]">
                         {{ classificationLabels[epicEntry.epic.classification] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                      <p v-if="getDisplayedCustomers(epicEntry.epic).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(epicEntry.epic))">
+                        {{ getCustomersLine(getDisplayedCustomers(epicEntry.epic)) }}
+                      </p>
+                      <span v-else class="text-xs text-muted">—</span>
+                    </td>
+
+                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                       {{ formatDate(getDisplayedConclusionDate(epicEntry.epic)) }}
                     </td>
 
-                    <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                    <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <div class="flex min-w-0 flex-col items-start gap-1">
                         <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
                           {{ getKpiSummary(epicEntry.epic).label }}
@@ -1429,8 +1583,8 @@ await loadPageData()
                       </div>
                     </td>
 
-                    <td class="w-[132px] border-b border-default px-3 py-2 align-top">
-                      <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
                         <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epicEntry.epic)" />
                         <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Nova demanda" @click="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
                         <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epicEntry.epic)" />
@@ -1472,31 +1626,38 @@ await loadPageData()
                       </div>
                     </td>
 
-                    <td class="w-[120px] border-b border-default px-3 py-2 align-top">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
                       <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[demand.status]">
                         {{ statusLabels[demand.status] }}
                       </span>
                     </td>
 
-                    <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
-                      <p v-if="getProductNames(demand).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                      <p v-if="getProductNames(demand).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
                         {{ getProductNamesLine(getProductNames(demand)) }}
                       </p>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                       <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                       <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]">
                         {{ classificationLabels[getDisplayedClassification(demand)] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                      <p v-if="getDisplayedCustomers(demand).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(demand))">
+                        {{ getCustomersLine(getDisplayedCustomers(demand)) }}
+                      </p>
+                      <span v-else class="text-xs text-muted">—</span>
+                    </td>
+
+                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                       <div class="flex flex-col gap-0.5">
                         <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex max-w-fit items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-highlighted">
                           {{ demand.quarterLabel }}
@@ -1510,12 +1671,12 @@ await loadPageData()
                       </div>
                     </td>
 
-                    <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                    <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <span class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="w-[132px] border-b border-default px-3 py-2 align-top">
-                      <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
                         <span class="h-6 w-6" />
                         <span class="h-6 w-6" />
                         <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar demanda" @click="openEditModal(demand)" />
@@ -1527,7 +1688,7 @@ await loadPageData()
               </template>
 
               <tr v-if="displayOrphanEpics.length" class="bg-elevated/60">
-                <td colspan="8" class="border-b border-default px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+                <td colspan="9" class="border-b border-default px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Épicos sem roadmap visível
                 </td>
               </tr>
@@ -1537,7 +1698,7 @@ await loadPageData()
                 :key="`orphan-${epic.id}`"
                 class="bg-rose-50/30 hover:bg-rose-50/50 dark:bg-rose-950/10 dark:hover:bg-rose-950/20 transition-colors"
               >
-                <td class="border-b border-default px-3 py-2 align-top">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
                   <div class="flex items-start gap-1.5">
                     <UIcon name="i-lucide-triangle-alert" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-500" />
                     <div class="min-w-0 flex-1">
@@ -1561,30 +1722,36 @@ await loadPageData()
                     </div>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
+                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
                   <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[epic.status]">
                     {{ statusLabels[epic.status] }}
                   </span>
                 </td>
-                <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
-                  <p v-if="getEpicDisplayProductNames(epic).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epic))">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                  <p v-if="getEpicDisplayProductNames(epic).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epic))">
                     {{ getProductNamesLine(getEpicDisplayProductNames(epic)) }}
                   </p>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                   <span v-if="getDisplayedHours(epic) !== null">{{ getDisplayedHours(epic) }}h</span>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                   <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epic.classification]">
                     {{ classificationLabels[epic.classification] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                  <p v-if="getDisplayedCustomers(epic).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(epic))">
+                    {{ getCustomersLine(getDisplayedCustomers(epic)) }}
+                  </p>
+                  <span v-else class="text-xs text-muted">—</span>
+                </td>
+                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                   {{ formatDate(getDisplayedConclusionDate(epic)) }}
                 </td>
-                <td class="border-b border-default px-2 py-2 align-top w-[92px]">
+                <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <div class="flex min-w-0 flex-col items-start gap-1">
                     <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
                       {{ getKpiSummary(epic).label }}
@@ -1594,8 +1761,8 @@ await loadPageData()
                     </span>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
-                  <div class="grid w-[144px] grid-cols-4 justify-items-end gap-1 ml-auto">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
                     <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epic)" />
                     <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Nova demanda" @click="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
                     <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epic)" />
@@ -1605,7 +1772,7 @@ await loadPageData()
               </tr>
 
               <tr v-if="displayOrphanDemands.length" class="bg-elevated/60">
-                <td colspan="8" class="border-b border-default px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
+                <td colspan="9" class="border-b border-default px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">
                   Demandas sem épico visível
                 </td>
               </tr>
@@ -1615,7 +1782,7 @@ await loadPageData()
                 :key="`orphan-demand-${demand.id}`"
                 class="bg-sky-50/20 hover:bg-sky-50/40 dark:bg-sky-950/10 dark:hover:bg-sky-950/20 transition-colors"
               >
-                <td class="border-b border-default px-3 py-2 align-top">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
                   <div class="flex items-start gap-1.5">
                     <UIcon name="i-lucide-link-2-off" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" />
                     <div class="min-w-0 flex-1">
@@ -1645,27 +1812,33 @@ await loadPageData()
                     </div>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
                   <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[demand.status]">
                     {{ statusLabels[demand.status] }}
                   </span>
                 </td>
-                <td class="w-[210px] max-w-[210px] border-b border-default px-3 py-2 align-top">
-                  <p v-if="getProductNames(demand).length" class="max-w-[190px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                  <p v-if="getProductNames(demand).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
                     {{ getProductNamesLine(getProductNames(demand)) }}
                   </p>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="w-[86px] border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                   <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                   <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]">
                     {{ classificationLabels[getDisplayedClassification(demand)] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                  <p v-if="getDisplayedCustomers(demand).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(demand))">
+                    {{ getCustomersLine(getDisplayedCustomers(demand)) }}
+                  </p>
+                  <span v-else class="text-xs text-muted">—</span>
+                </td>
+                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                   <div class="flex flex-col gap-0.5">
                     <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex max-w-fit items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-highlighted">
                       {{ demand.quarterLabel }}
@@ -1678,11 +1851,11 @@ await loadPageData()
                     </span>
                   </div>
                 </td>
-                <td class="w-[96px] border-b border-default px-2 py-2 align-top">
+                <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <span class="text-xs text-muted">—</span>
                 </td>
-                <td class="w-[132px] border-b border-default px-3 py-2 align-top">
-                  <div class="ml-auto grid w-[120px] grid-cols-4 justify-items-end gap-1">
+                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
                     <span class="h-6 w-6" />
                     <span class="h-6 w-6" />
                     <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar demanda" @click="openEditModal(demand)" />
