@@ -8,6 +8,7 @@ import {
   sanitizeIssueLinksForItem,
   sanitizePromisedDateForItem
 } from '~/utils/roadmapDemandPayload'
+import { PRIORITIZED_BACKLOG_QUARTER } from '~/utils/roadmapQuarter'
 import { getLatestPromisedDate, getQuarterFallbackPromisedDate } from '~/utils/roadmapPromisedDate'
 
 function createBaseFormData(overrides: Partial<DemandFormData> = {}): DemandFormData {
@@ -32,6 +33,7 @@ function createBaseFormData(overrides: Partial<DemandFormData> = {}): DemandForm
 describe('roadmapDemandPayload', () => {
   it('identifies backlog demand correctly', () => {
     expect(isBacklogDemand('Demand', 0, 0)).toBe(true)
+    expect(isBacklogDemand('Demand', PRIORITIZED_BACKLOG_QUARTER.year, PRIORITIZED_BACKLOG_QUARTER.number)).toBe(true)
     expect(isBacklogDemand('Epic', 0, 0)).toBe(false)
     expect(isBacklogDemand('Demand', 2026, 2)).toBe(false)
   })
@@ -44,6 +46,7 @@ describe('roadmapDemandPayload', () => {
 
   it('clears promised date for backlog demand only', () => {
     expect(sanitizePromisedDateForItem('Demand', 0, 0, '2026-05-10')).toBeUndefined()
+    expect(sanitizePromisedDateForItem('Demand', PRIORITIZED_BACKLOG_QUARTER.year, PRIORITIZED_BACKLOG_QUARTER.number, '2026-05-10')).toBeUndefined()
     expect(sanitizePromisedDateForItem('Epic', 0, 0, '2026-05-10')).toBe('2026-05-10')
     expect(sanitizePromisedDateForItem('Demand', 2026, 2, ' 2026-05-10 ')).toBe('2026-05-10')
   })
@@ -60,7 +63,15 @@ describe('roadmapDemandPayload', () => {
       projectIds: [],
       customers: [],
       promisedDate: undefined,
-      jiraIssue: 'DEM-123'
+      jiraIssue: 'DEM-123',
+      status: 'Backlog'
+    })
+
+    expect(buildCreateDemandPayload({
+      ...payload,
+      status: 'InProgress'
+    })).toMatchObject({
+      status: 'InProgress'
     })
 
     expect(buildUpdateDemandPayload('demand-1', payload)).toMatchObject({
@@ -118,6 +129,11 @@ describe('roadmapDemandPayload', () => {
     expect(getLatestPromisedDate([
       { quarterYear: 2026, quarterNumber: 2, promisedDate: '2026-06-10' },
       { quarterYear: 0, quarterNumber: 0 }
+    ])).toBe('')
+
+    expect(getLatestPromisedDate([
+      { quarterYear: 2026, quarterNumber: 2, promisedDate: '2026-06-10' },
+      { quarterYear: PRIORITIZED_BACKLOG_QUARTER.year, quarterNumber: PRIORITIZED_BACKLOG_QUARTER.number }
     ])).toBe('')
   })
 })

@@ -54,6 +54,7 @@ const persistedKpiLinksState = ref<DemandKpiLink[]>([])
 const kpiLinkDrafts = ref<KpiLinkDraftState[]>([])
 const kpiMeasurements = ref<KpiMeasurement[]>([])
 const measurementDrafts = ref<Record<string, MeasurementEditorState>>({})
+const measurementReferenceDrafts = ref<Record<string, string>>({})
 const isSavingSetup = ref(false)
 const kpiLinkSavingDraftId = ref<string | null>(null)
 const kpiLinkDeletingId = ref<string | null>(null)
@@ -61,6 +62,8 @@ const editingPersistedKpiLinkId = ref<string | null>(null)
 const measurementSavingKpiId = ref<string | null>(null)
 const measurementDeletingId = ref<string | null>(null)
 const helpModalType = ref<'confidence' | 'kpi-catalog' | null>(null)
+const measurementReferenceModalLinkId = ref<string | null>(null)
+const deleteConfirmation = ref<{ type: 'kpi-link' | 'measurement', id: string } | null>(null)
 
 type AutomaticMeasurementResult = MeasurementResult
 
@@ -166,6 +169,9 @@ watch(() => props.demand, (demand) => {
   kpiLinkDrafts.value = []
   kpiMeasurements.value = sortMeasurements(demand?.kpiMeasurements ?? [])
   measurementDrafts.value = {}
+  measurementReferenceDrafts.value = Object.fromEntries(
+    (demand?.kpiLinks ?? []).map(link => [link.id, link.measurementReferenceUrl ?? ''])
+  )
 }, { immediate: true })
 
 watch(() => formState.hasNoKpi, (hasNoKpi) => {
@@ -324,6 +330,7 @@ function toEditableKpiLink(link?: Partial<DemandKpiLinkInput>): EditableDemandKp
     impactType: link?.impactType ?? 'Increase',
     estimatedImpact,
     confidenceLevel: link?.confidenceLevel ?? 'Medium',
+    measurementReferenceUrl: link?.measurementReferenceUrl ?? '',
     impactDisplayType,
     estimatedImpactInput: formatEstimatedImpactInput(estimatedImpact),
     observationInput: link?.observation ?? ''
@@ -409,6 +416,27 @@ function updateDraftObservation(draftId: string, value: string | number | null |
     return
 
   draft.observationInput = String(value ?? '')
+}
+
+function updateMeasurementReferenceDraft(linkId: string, value: string | number | null | undefined) {
+  measurementReferenceDrafts.value = {
+    ...measurementReferenceDrafts.value,
+    [linkId]: String(value ?? '')
+  }
+}
+
+function syncDemandInStore(patch: Partial<Pick<RoadmapDemand, 'hasNoKpi' | 'noKpiClassification' | 'kpiLinks' | 'kpiMeasurements'>>) {
+  if (!props.demand?.id)
+    return
+
+  const demandIndex = roadmapStore.demands.findIndex(demand => demand.id === props.demand?.id)
+  if (demandIndex < 0)
+    return
+
+  roadmapStore.demands.splice(demandIndex, 1, {
+    ...roadmapStore.demands[demandIndex]!,
+    ...patch
+  })
 }
 
 function getKpiById(kpiId: string) {
@@ -592,7 +620,8 @@ async function saveKpiSetup() {
           impactType: link.impactType,
           estimatedImpact: link.estimatedImpact,
           confidenceLevel: link.confidenceLevel,
-          observation: link.observation
+          observation: link.observation,
+          measurementReferenceUrl: link.measurementReferenceUrl
         }))
 
     await roadmapStore.updateDemand(props.demand.id, buildDemandFormData(props.demand, {
@@ -601,7 +630,15 @@ async function saveKpiSetup() {
     }))
 
     persistedKpiLinksState.value = await kpiStore.updateDemandKpiLinks(props.demand.id, validLinks)
-    await roadmapStore.fetchDemands()
+    measurementReferenceDrafts.value = Object.fromEntries(
+      persistedKpiLinksState.value.map(link => [link.id, link.measurementReferenceUrl ?? ''])
+    )
+    syncDemandInStore({
+      hasNoKpi: formState.hasNoKpi,
+      noKpiClassification: formState.hasNoKpi ? formState.noKpiClassification : undefined,
+      kpiLinks: persistedKpiLinksState.value,
+      kpiMeasurements: formState.hasNoKpi ? [] : kpiMeasurements.value
+    })
     toast.add({ title: 'Registro de KPI atualizado', color: 'success' })
   }
   catch {
@@ -616,13 +653,15 @@ async function persistKpiLinks(links: DemandKpiLinkInput[]) {
   if (!props.demand)
     return
 
-  await roadmapStore.updateDemand(props.demand.id, buildDemandFormData(props.demand, {
-    hasNoKpi: formState.hasNoKpi,
-    noKpiClassification: formState.hasNoKpi ? formState.noKpiClassification : undefined
-  }))
-
   persistedKpiLinksState.value = await kpiStore.updateDemandKpiLinks(props.demand.id, links)
-  await roadmapStore.fetchDemands()
+  measurementReferenceDrafts.value = Object.fromEntries(
+    persistedKpiLinksState.value.map(link => [link.id, link.measurementReferenceUrl ?? ''])
+  )
+  syncDemandInStore({
+    hasNoKpi: formState.hasNoKpi,
+    noKpiClassification: formState.hasNoKpi ? formState.noKpiClassification : undefined,
+    kpiLinks: persistedKpiLinksState.value
+  })
 }
 
 async function recalculateMeasurementResults(kpiId: string) {
@@ -673,14 +712,16 @@ async function saveKpiLinkDraft(draftId: string) {
         impactType: link.impactType,
         estimatedImpact: link.estimatedImpact,
         confidenceLevel: link.confidenceLevel,
-        observation: link.observation
+        observation: link.observation,
+        measurementReferenceUrl: link.measurementReferenceUrl
       })),
       {
         kpiId: draft.kpiId,
         impactType: draft.impactType,
         estimatedImpact: draft.estimatedImpact,
         confidenceLevel: draft.confidenceLevel,
-        observation: draft.observationInput || undefined
+        observation: draft.observationInput || undefined,
+        measurementReferenceUrl: undefined
       }
     ]
 
@@ -697,7 +738,7 @@ async function saveKpiLinkDraft(draftId: string) {
   }
 }
 
-async function deletePersistedKpiLink(linkId: string) {
+async function executeDeletePersistedKpiLink(linkId: string) {
   if (!props.demand)
     return
 
@@ -711,7 +752,8 @@ async function deletePersistedKpiLink(linkId: string) {
         impactType: link.impactType,
         estimatedImpact: link.estimatedImpact,
         confidenceLevel: link.confidenceLevel,
-        observation: link.observation
+        observation: link.observation,
+        measurementReferenceUrl: link.measurementReferenceUrl
       }))
 
     await persistKpiLinks(nextLinks)
@@ -736,7 +778,8 @@ function startEditPersistedKpiLink(link: DemandKpiLink) {
       impactType: link.impactType,
       estimatedImpact: link.estimatedImpact,
       confidenceLevel: link.confidenceLevel,
-      observation: link.observation
+      observation: link.observation,
+      measurementReferenceUrl: link.measurementReferenceUrl
     })
   }
 
@@ -769,7 +812,8 @@ async function savePersistedKpiLink(linkId: string) {
           impactType: link.impactType,
           estimatedImpact: link.estimatedImpact,
           confidenceLevel: link.confidenceLevel,
-          observation: link.observation
+          observation: link.observation,
+          measurementReferenceUrl: link.measurementReferenceUrl
         }
       }
 
@@ -778,7 +822,8 @@ async function savePersistedKpiLink(linkId: string) {
         impactType: draft.impactType,
         estimatedImpact: draft.estimatedImpact,
         confidenceLevel: draft.confidenceLevel,
-        observation: draft.observationInput || undefined
+        observation: draft.observationInput || undefined,
+        measurementReferenceUrl: persisted.measurementReferenceUrl
       }
     })
 
@@ -787,6 +832,50 @@ async function savePersistedKpiLink(linkId: string) {
     cancelKpiLinkDraft(linkId)
     editingPersistedKpiLinkId.value = null
     toast.add({ title: 'KPI atualizado', color: 'success' })
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    kpiLinkSavingDraftId.value = null
+  }
+}
+
+async function saveMeasurementReference(linkId: string) {
+  if (!props.demand)
+    return
+
+  kpiLinkSavingDraftId.value = linkId
+
+  try {
+    const nextLinks = persistedKpiLinks.value.map(link => {
+      if (link.id !== linkId) {
+        return {
+          kpiId: link.kpiId,
+          impactType: link.impactType,
+          estimatedImpact: link.estimatedImpact,
+          confidenceLevel: link.confidenceLevel,
+          observation: link.observation,
+          measurementReferenceUrl: link.measurementReferenceUrl
+        }
+      }
+
+      return {
+        kpiId: link.kpiId,
+        impactType: link.impactType,
+        estimatedImpact: link.estimatedImpact,
+        confidenceLevel: link.confidenceLevel,
+        observation: link.observation,
+        measurementReferenceUrl: measurementReferenceDrafts.value[linkId]?.trim() || undefined
+      }
+    })
+
+    await persistKpiLinks(nextLinks)
+    measurementReferenceDrafts.value = Object.fromEntries(
+      persistedKpiLinksState.value.map(link => [link.id, link.measurementReferenceUrl ?? ''])
+    )
+    closeMeasurementReferenceModal()
+    toast.add({ title: 'Referência da apuração atualizada', color: 'success' })
   }
   catch {
     // error handled by useApi
@@ -889,6 +978,78 @@ function getCurrentMeasurement(kpiId: string) {
   return getMeasurementsForKpi(kpiId)[0] ?? null
 }
 
+function getLinkById(linkId: string) {
+  return persistedKpiLinks.value.find(link => link.id === linkId) ?? null
+}
+
+const activeMeasurementReferenceLink = computed(() =>
+  measurementReferenceModalLinkId.value ? getLinkById(measurementReferenceModalLinkId.value) : null
+)
+
+const measurementReferenceModalOpen = computed({
+  get: () => measurementReferenceModalLinkId.value !== null,
+  set: (open: boolean) => {
+    if (!open)
+      measurementReferenceModalLinkId.value = null
+  }
+})
+
+const deleteConfirmationOpen = computed({
+  get: () => deleteConfirmation.value !== null,
+  set: (open: boolean) => {
+    if (!open)
+      deleteConfirmation.value = null
+  }
+})
+
+const deleteConfirmationTitle = computed(() =>
+  deleteConfirmation.value?.type === 'kpi-link'
+    ? 'Confirmar exclusão do KPI'
+    : 'Confirmar exclusão da apuração'
+)
+
+const deleteConfirmationDescription = computed(() =>
+  deleteConfirmation.value?.type === 'kpi-link'
+    ? 'Deseja realmente excluir esta configuração de KPI do épico?'
+    : 'Deseja realmente excluir esta apuração de KPI?'
+)
+
+function openMeasurementReferenceModal(linkId: string) {
+  const link = getLinkById(linkId)
+  measurementReferenceDrafts.value = {
+    ...measurementReferenceDrafts.value,
+    [linkId]: link?.measurementReferenceUrl ?? measurementReferenceDrafts.value[linkId] ?? ''
+  }
+  measurementReferenceModalLinkId.value = linkId
+}
+
+function closeMeasurementReferenceModal() {
+  measurementReferenceModalLinkId.value = null
+}
+
+function requestDeletePersistedKpiLink(linkId: string) {
+  deleteConfirmation.value = { type: 'kpi-link', id: linkId }
+}
+
+function requestDeleteMeasurement(measurementId: string) {
+  deleteConfirmation.value = { type: 'measurement', id: measurementId }
+}
+
+async function confirmDeletion() {
+  if (!deleteConfirmation.value)
+    return
+
+  const current = deleteConfirmation.value
+  deleteConfirmation.value = null
+
+  if (current.type === 'kpi-link') {
+    await executeDeletePersistedKpiLink(current.id)
+    return
+  }
+
+  await executeDeleteMeasurement(current.id)
+}
+
 function buildMeasurementDraft(kpiId: string, measurement?: KpiMeasurement): MeasurementEditorState {
   return {
     id: measurement?.id,
@@ -928,7 +1089,7 @@ async function refreshDemandMeasurements() {
     return
 
   kpiMeasurements.value = sortMeasurements(await kpiStore.fetchDemandKpiMeasurements(props.demand.id))
-  await roadmapStore.fetchDemands()
+  syncDemandInStore({ kpiMeasurements: kpiMeasurements.value })
 }
 
 async function saveMeasurement(kpiId: string) {
@@ -982,12 +1143,13 @@ async function saveMeasurement(kpiId: string) {
   }
 }
 
-async function deleteMeasurement(measurementId: string) {
+async function executeDeleteMeasurement(measurementId: string) {
   measurementDeletingId.value = measurementId
 
   try {
     await kpiStore.deleteDemandKpiMeasurement(measurementId)
     kpiMeasurements.value = kpiMeasurements.value.filter(item => item.id !== measurementId)
+    syncDemandInStore({ kpiMeasurements: kpiMeasurements.value })
     toast.add({ title: 'Apuração removida', color: 'success' })
     await refreshDemandMeasurements()
   }
@@ -1113,7 +1275,7 @@ async function deleteMeasurement(measurementId: string) {
                     size="xs"
                     color="error"
                     :loading="kpiLinkDeletingId === link.id"
-                    @click="deletePersistedKpiLink(link.id)"
+                    @click="requestDeletePersistedKpiLink(link.id)"
                   />
                 </div>
               </div>
@@ -1201,7 +1363,7 @@ async function deleteMeasurement(measurementId: string) {
                   </UFormField>
                 </div>
 
-                <div class="flex items-end justify-end gap-2 md:row-span-2 md:self-stretch">
+                <div class="flex items-end justify-end gap-2 md:row-span-3 md:self-stretch">
                     <UButton
                       type="button"
                       variant="ghost"
@@ -1394,6 +1556,15 @@ async function deleteMeasurement(measurementId: string) {
               </div>
 
               <div class="flex flex-wrap items-center gap-2">
+                <UButton
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  color="neutral"
+                  icon="i-lucide-link"
+                  label="Lógica da apuração"
+                  @click="openMeasurementReferenceModal(link.id)"
+                />
                 <UButton
                   type="button"
                   size="xs"
@@ -1603,7 +1774,7 @@ async function deleteMeasurement(measurementId: string) {
                             color="error"
                             icon="i-lucide-trash-2"
                             :loading="measurementDeletingId === measurement.id"
-                            @click="deleteMeasurement(measurement.id)"
+                            @click="requestDeleteMeasurement(measurement.id)"
                           />
                         </div>
                       </td>
@@ -1681,6 +1852,84 @@ async function deleteMeasurement(measurementId: string) {
       <template #footer>
         <div class="flex justify-end">
           <UButton label="Fechar" variant="ghost" @click="closeHelpModal" />
+        </div>
+      </template>
+    </UModal>
+
+    <UModal v-model:open="measurementReferenceModalOpen" :ui="{ content: 'sm:max-w-2xl' }">
+      <template #header>
+        <h3 class="text-lg font-semibold text-highlighted">Lógica da apuração</h3>
+      </template>
+
+      <template #body>
+        <div v-if="activeMeasurementReferenceLink" class="space-y-4 p-4">
+          <div>
+            <p class="text-sm font-semibold text-highlighted">{{ activeMeasurementReferenceLink.kpiName }}</p>
+            <p class="mt-1 text-xs text-muted">
+              Essa referência é única para o KPI vinculado ao épico e vale para todas as apurações.
+            </p>
+          </div>
+
+          <UFormField label="Link da lógica de apuração" class="w-full">
+            <UInput
+              :model-value="measurementReferenceDrafts[activeMeasurementReferenceLink.id] ?? ''"
+              type="url"
+              placeholder="https://..."
+              class="w-full"
+              @update:model-value="(value) => updateMeasurementReferenceDraft(activeMeasurementReferenceLink.id, value)"
+            />
+          </UFormField>
+
+          <div v-if="activeMeasurementReferenceLink.measurementReferenceUrl" class="text-sm text-muted">
+            <span>Referência atual:</span>
+            <a
+              :href="activeMeasurementReferenceLink.measurementReferenceUrl"
+              target="_blank"
+              rel="noreferrer"
+              class="ml-1 break-all text-primary hover:underline"
+            >
+              {{ activeMeasurementReferenceLink.measurementReferenceUrl }}
+            </a>
+          </div>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton label="Fechar" variant="ghost" color="neutral" @click="closeMeasurementReferenceModal" />
+          <UButton
+            v-if="activeMeasurementReferenceLink"
+            icon="i-lucide-save"
+            label="Salvar referência"
+            :loading="kpiLinkSavingDraftId === activeMeasurementReferenceLink.id"
+            @click="saveMeasurementReference(activeMeasurementReferenceLink.id)"
+          />
+        </div>
+      </template>
+    </UModal>
+
+    <UModal v-model:open="deleteConfirmationOpen" :ui="{ content: 'sm:max-w-md' }">
+      <template #header>
+        <h3 class="text-lg font-semibold text-highlighted">{{ deleteConfirmationTitle }}</h3>
+      </template>
+
+      <template #body>
+        <div class="p-4 text-sm text-muted">
+          {{ deleteConfirmationDescription }}
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton label="Cancelar" variant="ghost" color="neutral" @click="deleteConfirmationOpen = false" />
+          <UButton
+            color="error"
+            icon="i-lucide-trash-2"
+            label="Excluir"
+            :loading="(deleteConfirmation?.type === 'kpi-link' && kpiLinkDeletingId === deleteConfirmation.id)
+              || (deleteConfirmation?.type === 'measurement' && measurementDeletingId === deleteConfirmation.id)"
+            @click="confirmDeletion"
+          />
         </div>
       </template>
     </UModal>

@@ -7,6 +7,16 @@ import type * as XLSXType from 'xlsx'
 import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType } from '~/types/roadmap'
 import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
+import {
+  BACKLOG_QUARTER,
+  PRIORITIZED_BACKLOG_QUARTER,
+  PRE_REGISTERED_QUARTER_END_YEAR,
+  buildPreRegisteredQuarterYears,
+  buildQuarterValue,
+  formatQuarterLabel,
+  isSpecialBacklogQuarter,
+  parseQuarterValue
+} from '~/utils/roadmapQuarter'
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
@@ -20,6 +30,9 @@ const { kpis: availableKpis } = storeToRefs(kpiStore)
 const sortedProjects = computed(() =>
   [...projects.value].sort((left, right) => right.name.localeCompare(left.name, 'pt-BR'))
 )
+const projectNameById = computed(() =>
+  new Map(projects.value.map(project => [project.id, project.name] as const))
+)
 const roadmapItems = computed(() => demands.value.filter(item => item.itemType === 'Roadmap'))
 const epicItems = computed(() => demands.value.filter(item => item.itemType === 'Epic'))
 const demandItems = computed(() => demands.value.filter(item => item.itemType === 'Demand'))
@@ -32,7 +45,6 @@ const viewMode = ref<'list' | 'hierarchy'>(route.query.view === 'hierarchy' ? 'h
 const now = new Date()
 const currentYear = now.getFullYear()
 const currentQuarterNumber = Math.ceil((now.getMonth() + 1) / 3)
-const backlogQuarterValue = '0-0'
 
 type QuarterPhase = 'past' | 'current' | 'future'
 
@@ -50,10 +62,11 @@ const quarterPhaseConfig: Record<QuarterPhase, { label: string, class: string }>
 
 const quarterOptions = computed(() =>
   [
-    { value: backlogQuarterValue, label: 'Backlog — não priorizado' },
-    ...[currentYear, currentYear + 1].flatMap(y =>
+    { value: BACKLOG_QUARTER.value, label: 'Backlog — não priorizado' },
+    { value: PRIORITIZED_BACKLOG_QUARTER.value, label: `${PRIORITIZED_BACKLOG_QUARTER.label} — não comprometido` },
+    ...buildPreRegisteredQuarterYears(currentYear, PRE_REGISTERED_QUARTER_END_YEAR).flatMap(y =>
       [1, 2, 3, 4].map(q => ({
-        value: `${q}-${y}`,
+        value: buildQuarterValue(y, q),
         label: `Q${q}/${String(y).slice(2)} — ${quarterPhaseConfig[getQuarterPhase(y, q)].label}`
       }))
     )
@@ -61,16 +74,21 @@ const quarterOptions = computed(() =>
 )
 
 const planningQuarterOptions = computed(() =>
-  quarterOptions.value.filter(option => option.value !== backlogQuarterValue)
+  quarterOptions.value.filter(option => ![BACKLOG_QUARTER.value, PRIORITIZED_BACKLOG_QUARTER.value].includes(option.value))
 )
 const bulkMoveQuarterOptions = computed(() => quarterOptions.value)
 
 const filterQuarters = ref<string[]>([])
 
 function quarterShortLabel(val: string): string {
-  const [q, y] = val.split('-').map(Number)
-  if (q === 0 && y === 0) return 'Backlog'
-  return `Q${q}/${String(y).slice(2)}`
+  const { quarterYear, quarterNumber } = parseQuarterValue(val)
+  return formatQuarterLabel(quarterYear, quarterNumber)
+}
+
+function planningQuarterDisplayLabel(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'quarterLabel'>) {
+  return isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
+    ? 'Backlog'
+    : demand.quarterLabel
 }
 
 const quarterFilterLabel = computed(() => {
@@ -390,11 +408,11 @@ function compareQuarterPosition(left: Pick<RoadmapDemand, 'quarterYear' | 'quart
 }
 
 function isDependencyInconsistent(demand: RoadmapDemand, dependency: DemandDependency) {
-  const isDependentDemandBacklog = demand.quarterYear === 0 && demand.quarterNumber === 0
+  const isDependentDemandBacklog = isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
   if (isDependentDemandBacklog)
     return false
 
-  const isDependencyBacklog = dependency.quarterYear === 0 && dependency.quarterNumber === 0
+  const isDependencyBacklog = isSpecialBacklogQuarter(dependency.quarterYear, dependency.quarterNumber)
   if (isDependencyBacklog)
     return true
 
@@ -563,7 +581,7 @@ function toggleQuarterFilter(val: string) {
 }
 
 function isBacklogDemand(demand: RoadmapDemand): boolean {
-  return demand.quarterYear === 0 && demand.quarterNumber === 0
+  return isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
 }
 
 function isAdditionalDemand(demand: Pick<RoadmapDemand, 'type'>): boolean {
@@ -613,8 +631,8 @@ const selectedProjectProducts = computed(() =>
 const activeCapacityScope = computed(() => {
   if (!selectedProjectId.value || filterQuarters.value.length !== 1) return null
 
-  const [quarterNumber, quarterYear] = filterQuarters.value[0]!.split('-').map(Number)
-  if (quarterNumber === 0 && quarterYear === 0) return null
+  const { quarterYear, quarterNumber } = parseQuarterValue(filterQuarters.value[0]!)
+  if (isSpecialBacklogQuarter(quarterYear, quarterNumber)) return null
 
   return {
     projectId: selectedProjectId.value,
@@ -627,7 +645,7 @@ const activeCapacityScope = computed(() => {
 const selectedDemandScope = computed(() => {
   if (filterQuarters.value.length !== 1) return null
 
-  const [quarterNumber, quarterYear] = filterQuarters.value[0]!.split('-').map(Number)
+  const { quarterYear, quarterNumber } = parseQuarterValue(filterQuarters.value[0]!)
 
   return {
     quarterYear,
@@ -1564,7 +1582,7 @@ function syncListSectionDividers() {
       prevQuarterKey = quarterKey
 
       if (multipleQuarters) {
-        const label = isBacklogDemand(demand) ? 'Backlog' : demand.quarterLabel
+        const label = demand.quarterLabel
         dividerConfigs.push({ rowIndex: i, label, kind: 'quarter' })
       }
     }
@@ -1578,7 +1596,7 @@ function syncListSectionDividers() {
           `${d.quarterYear}:${d.quarterNumber}` === quarterKey && getDemandGroupKey(d) === 'regular'
         )
         if (hasRegularInQuarter) {
-          const quarterLabel = isBacklogDemand(demand) ? 'Backlog' : demand.quarterLabel
+          const quarterLabel = demand.quarterLabel
           const label = multipleQuarters
             ? `${quarterLabel} — Adicionais - Não comprometidas`
             : 'Adicionais - Não comprometidas'
@@ -1697,14 +1715,12 @@ function syncListSectionDividers() {
           const cell = createGridCell('px-4 py-2.5 align-top')
 
           if (anchorDemand) {
-            const quarterNode = anchorDemand.quarterYear === 0 && anchorDemand.quarterNumber === 0
-              ? document.createElement('span')
-              : document.createElement('span')
+            const quarterNode = document.createElement('span')
 
-            quarterNode.className = anchorDemand.quarterYear === 0 && anchorDemand.quarterNumber === 0
+            quarterNode.className = isSpecialBacklogQuarter(anchorDemand.quarterYear, anchorDemand.quarterNumber)
               ? 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
               : 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted'
-            quarterNode.textContent = anchorDemand.quarterLabel || 'Backlog'
+            quarterNode.textContent = planningQuarterDisplayLabel(anchorDemand)
 
             const typeNode = document.createElement('span')
             typeNode.className = 'text-[11px] text-muted'
@@ -2124,58 +2140,6 @@ function syncListSectionDividers() {
   })
 }
 
-watch(
-  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
-  async () => {
-    await nextTick()
-    syncListSectionDividers()
-    initListSortable()
-  },
-  { flush: 'post' }
-)
-
-watch(listScrollContainerRef, async (element) => {
-  listWidthObserver?.disconnect()
-  listWidthObserver = null
-
-  if (!element || typeof ResizeObserver === 'undefined') {
-    updateListViewportWidth()
-    syncListHeaderScroll()
-    await nextTick()
-    syncListSectionDividers()
-    return
-  }
-
-  updateListViewportWidth()
-  syncListHeaderScroll()
-  await nextTick()
-  syncListSectionDividers()
-
-  listWidthObserver = new ResizeObserver(() => {
-    updateListViewportWidth()
-    requestAnimationFrame(() => syncListSectionDividers())
-  })
-  listWidthObserver.observe(element)
-}, { flush: 'post' })
-
-watch(
-  () => listTitleExtraWidth.value,
-  async () => {
-    await nextTick()
-    syncListSectionDividers()
-  },
-  { flush: 'post' }
-)
-
-watch(
-  () => `${JSON.stringify(listColumnSizing.value)}|${listOrderedCols.value.map(col => col.id).join('|')}`,
-  async () => {
-    await nextTick()
-    syncListSectionDividers()
-  },
-  { flush: 'post' }
-)
-
 // ─── Modal ────────────────────────────────────────────────────────────────────
 const modalOpen = ref(false)
 const capacityModalOpen = ref(false)
@@ -2298,7 +2262,7 @@ function promptDelete(id: string) {
 function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFormData>): DemandFormData {
   const baseQuarterYear = overrides?.quarterYear ?? demand.quarterYear
   const baseQuarterNumber = overrides?.quarterNumber ?? demand.quarterNumber
-  const isBacklogDemand = demand.itemType === 'Demand' && baseQuarterYear === 0 && baseQuarterNumber === 0
+  const isBacklogDemand = demand.itemType === 'Demand' && isSpecialBacklogQuarter(baseQuarterYear, baseQuarterNumber)
 
   return {
     itemType: demand.itemType,
@@ -2333,7 +2297,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
 }
 
 async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) {
-  const [quarterNumber, quarterYear] = quarterValue.split('-').map(Number)
+  const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
 
@@ -2369,7 +2333,7 @@ async function planEpicDemandsToQuarter(
   if (!visibleEpicDemands.length || isBulkPlanning.value)
     return
 
-  const [quarterNumber, quarterYear] = quarterValue.split('-').map(Number)
+  const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
   const epicTitle = visibleEpicDemands[0]?.epicTitle ?? 'Épico'
@@ -2428,6 +2392,8 @@ async function handleSubmit(data: DemandFormData) {
 
   try {
     isSavingDemand.value = true
+    modalOpen.value = false
+
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
       toast.add({ title: 'Item atualizado', color: 'success' })
@@ -2436,10 +2402,12 @@ async function handleSubmit(data: DemandFormData) {
       await roadmapStore.createDemand(data)
       toast.add({ title: 'Item criado', color: 'success' })
     }
-    modalOpen.value = false
-    await refreshListPresentation(listScrollTop, listScrollLeft)
+    queueMicrotask(() => {
+      void refreshListPresentation(listScrollTop, listScrollLeft)
+    })
   }
   catch {
+    modalOpen.value = true
     // error handled by useApi
   }
   finally {
@@ -2872,7 +2840,7 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
   if (!selectedPlanningDemands.value.length || isBulkPlanning.value)
     return
 
-  const [quarterNumber, quarterYear] = quarterValue.split('-').map(Number)
+  const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
   const movedCount = selectedPlanningDemands.value.length
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
@@ -2956,6 +2924,58 @@ function getListGridTemplateColumns() {
 
 const listTableWidth = computed(() => `${listBaseWidth.value + listTitleExtraWidth.value}px`)
 
+watch(
+  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
+  async () => {
+    await nextTick()
+    syncListSectionDividers()
+    initListSortable()
+  },
+  { flush: 'post' }
+)
+
+watch(listScrollContainerRef, async (element) => {
+  listWidthObserver?.disconnect()
+  listWidthObserver = null
+
+  if (!element || typeof ResizeObserver === 'undefined') {
+    updateListViewportWidth()
+    syncListHeaderScroll()
+    await nextTick()
+    syncListSectionDividers()
+    return
+  }
+
+  updateListViewportWidth()
+  syncListHeaderScroll()
+  await nextTick()
+  syncListSectionDividers()
+
+  listWidthObserver = new ResizeObserver(() => {
+    updateListViewportWidth()
+    requestAnimationFrame(() => syncListSectionDividers())
+  })
+  listWidthObserver.observe(element)
+}, { flush: 'post' })
+
+watch(
+  () => listTitleExtraWidth.value,
+  async () => {
+    await nextTick()
+    syncListSectionDividers()
+  },
+  { flush: 'post' }
+)
+
+watch(
+  () => `${JSON.stringify(listColumnSizing.value)}|${listOrderedCols.value.map(col => col.id).join('|')}`,
+  async () => {
+    await nextTick()
+    syncListSectionDividers()
+  },
+  { flush: 'post' }
+)
+
 // Pre-resolve components for use inside cell h() renderers
 const UButtonComp = resolveComponent('UButton')
 const UIconComp   = resolveComponent('UIcon')
@@ -3010,20 +3030,23 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (isCollapsedRepresentative(demand))
         return h('div', { class: 'text-xs text-muted' }, '—')
 
-      return h('div', { class: 'flex items-center justify-center gap-1.5' }, [
-        h('span', {
-          class: 'list-priority-handle inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
-          title: 'Arrastar para repriorizar'
-        }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-3.5 w-3.5' })]),
-        h('label', { class: 'flex shrink-0 items-center justify-center' }, [
-          h('input', {
-            type: 'checkbox',
-            class: 'h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary',
-            checked: isDemandSelected(demand.id),
-            onClick: (event: Event) => event.stopPropagation(),
-            onChange: (event: Event) => toggleDemandSelection(demand.id, (event.target as HTMLInputElement).checked)
-          })
-        ])
+      return h('div', { class: 'flex flex-col items-center justify-center gap-1' }, [
+        h('div', { class: 'flex items-center justify-center gap-1.5' }, [
+          h('span', {
+            class: 'list-priority-handle inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
+            title: 'Arrastar para repriorizar'
+          }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-3.5 w-3.5' })]),
+          h('label', { class: 'flex shrink-0 items-center justify-center' }, [
+            h('input', {
+              type: 'checkbox',
+              class: 'h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary',
+              checked: isDemandSelected(demand.id),
+              onClick: (event: Event) => event.stopPropagation(),
+              onChange: (event: Event) => toggleDemandSelection(demand.id, (event.target as HTMLInputElement).checked)
+            })
+          ])
+        ]),
+        h('span', { class: 'text-[10px] font-medium text-muted' }, String(priorityRankByDemandId.value[demand.id] ?? ''))
       ])
     }
   },
@@ -3215,7 +3238,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableColumnFilter: true,
     filterFn: (row, _colId, filterValue: string[]) => {
       if (!Array.isArray(filterValue) || !filterValue.length) return true
-      return filterValue.includes(`${row.original.quarterNumber}-${row.original.quarterYear}`)
+      return filterValue.includes(buildQuarterValue(row.original.quarterYear, row.original.quarterNumber))
     },
     size: 96,
     meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 96) }), th: () => ({ width: listColWidth('quarterLabel', 96) }) } },
@@ -3224,11 +3247,11 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (isCollapsedRepresentative(demand))
         return h('span', { class: 'text-xs text-muted' }, '—')
 
-      const quarterNode = demand.quarterYear === 0 && demand.quarterNumber === 0
+      const quarterNode = isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
         ? h('span', {
           class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
-        }, 'Backlog')
-        : h('span', { class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted' }, demand.quarterLabel)
+        }, planningQuarterDisplayLabel(demand))
+        : h('span', { class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted' }, planningQuarterDisplayLabel(demand))
 
       return h('div', { class: 'flex min-w-0 flex-col gap-0.5' }, [
         quarterNode,
@@ -3363,9 +3386,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             }, {
               default: () => h(UIconComp, { name: 'i-lucide-calendar-range', class: 'h-4 w-4' })
             }),
-            content: () => h('div', { class: 'py-1 min-w-[200px]' }, planningQuarterOptions.value.map(option =>
+            content: () => h('div', { class: 'max-h-72 w-64 overflow-y-auto py-1' }, planningQuarterOptions.value.map(option =>
               h('button', {
-                class: 'w-full px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated',
+                class: 'w-full truncate px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated',
                 onClick: () => planDemandToQuarter(demand, option.value)
               }, option.label)
             ))
@@ -3463,27 +3486,29 @@ onUnmounted(() => {
   if (listExportUrlFull.value) URL.revokeObjectURL(listExportUrlFull.value)
 })
 
-// Default quarter filter to current quarter (client-side filtering)
-filterQuarters.value = [`${currentQuarterNumber}-${currentYear}`]
+async function initializeRoadmapPage() {
+  filterQuarters.value = [`${currentQuarterNumber}-${currentYear}`]
 
-// Load data
-await roadmapStore.fetchProjects()
+  await roadmapStore.fetchProjects()
 
-const queryProjectId = typeof route.query.projectId === 'string'
-  ? route.query.projectId
-  : null
+  const queryProjectId = typeof route.query.projectId === 'string'
+    ? route.query.projectId
+    : null
 
-if (queryProjectId && projects.value.some(project => project.id === queryProjectId))
-  selectedProjectId.value = queryProjectId
+  if (queryProjectId && projects.value.some(project => project.id === queryProjectId))
+    selectedProjectId.value = queryProjectId
 
-await Promise.all([
-  roadmapStore.fetchDemands(),
-  roadmapStore.fetchDependencyOptions(),
-  roadmapStore.fetchCustomerSuggestions()
-])
+  await Promise.all([
+    roadmapStore.fetchDemands(),
+    roadmapStore.fetchDependencyOptions(),
+    roadmapStore.fetchCustomerSuggestions()
+  ])
 
-if (activeDemandKpiId.value)
-  await kpiStore.fetchKpis()
+  if (activeDemandKpiId.value)
+    await kpiStore.fetchKpis()
+}
+
+void initializeRoadmapPage()
 
 watch(() => route.query.view, (value) => {
   viewMode.value = value === 'hierarchy' ? 'hierarchy' : 'list'
@@ -3619,6 +3644,7 @@ watch(activeDemandKpiId, async (value) => {
       <div class="mt-4 flex flex-wrap items-center gap-2">
         <div class="flex items-center gap-2 flex-wrap">
           <button
+            v-if="viewMode === 'hierarchy'"
             class="px-4 py-1.5 rounded-full text-sm font-medium transition-all border"
             :class="selectedProjectId === null
               ? 'bg-primary text-white border-primary shadow-sm'
@@ -3724,220 +3750,35 @@ watch(activeDemandKpiId, async (value) => {
           </UPopover>
 
           <UButton
-            :disabled="!activeCapacityScope"
+            type="button"
+            size="xs"
             color="neutral"
-            variant="ghost"
-            size="sm"
-            :icon="capacityConfigured ? 'i-lucide-pencil' : 'i-lucide-plus'"
-            :label="capacityConfigured ? 'Editar' : 'Configurar'"
+            variant="soft"
+            icon="i-lucide-sliders-horizontal"
+            label="Capacity"
+            :disabled="!activeCapacityScope"
             @click="openCapacityModal"
           />
         </div>
       </div>
-    </div>
 
-    <!-- Loading -->
-    <div
-      v-if="isLoading"
-      class="flex items-center justify-center py-16"
-    >
-      <UIcon
-        name="i-lucide-loader-circle"
-        class="w-6 h-6 text-primary animate-spin"
-      />
-    </div>
-
-    <template v-else>
-      <!-- ── LIST VIEW ───────────────────────────────────────────────────── -->
-      <div class="overflow-visible rounded-2xl border border-default bg-default shadow-sm">
-        <div class="border-b border-default bg-elevated/35 px-3 py-2.5">
-          <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-            <div class="flex flex-wrap items-center justify-end gap-1.5">
-              <UPopover v-if="selectedDemandCount">
-                <UButton
-                  size="xs"
-                  color="primary"
-                  variant="soft"
-                  trailing-icon="i-lucide-chevron-down"
-                  leading-icon="i-lucide-calendar-range"
-                  :loading="isBulkPlanning"
-                >
-                  Mover {{ selectedDemandCount.toLocaleString('pt-BR') }}
-                </UButton>
-                <template #content>
-                  <div class="py-1 min-w-[220px]">
-                    <button
-                      v-for="option in bulkMoveQuarterOptions"
-                      :key="option.value"
-                      class="w-full px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
-                      @click="planSelectedDemandsToQuarter(option.value)"
-                    >
-                      {{ option.label }}
-                    </button>
-                  </div>
-                </template>
-              </UPopover>
-              <UButton
-                v-if="selectedDemandCount"
-                size="xs"
-                color="neutral"
-                variant="ghost"
-                leading-icon="i-lucide-square-minus"
-                @click="clearSelectedDemands"
-              >
-                Desmarcar todos
-              </UButton>
-              <UButton
-                size="xs"
-                color="neutral"
-                variant="outline"
-                :leading-icon="groupDemandsByEpic ? 'i-lucide-layers-3' : 'i-lucide-list'"
-                @click="groupDemandsByEpic = !groupDemandsByEpic"
-              >
-                {{ groupDemandsByEpic ? 'Desagrupar épicos' : 'Agrupar por épico' }}
-              </UButton>
-              <UButton
-                v-if="visibleEpicIds.length"
-                size="xs"
-                color="neutral"
-                variant="outline"
-                :leading-icon="areAllEpicGroupsCollapsed ? 'i-lucide-unfold-vertical' : 'i-lucide-fold-vertical'"
-                @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
-              >
-                {{ areAllEpicGroupsCollapsed ? 'Expandir tudo' : 'Recolher tudo' }}
-              </UButton>
-              <UButton
-                v-if="listHasActiveFilters"
-                size="xs"
-                color="neutral"
-                variant="ghost"
-                leading-icon="i-lucide-filter-x"
-                @click="clearListFilters"
-              >
-                Limpar filtros
-                <UBadge size="xs" color="primary" variant="solid" class="ml-1">{{ listColumnFilters.length }}</UBadge>
-              </UButton>
-              <div class="relative shrink-0">
-              <UButton
-                variant="outline"
-                size="xs"
-                trailing-icon="i-lucide-chevron-down"
-                leading-icon="i-lucide-download"
-                color="neutral"
-                @click="toggleListExportMenu"
-              >
-                Exportar
-              </UButton>
-              <div v-if="listExportMenuOpen" class="fixed inset-0 z-40" @click="closeListExportMenu" />
-              <div
-                v-show="listExportMenuOpen"
-                class="absolute right-0 top-full mt-1 z-50 min-w-48 rounded-lg border border-default bg-default shadow-lg p-1 flex flex-col gap-0.5"
-              >
-                <a
-                  :href="listExportUrlVisible"
-                  download="roadmap-visiveis.xlsx"
-                  class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-highlighted hover:bg-elevated cursor-pointer select-none no-underline"
-                  @click="closeListExportMenu"
-                >
-                  <UIcon name="i-lucide-table-2" class="size-4 text-muted shrink-0" />
-                  Exportar dados visíveis
-                </a>
-                <a
-                  :href="listExportUrlFull"
-                  download="roadmap-completo.xlsx"
-                  class="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-highlighted hover:bg-elevated cursor-pointer select-none no-underline"
-                  @click="closeListExportMenu"
-                >
-                  <UIcon name="i-lucide-database" class="size-4 text-muted shrink-0" />
-                  Exportar modelo completo
-                </a>
-              </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="sticky top-14 z-20 overflow-hidden rounded-t-2xl border-b border-default bg-elevated/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-elevated/85 md:top-0">
-          <table class="table-fixed text-sm will-change-transform" :style="{ width: listTableWidth, transform: `translateX(-${listHeaderScrollLeft}px)` }">
+      <div class="mt-3 overflow-hidden rounded-xl border border-default">
+        <div class="overflow-hidden bg-elevated/30" :style="{ transform: `translateX(-${listHeaderScrollLeft}px)` }">
+          <table class="w-full table-fixed border-collapse" :style="{ width: listTableWidth }">
             <thead>
-              <tr ref="listHeaderRowRef">
+              <tr>
                 <th
                   v-for="col in listOrderedCols"
                   :key="col.id"
-                  :data-col-id="col.id"
-                  class="relative overflow-hidden px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted"
-                  :class="col.alignRight ? 'text-right' : 'text-left'"
+                  class="relative border-b border-default bg-elevated/40 text-left align-top"
                   :style="{ width: listColWidth(col.id, col.defaultWidth) }"
                 >
-                  <span
-                    class="list-col-drag absolute left-1 top-1/2 -translate-y-1/2 cursor-grab text-muted opacity-25 hover:opacity-80 select-none"
-                    title="Arrastar coluna"
-                  >⠿</span>
-                  <div class="flex min-h-[58px] flex-col justify-between pl-2" :class="col.alignRight ? 'items-end' : ''">
-                    <span v-if="col.id === 'select'" class="block h-4 w-4" />
-                    <UButton
-                      v-else-if="col.id !== '_actions'"
-                      :color="listSorting[0]?.id === col.id ? 'primary' : 'neutral'"
-                      variant="ghost"
-                      size="xs"
-                      :label="col.label"
-                      :trailing-icon="listSorting[0]?.id === col.id
-                        ? (listSorting[0]?.desc ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up')
-                        : 'i-lucide-arrow-up-down'"
-                      class="-mx-2 text-xs font-medium"
-                      :disabled="col.disableSorting"
-                      @click="!col.disableSorting && toggleListSort(col.id)"
-                    />
-                    <div v-if="col.id !== '_actions' && col.id !== 'select'">
-                      <UPopover v-if="col.filterType === 'multi-select'">
-                        <button class="mt-1 flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs hover:border-primary/40 transition-colors">
-                          <span class="flex-1 truncate text-left text-highlighted">{{ getListMultiFilterLabel(col) }}</span>
-                          <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
-                        </button>
-                        <template #content>
-                          <div class="py-1 min-w-[220px] max-h-72 overflow-y-auto">
-                            <button
-                              class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                              :class="getListMultiFilter(col.id).length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
-                              @click="setListMultiFilter(col.id, [])"
-                            >
-                              <UIcon v-if="getListMultiFilter(col.id).length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
-                              <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                              {{ col.allLabel ?? 'Todos' }}
-                            </button>
-                            <button
-                              v-for="option in (col.id === 'quarterLabel'
-                                ? quarterOptions
-                                : col.id === 'products'
-                                ? selectedProjectProducts.map(product => ({ value: product.id, label: product.name }))
-                                : (col.selectOptions ?? []))"
-                              :key="option.value"
-                              class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
-                              :class="getListMultiFilter(col.id).includes(option.value) ? 'text-primary' : 'text-highlighted'"
-                              @click="toggleListMultiFilterValue(col.id, option.value)"
-                            >
-                              <UIcon v-if="getListMultiFilter(col.id).includes(option.value)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
-                              <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                              {{ option.label }}
-                            </button>
-                          </div>
-                        </template>
-                      </UPopover>
-                      <UInput
-                        v-else-if="col.filterType === 'text'"
-                        :model-value="getListColFilter(col.id)"
-                        placeholder="Filtrar…"
-                        size="xs"
-                        class="mt-1 w-full min-w-0"
-                        :class="col.alignRight ? 'text-right' : ''"
-                        @update:model-value="(v: string) => setListColFilter(col.id, v)"
-                      />
-                      <div v-else class="mt-1 h-7" />
-                    </div>
+                  <div class="px-3 py-2 text-xs font-semibold text-muted">
+                    {{ col.label }}
                   </div>
                   <span
                     v-if="col.id !== '_actions'"
-                    class="absolute right-0 top-0 h-full w-[4px] cursor-col-resize hover:bg-primary active:bg-primary select-none"
+                    class="absolute right-0 top-0 h-full w-[4px] cursor-col-resize select-none hover:bg-primary active:bg-primary"
                     @mousedown.prevent.stop="startListResize(col.id, $event)"
                   />
                 </th>
@@ -3945,6 +3786,7 @@ watch(activeDemandKpiId, async (value) => {
             </thead>
           </table>
         </div>
+      </div>
 
         <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'" @scroll="syncListHeaderScroll">
           <div ref="listTableRootRef" :style="{ width: listTableWidth }">
@@ -4040,6 +3882,7 @@ watch(activeDemandKpiId, async (value) => {
           <p class="text-sm font-semibold text-highlighted">Resumo do Quarter</p>
           <p class="text-xs text-muted">Totalizadores ordenados pelas maiores cargas horárias das demandas visíveis no quarter.</p>
         </div>
+
 
         <div class="grid items-stretch gap-4 xl:grid-cols-3">
           <UCard class="flex h-full flex-col ring-default xl:h-[24rem]" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
@@ -4142,21 +3985,19 @@ watch(activeDemandKpiId, async (value) => {
           </UCard>
         </div>
       </section>
-    </template>
 
-    <!-- Empty state (no projects) -->
-    <div
-      v-if="!isLoading && !projects.length"
-      class="flex flex-col items-center justify-center py-20 gap-3"
-    >
-      <UIcon
-        name="i-lucide-map"
-        class="w-12 h-12 text-muted"
-      />
-      <p class="text-muted text-sm">
-        Nenhum projeto encontrado.
-      </p>
-    </div>
+      <div
+        v-if="!isLoading && !projects.length"
+        class="flex flex-col items-center justify-center py-20 gap-3"
+      >
+        <UIcon
+          name="i-lucide-map"
+          class="w-12 h-12 text-muted"
+        />
+        <p class="text-muted text-sm">
+          Nenhum projeto encontrado.
+        </p>
+      </div>
     </template>
 
     <template v-else>

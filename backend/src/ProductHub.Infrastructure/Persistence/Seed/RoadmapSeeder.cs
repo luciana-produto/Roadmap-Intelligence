@@ -494,6 +494,7 @@ public static class RoadmapSeeder
                     projectId.HasValue ? [projectId.Value] : [],
                     seed.QuarterYear,
                     seed.QuarterNumber,
+                    seed.Status,
                     seed.Type,
                     seed.Classification,
                     productIds,

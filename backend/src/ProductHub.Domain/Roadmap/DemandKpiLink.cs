@@ -10,6 +10,7 @@ public sealed class DemandKpiLink : BaseEntity
     public decimal? EstimatedImpact { get; private set; }
     public ConfidenceLevel ConfidenceLevel { get; private set; }
     public string? Observation { get; private set; }
+    public string? MeasurementReferenceUrl { get; private set; }
 
     private DemandKpiLink() { }
 
@@ -19,7 +20,8 @@ public sealed class DemandKpiLink : BaseEntity
         ImpactType impactType,
         decimal? estimatedImpact,
         ConfidenceLevel confidenceLevel,
-        string? observation) =>
+        string? observation,
+        string? measurementReferenceUrl = null) =>
         new()
         {
             DemandId = demandId,
@@ -27,7 +29,8 @@ public sealed class DemandKpiLink : BaseEntity
             ImpactType = impactType,
             EstimatedImpact = estimatedImpact,
             ConfidenceLevel = confidenceLevel,
-            Observation = observation
+            Observation = observation,
+            MeasurementReferenceUrl = measurementReferenceUrl
         };
 
     public static DemandKpiLink FromRepository(
@@ -36,18 +39,21 @@ public sealed class DemandKpiLink : BaseEntity
         ImpactType impactType,
         decimal? estimatedImpact,
         ConfidenceLevel confidenceLevel,
-        string? observation) =>
-        Create(demandId, kpiId, impactType, estimatedImpact, confidenceLevel, observation);
+        string? observation,
+        string? measurementReferenceUrl = null) =>
+        Create(demandId, kpiId, impactType, estimatedImpact, confidenceLevel, observation, measurementReferenceUrl);
 
     public void Update(
         ImpactType impactType,
         decimal? estimatedImpact,
         ConfidenceLevel confidenceLevel,
-        string? observation)
+        string? observation,
+        string? measurementReferenceUrl = null)
     {
         ImpactType = impactType;
         EstimatedImpact = estimatedImpact;
         ConfidenceLevel = confidenceLevel;
         Observation = observation;
+        MeasurementReferenceUrl = measurementReferenceUrl;
     }
 }

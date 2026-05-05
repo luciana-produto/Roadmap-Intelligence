@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { RoadmapDemand, DemandStatus, DemandType, DemandClassification } from '~/types/roadmap'
+import { isSpecialBacklogQuarter } from '~/utils/roadmapQuarter'
 
 const props = defineProps<{
   demand: RoadmapDemand
@@ -51,7 +52,7 @@ const customerTags = computed(() =>
 )
 
 const isAdditionalDemand = computed(() => props.demand.type === 'Additional')
-const isBacklogQuarterDemand = computed(() => props.demand.quarterYear === 0 && props.demand.quarterNumber === 0)
+const isBacklogQuarterDemand = computed(() => isSpecialBacklogQuarter(props.demand.quarterYear, props.demand.quarterNumber))
 const hasInconsistentDependency = computed(() =>
   props.demand.dependsOn.some(dependency => isDependencyInconsistent(dependency))
 )
@@ -91,7 +92,7 @@ function isDependencyInconsistent(dependency: RoadmapDemand['dependsOn'][number]
   if (isBacklogQuarterDemand.value)
     return false
 
-  const isDependencyBacklog = dependency.quarterYear === 0 && dependency.quarterNumber === 0
+  const isDependencyBacklog = isSpecialBacklogQuarter(dependency.quarterYear, dependency.quarterNumber)
   if (isDependencyBacklog)
     return true
 

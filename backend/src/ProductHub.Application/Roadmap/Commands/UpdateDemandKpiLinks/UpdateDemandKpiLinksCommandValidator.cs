@@ -23,6 +23,10 @@ public sealed class UpdateDemandKpiLinksCommandValidator
                 .WithMessage("ConfidenceLevel must be High, Medium or Low.");
             link.RuleFor(l => l.Observation)
                 .MaximumLength(1000);
+            link.RuleFor(l => l.MeasurementReferenceUrl)
+                .MaximumLength(2000)
+                .Must(url => string.IsNullOrWhiteSpace(url) || Uri.TryCreate(url, UriKind.Absolute, out _))
+                .WithMessage("MeasurementReferenceUrl must be a valid absolute URL.");
         });
         RuleFor(x => x.Links)
             .Must(links => links.Select(l => l.KpiId).Distinct().Count() == links.Count)

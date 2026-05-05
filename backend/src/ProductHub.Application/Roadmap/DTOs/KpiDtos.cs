@@ -23,7 +23,8 @@ public sealed record DemandKpiLinkDto(
     string ImpactType,
     decimal? EstimatedImpact,
     string ConfidenceLevel,
-    string? Observation);
+    string? Observation,
+    string? MeasurementReferenceUrl);
 
 public sealed record KpiMeasurementDto(
     Guid Id,

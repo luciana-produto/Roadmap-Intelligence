@@ -8,7 +8,8 @@ public sealed record DemandKpiLinkInput(
     string ImpactType,
     decimal? EstimatedImpact,
     string ConfidenceLevel,
-    string? Observation);
+    string? Observation,
+    string? MeasurementReferenceUrl);
 
 public sealed record UpdateDemandKpiLinksCommand(
     Guid DemandId,

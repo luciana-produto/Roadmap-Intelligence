@@ -226,6 +226,7 @@ BEGIN
         EstimatedImpact DECIMAL(18, 4) NULL,
         ConfidenceLevel NVARCHAR(50) NOT NULL,
         Observation NVARCHAR(1000) NULL,
+        MeasurementReferenceUrl NVARCHAR(2000) NULL,
         CONSTRAINT PK_DemandKpiLinks PRIMARY KEY CLUSTERED (Id),
         CONSTRAINT FK_DemandKpiLinks_RoadmapDemands_DemandId
             FOREIGN KEY (DemandId) REFERENCES dbo.RoadmapDemands (Id) ON DELETE CASCADE,
@@ -237,6 +238,11 @@ END;
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_DemandKpiLinks_DemandId_KpiId' AND object_id = OBJECT_ID(N'dbo.DemandKpiLinks'))
 BEGIN
     CREATE UNIQUE NONCLUSTERED INDEX IX_DemandKpiLinks_DemandId_KpiId ON dbo.DemandKpiLinks (DemandId, KpiId);
+END;
+
+IF COL_LENGTH(N'dbo.DemandKpiLinks', N'MeasurementReferenceUrl') IS NULL
+BEGIN
+    ALTER TABLE dbo.DemandKpiLinks ADD MeasurementReferenceUrl NVARCHAR(2000) NULL;
 END;
 
 IF OBJECT_ID(N'dbo.KpiMeasurements', N'U') IS NULL

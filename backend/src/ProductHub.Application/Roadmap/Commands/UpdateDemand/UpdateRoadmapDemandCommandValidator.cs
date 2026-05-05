@@ -42,7 +42,7 @@ public sealed class UpdateRoadmapDemandCommandValidator
             .WithMessage("Project associations must be unique.");
         RuleFor(x => x)
             .Must(x => beValidQuarter(x.QuarterYear, x.QuarterNumber))
-            .WithMessage("Quarter must be between Q1 and Q4, or Backlog.");
+            .WithMessage("Quarter must be between Q1 and Q4, Backlog, or Backlog - Prioritário.");
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(s => Enum.TryParse<DemandStatus>(s, true, out _))

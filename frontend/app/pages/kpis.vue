@@ -51,8 +51,8 @@ const kpiObjectiveLabels: Record<KpiObjective, string> = {
 }
 
 const kpiTypeBadgeColor: Record<KpiType, string> = {
-  Business: 'primary',
-  Product: 'info'
+  Business: 'warning',
+  Product: 'success'
 }
 
 const kpiLeverBadgeColor: Record<KpiLever, string> = {
@@ -296,7 +296,7 @@ function getProgressPercent(kpi: Kpi): number | null {
       </template>
 
       <template #type-cell="{ row }">
-        <UBadge :color="(kpiTypeBadgeColor[row.original.type] as any)" variant="subtle" size="sm">
+        <UBadge :color="(kpiTypeBadgeColor[row.original.type] as any)" variant="solid" size="sm">
           {{ kpiTypeLabels[row.original.type] }}
         </UBadge>
       </template>

@@ -1,3 +1,5 @@
+import { isSpecialBacklogQuarter } from '~/utils/roadmapQuarter'
+
 type PromisedDateSource = {
   quarterYear: number
   quarterNumber: number
@@ -10,7 +12,7 @@ export function formatIsoDate(year: number, month: number, day: number) {
 }
 
 export function getQuarterFallbackPromisedDate(quarterYear: number, quarterNumber: number) {
-  if (quarterYear === 0 && quarterNumber === 0)
+  if (isSpecialBacklogQuarter(quarterYear, quarterNumber))
     return ''
 
   const lastDay = new Date(quarterYear, quarterNumber * 3, 0).getDate()
@@ -21,7 +23,7 @@ export function getLatestPromisedDate(items: PromisedDateSource[]) {
   if (!items.length)
     return ''
 
-  if (items.some(item => item.quarterYear === 0 && item.quarterNumber === 0))
+  if (items.some(item => isSpecialBacklogQuarter(item.quarterYear, item.quarterNumber)))
     return ''
 
   let latestPromisedDate = ''

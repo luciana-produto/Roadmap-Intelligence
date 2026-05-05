@@ -52,7 +52,8 @@ internal static class RoadmapDemandDtoMapper
                 link.ImpactType.ToString(),
                 link.EstimatedImpact,
                 link.ConfidenceLevel.ToString(),
-                link.Observation))
+                link.Observation,
+                link.MeasurementReferenceUrl))
             .ToList()
             .AsReadOnly();
 
@@ -159,9 +160,6 @@ internal static class RoadmapDemandDtoMapper
 
     private static string FormatQuarterLabel(int quarterYear, int quarterNumber)
     {
-        if (quarterYear <= 0 || quarterNumber <= 0)
-            return Quarter.Create(Quarter.BacklogYear, Quarter.BacklogNumber).Label;
-
         return Quarter.Create(quarterYear, quarterNumber).Label;
     }
 

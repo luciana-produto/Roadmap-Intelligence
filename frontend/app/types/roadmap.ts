@@ -230,6 +230,7 @@ export interface DemandKpiLink {
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
   observation?: string
+  measurementReferenceUrl?: string
 }
 
 export interface DemandKpiLinkInput {
@@ -238,6 +239,7 @@ export interface DemandKpiLinkInput {
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
   observation?: string
+  measurementReferenceUrl?: string
 }
 
 export interface KpiMeasurement {

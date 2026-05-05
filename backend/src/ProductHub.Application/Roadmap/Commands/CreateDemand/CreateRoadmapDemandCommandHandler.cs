@@ -76,6 +76,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
 
         Enum.TryParse<DemandType>(request.Type, true, out var type);
         Enum.TryParse<DemandClassification>(request.Classification, true, out var classification);
+        Enum.TryParse<DemandStatus>(request.Status, true, out var status);
         NoKpiClassification? noKpiClassification = null;
         if (!string.IsNullOrWhiteSpace(request.NoKpiClassification))
         {
@@ -100,6 +101,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.ProjectIds,
             request.QuarterYear,
             request.QuarterNumber,
+            status,
             type,
             classification,
             request.ProductIds,

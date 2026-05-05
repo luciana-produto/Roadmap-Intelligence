@@ -6,9 +6,11 @@ public sealed class Quarter : ValueObject
 {
     public const int BacklogYear = 0;
     public const int BacklogNumber = 0;
+    public const int PrioritizedBacklogYear = 0;
+    public const int PrioritizedBacklogNumber = -1;
 
     public int Year { get; }
-    public int Number { get; } // 0 for backlog, else 1-4
+    public int Number { get; } // 0 or -1 for backlog variants, else 1-4
 
     private Quarter(int year, int number)
     {
@@ -18,11 +20,20 @@ public sealed class Quarter : ValueObject
 
     public bool IsBacklog => Year == BacklogYear && Number == BacklogNumber;
 
-    public string Label => IsBacklog ? "Backlog" : $"Q{Number}/{Year.ToString()[2..]}";
+    public bool IsPrioritizedBacklog => Year == PrioritizedBacklogYear && Number == PrioritizedBacklogNumber;
+
+    public bool IsSpecialBacklog => IsBacklog || IsPrioritizedBacklog;
+
+    public string Label => IsBacklog
+        ? "Backlog"
+        : IsPrioritizedBacklog
+            ? "Backlog - Prioritário"
+            : $"Q{Number}/{Year.ToString()[2..]}";
 
     public static Quarter Create(int year, int number)
     {
-        if (year == BacklogYear && number == BacklogNumber)
+        if ((year == BacklogYear && number == BacklogNumber)
+            || (year == PrioritizedBacklogYear && number == PrioritizedBacklogNumber))
             return new Quarter(year, number);
 
         if (number is < 1 or > 4)
@@ -38,6 +49,9 @@ public sealed class Quarter : ValueObject
     {
         if (string.Equals(label?.Trim(), "Backlog", StringComparison.OrdinalIgnoreCase))
             return Create(BacklogYear, BacklogNumber);
+
+        if (string.Equals(label?.Trim(), "Backlog - Prioritário", StringComparison.OrdinalIgnoreCase))
+            return Create(PrioritizedBacklogYear, PrioritizedBacklogNumber);
 
         if (string.IsNullOrWhiteSpace(label) || !label.StartsWith('Q'))
             throw new FormatException($"Invalid quarter label: '{label}'.");

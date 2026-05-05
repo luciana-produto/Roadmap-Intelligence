@@ -583,15 +583,32 @@ function getDisplayedClassification(item: RoadmapDemand) {
 function getDemandsForEpic(epicId: string) {
   return demandItems.value
     .filter(demand => demand.epicId === epicId)
-    .sort((left, right) => {
-      if (left.quarterYear !== right.quarterYear)
-        return left.quarterYear - right.quarterYear
+    .sort(comparePlanningPriority)
+}
 
-      if (left.quarterNumber !== right.quarterNumber)
-        return left.quarterNumber - right.quarterNumber
+function comparePlanningPriority(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'sortOrder' | 'title'>, right: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'sortOrder' | 'title'>) {
+  if (left.quarterYear !== right.quarterYear)
+    return left.quarterYear - right.quarterYear
 
-      return left.sortOrder - right.sortOrder
-    })
+  if (left.quarterNumber !== right.quarterNumber)
+    return left.quarterNumber - right.quarterNumber
+
+  if (left.sortOrder !== right.sortOrder)
+    return left.sortOrder - right.sortOrder
+
+  return left.title.localeCompare(right.title, 'pt-BR')
+}
+
+function getItemPlanningAnchor(item: RoadmapDemand) {
+  if (item.itemType === 'Demand')
+    return item
+
+  if (item.itemType === 'Epic')
+    return getDemandsForEpic(item.id)[0] ?? item
+
+  return demandItems.value
+    .filter(demand => demand.roadmapId === item.id)
+    .sort(comparePlanningPriority)[0] ?? item
 }
 
 function getDisplayedHours(item: RoadmapDemand) {
@@ -688,18 +705,19 @@ function applySortDirection(result: number) {
 function sortItems(items: RoadmapDemand[], level: 'roadmap' | 'epic' | 'demand') {
   if (!hierarchySort.value.key) {
     if (level === 'demand') {
-      return [...items].sort((left, right) => {
-        if (left.quarterYear !== right.quarterYear)
-          return left.quarterYear - right.quarterYear
-
-        if (left.quarterNumber !== right.quarterNumber)
-          return left.quarterNumber - right.quarterNumber
-
-        return left.sortOrder - right.sortOrder
-      })
+      return [...items].sort(comparePlanningPriority)
     }
 
-    return [...items].sort((left, right) => left.sortOrder - right.sortOrder)
+    return [...items].sort((left, right) => {
+      const planningComparison = comparePlanningPriority(getItemPlanningAnchor(left), getItemPlanningAnchor(right))
+      if (planningComparison !== 0)
+        return planningComparison
+
+      if (left.sortOrder !== right.sortOrder)
+        return left.sortOrder - right.sortOrder
+
+      return left.title.localeCompare(right.title, 'pt-BR')
+    })
   }
 
   return [...items].sort((left, right) => {
@@ -1092,21 +1110,25 @@ async function confirmDelete() {
   }
 }
 
-await roadmapStore.fetchProjects()
+async function initializeHierarchyPage() {
+  await roadmapStore.fetchProjects()
 
-const initialProjectIds = [
-  ...(typeof route.query.projectIds === 'string'
-    ? route.query.projectIds.split(',')
-    : []),
-  ...(typeof route.query.projectId === 'string'
-    ? [route.query.projectId]
-    : [])
-]
+  const initialProjectIds = [
+    ...(typeof route.query.projectIds === 'string'
+      ? route.query.projectIds.split(',')
+      : []),
+    ...(typeof route.query.projectId === 'string'
+      ? [route.query.projectId]
+      : [])
+  ]
 
-selectedProjectIds.value = [...new Set(initialProjectIds)]
-  .filter(projectId => projects.value.some(project => project.id === projectId))
+  selectedProjectIds.value = [...new Set(initialProjectIds)]
+    .filter(projectId => projects.value.some(project => project.id === projectId))
 
-await loadPageData()
+  await loadPageData()
+}
+
+void initializeHierarchyPage()
 </script>
 
 <template>
@@ -1514,6 +1536,9 @@ await loadPageData()
                           <div class="flex flex-wrap items-center gap-1.5">
                             <span class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
                               Épico
+                            </span>
+                            <span v-if="!epicEntry.demands.length" class="inline-flex items-center rounded-md border border-amber-300/70 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:border-amber-700/60 dark:bg-amber-950/20 dark:text-amber-300">
+                              Órfão
                             </span>
                             <span v-if="isOutsideSelectedProject(epicEntry.epic)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-warning">
                               Outro projeto

@@ -26,6 +26,15 @@ import {
   sanitizeIssueLinksForItem,
   sanitizePromisedDateForItem
 } from '~/utils/roadmapDemandPayload'
+import {
+  BACKLOG_QUARTER,
+  PRIORITIZED_BACKLOG_QUARTER,
+  PRE_REGISTERED_QUARTER_END_YEAR,
+  buildPreRegisteredQuarterYears,
+  buildQuarterValue,
+  formatQuarterLabel,
+  parseQuarterValue
+} from '~/utils/roadmapQuarter'
 
 type DemandFormState = Omit<DemandFormData, 'classification' | 'quarterYear' | 'quarterNumber'> & {
   itemType: RoadmapItemType | ''
@@ -129,11 +138,12 @@ const title = computed(() => {
 
 const currentYear = new Date().getFullYear()
 const quarters = [
-  { value: '0-0', label: 'Backlog' },
-  ...[currentYear, currentYear + 1].flatMap(y =>
+  { value: BACKLOG_QUARTER.value, label: BACKLOG_QUARTER.label },
+  { value: PRIORITIZED_BACKLOG_QUARTER.value, label: PRIORITIZED_BACKLOG_QUARTER.label },
+  ...buildPreRegisteredQuarterYears(currentYear, PRE_REGISTERED_QUARTER_END_YEAR).flatMap(y =>
     [1, 2, 3, 4].map(q => ({
-      value: `${q}-${y}`,
-      label: `Q${q}/${String(y).slice(2)}`
+      value: buildQuarterValue(y, q),
+      label: formatQuarterLabel(y, q)
     }))
   )
 ]
@@ -515,7 +525,7 @@ const selectedQuarter = computed({
     if (form.quarterYear == null || form.quarterNumber == null)
       return ''
 
-    return `${form.quarterNumber}-${form.quarterYear}`
+    return buildQuarterValue(form.quarterYear, form.quarterNumber)
   },
   set: (val: string) => {
     if (!val) {
@@ -524,9 +534,9 @@ const selectedQuarter = computed({
       return
     }
 
-    const [q, y] = val.split('-').map(Number)
-    form.quarterNumber = q
-    form.quarterYear = y
+    const { quarterYear, quarterNumber } = parseQuarterValue(val)
+    form.quarterNumber = quarterNumber
+    form.quarterYear = quarterYear
   }
 })
 
@@ -777,9 +787,41 @@ function removeIssueLink(index: number) {
   form.issueLinks = (form.issueLinks ?? []).filter((_, currentIndex) => currentIndex !== index)
 }
 
+function extractIssueKeyFromUrl(url: string) {
+  const trimmed = url.trim()
+  if (!trimmed)
+    return ''
+
+  const match = trimmed.match(/\/browse\/([A-Z][A-Z0-9]+-\d+)(?:[/?#].*)?$/i)
+  return match?.[1]?.toUpperCase() ?? ''
+}
+
+function updateIssueUrl(index: number, value: string | number | null | undefined) {
+  const nextUrl = String(value ?? '')
+  const nextIssueLinks = [...(form.issueLinks ?? [])]
+  const issue = nextIssueLinks[index]
+  if (!issue)
+    return
+
+  issue.url = nextUrl
+
+  const extractedKey = extractIssueKeyFromUrl(nextUrl)
+  if (extractedKey)
+    issue.key = extractedKey
+
+  form.issueLinks = nextIssueLinks
+}
+
 function normalizeIssueLinks(issueLinks?: Array<{ key: string, url: string }>): IssueLinkInput[] {
   return (issueLinks ?? [])
-    .map(issue => ({ key: issue.key.trim(), url: issue.url.trim() }))
+    .map((issue) => {
+      const url = issue.url.trim()
+      const extractedKey = extractIssueKeyFromUrl(url)
+      return {
+        key: (extractedKey || issue.key).trim().toUpperCase(),
+        url
+      }
+    })
     .filter(issue => issue.key || issue.url)
 }
 
@@ -1794,16 +1836,17 @@ async function handleSubmit() {
             <div
               v-for="(issue, index) in form.issueLinks"
               :key="index"
-              class="grid gap-2 md:grid-cols-[minmax(0,180px)_minmax(0,1fr)_auto]"
+              class="grid gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,180px)_auto]"
             >
               <UInput
-                v-model="issue.key"
-                :placeholder="isEpic ? 'Ex: EPIC-123' : 'Ex: DEM-123'"
+                :model-value="issue.url"
+                placeholder="https://..."
                 class="w-full"
+                @update:model-value="(value) => updateIssueUrl(index, value)"
               />
               <UInput
-                v-model="issue.url"
-                placeholder="https://..."
+                v-model="issue.key"
+                placeholder="Preenchida automaticamente"
                 class="w-full"
               />
               <UButton

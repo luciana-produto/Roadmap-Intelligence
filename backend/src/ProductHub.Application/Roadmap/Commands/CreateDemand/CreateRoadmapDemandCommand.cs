@@ -12,6 +12,7 @@ public sealed record CreateRoadmapDemandCommand(
     IReadOnlyList<Guid>? ProjectIds,
     int QuarterYear,
     int QuarterNumber,
+    string Status,
     string Type,
     string Classification,
     IReadOnlyList<Guid> ProductIds,

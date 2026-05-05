@@ -7,6 +7,7 @@ import type {
   RoadmapDemand,
   RoadmapItemType
 } from '~/types/roadmap'
+import { isSpecialBacklogQuarter } from '~/utils/roadmapQuarter'
 
 type SharedDemandMutationPayload = {
   itemType: RoadmapItemType
@@ -40,7 +41,7 @@ function normalizeCustomers(customers?: string[]) {
 }
 
 export function isBacklogDemand(itemType: RoadmapItemType, quarterYear: number, quarterNumber: number) {
-  return itemType === 'Demand' && quarterYear === 0 && quarterNumber === 0
+  return itemType === 'Demand' && isSpecialBacklogQuarter(quarterYear, quarterNumber)
 }
 
 export function sanitizeCustomersForItem(itemType: RoadmapItemType, customers?: string[]) {
@@ -96,7 +97,12 @@ function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemand
 }
 
 export function buildCreateDemandPayload(payload: DemandFormData) {
-  return buildSharedDemandMutationPayload(payload)
+  return {
+    ...buildSharedDemandMutationPayload(payload),
+    status: payload.status ?? 'Backlog',
+    observation: payload.observation || undefined,
+    deliveryDate: payload.deliveryDate || undefined
+  }
 }
 
 export function buildUpdateDemandPayload(id: string, payload: DemandFormData) {
