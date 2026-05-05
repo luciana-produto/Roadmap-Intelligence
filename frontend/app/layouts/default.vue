@@ -8,6 +8,20 @@ const appConfig = useAppConfig()
 const sidebarOpen = ref(false)
 const isSidebarCollapsed = ref(true)
 
+type NavLinkChild = {
+  label: string
+  to: string
+}
+
+type NavLinkItem = {
+  label: string
+  icon: string
+  to?: string
+  disabled?: boolean
+  badge?: string
+  children?: NavLinkChild[]
+}
+
 const userInitials = computed(() => {
   if (!authStore.user) return '?'
   const first = authStore.user.firstName?.[0] ?? ''
@@ -85,13 +99,53 @@ const userMenuItems = computed(() => [[
   }
 ]])
 
-const navLinks = [
+const navLinks: NavLinkItem[] = [
   { label: 'Home', icon: 'i-lucide-layout-dashboard', to: '/home' },
   { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' },
-  { label: 'Cadastros', icon: 'i-lucide-package', to: '/products' },
-  { label: 'KPIs', icon: 'i-lucide-bar-chart-2', to: '/kpis' },
+  {
+    label: 'Cadastros',
+    icon: 'i-lucide-package',
+    children: [
+      { label: 'Projetos e Produtos', to: '/products' },
+      { label: 'KPIs', to: '/kpis' }
+    ]
+  },
   { label: 'Indicadores', icon: 'i-lucide-trending-up', disabled: true, badge: 'Em breve' }
 ]
+
+const expandedNavGroups = ref<Record<string, boolean>>({
+  Cadastros: route.path.startsWith('/products') || route.path.startsWith('/kpis')
+})
+
+watch(() => route.path, (path) => {
+  if (path.startsWith('/products') || path.startsWith('/kpis'))
+    expandedNavGroups.value.Cadastros = true
+})
+
+function isNavLinkActive(link: NavLinkItem) {
+  if (link.to)
+    return route.path === link.to
+
+  return link.children?.some(child => route.path === child.to) ?? false
+}
+
+function isNavGroupExpanded(label: string) {
+  return expandedNavGroups.value[label] ?? false
+}
+
+function toggleNavGroup(label: string) {
+  if (isSidebarCollapsed.value) {
+    isSidebarCollapsed.value = false
+    expandedNavGroups.value[label] = true
+    return
+  }
+
+  expandedNavGroups.value[label] = !isNavGroupExpanded(label)
+}
+
+function handleMobileNavGroupToggle(label: string) {
+  expandedNavGroups.value[label] = !isNavGroupExpanded(label)
+}
 
 const sidebarStyle = computed(() => `background-color: var(--color-${appConfig.ui.colors.primary}-950);`)
 const desktopSidebarClasses = computed(() =>
@@ -168,6 +222,48 @@ const mainContentWidthClass = computed(() =>
             </span>
           </button>
 
+          <template v-else-if="link.children?.length">
+            <button
+              type="button"
+              :title="isSidebarCollapsed ? link.label : undefined"
+              class="flex w-full rounded-xl px-3 py-2.5 text-sm transition-colors"
+              :class="[
+                isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
+                isNavLinkActive(link)
+                  ? 'bg-white/12 text-white'
+                  : 'text-white/75 hover:bg-white/8 hover:text-white'
+              ]"
+              @click="toggleNavGroup(link.label)"
+            >
+              <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
+              <template v-if="!isSidebarCollapsed">
+                <span class="min-w-0 flex-1 text-left">{{ link.label }}</span>
+                <UIcon
+                  name="i-lucide-chevron-down"
+                  class="h-4 w-4 shrink-0 transition-transform"
+                  :class="isNavGroupExpanded(link.label) ? 'rotate-180' : ''"
+                />
+              </template>
+            </button>
+
+            <div
+              v-if="!isSidebarCollapsed && isNavGroupExpanded(link.label)"
+              class="mt-1 space-y-1 pl-4"
+            >
+              <NuxtLink
+                v-for="child in link.children"
+                :key="child.to"
+                :to="child.to"
+                class="flex items-center rounded-lg px-3 py-2 text-sm transition-colors"
+                :class="route.path === child.to
+                  ? 'bg-white/10 text-white'
+                  : 'text-white/65 hover:bg-white/6 hover:text-white'"
+              >
+                <span>{{ child.label }}</span>
+              </NuxtLink>
+            </div>
+          </template>
+
           <NuxtLink
             v-else
             :to="link.to"
@@ -175,7 +271,7 @@ const mainContentWidthClass = computed(() =>
             class="flex rounded-xl px-3 py-2.5 text-sm transition-colors"
             :class="[
               isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
-              route.path === link.to
+              isNavLinkActive(link)
                 ? 'bg-white/12 text-white'
                 : 'text-white/75 hover:bg-white/8 hover:text-white'
             ]"
@@ -250,17 +346,73 @@ const mainContentWidthClass = computed(() =>
           <UButton icon="i-lucide-x" variant="ghost" color="neutral" @click="sidebarOpen = false" />
         </div>
         <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          <NuxtLink
-            v-for="link in navLinks"
-            :key="link.to"
-            :to="link.to"
-            class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors"
-            :class="route.path === link.to ? 'bg-white/12 text-white' : 'text-white/75 hover:bg-white/8 hover:text-white'"
-            @click="sidebarOpen = false"
-          >
-            <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
-            <span>{{ link.label }}</span>
-          </NuxtLink>
+          <template v-for="link in navLinks" :key="link.label">
+            <button
+              v-if="link.disabled"
+              type="button"
+              class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/40"
+              disabled
+            >
+              <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
+              <span class="flex min-w-0 items-center gap-2">
+                <span>{{ link.label }}</span>
+                <UBadge
+                  v-if="link.badge"
+                  size="xs"
+                  color="neutral"
+                  variant="solid"
+                  class="shrink-0 bg-white/12 text-white/80"
+                >
+                  {{ link.badge }}
+                </UBadge>
+              </span>
+            </button>
+
+            <template v-else-if="link.children?.length">
+              <button
+                type="button"
+                class="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors"
+                :class="isNavLinkActive(link)
+                  ? 'bg-white/12 text-white'
+                  : 'text-white/75 hover:bg-white/8 hover:text-white'"
+                @click="handleMobileNavGroupToggle(link.label)"
+              >
+                <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
+                <span class="min-w-0 flex-1 text-left">{{ link.label }}</span>
+                <UIcon
+                  name="i-lucide-chevron-down"
+                  class="h-4 w-4 shrink-0 transition-transform"
+                  :class="isNavGroupExpanded(link.label) ? 'rotate-180' : ''"
+                />
+              </button>
+
+              <div v-if="isNavGroupExpanded(link.label)" class="mt-1 space-y-1 pl-4">
+                <NuxtLink
+                  v-for="child in link.children"
+                  :key="child.to"
+                  :to="child.to"
+                  class="flex items-center rounded-lg px-3 py-2 text-sm transition-colors"
+                  :class="route.path === child.to
+                    ? 'bg-white/10 text-white'
+                    : 'text-white/65 hover:bg-white/6 hover:text-white'"
+                  @click="sidebarOpen = false"
+                >
+                  <span>{{ child.label }}</span>
+                </NuxtLink>
+              </div>
+            </template>
+
+            <NuxtLink
+              v-else
+              :to="link.to"
+              class="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition-colors"
+              :class="isNavLinkActive(link) ? 'bg-white/12 text-white' : 'text-white/75 hover:bg-white/8 hover:text-white'"
+              @click="sidebarOpen = false"
+            >
+              <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
+              <span>{{ link.label }}</span>
+            </NuxtLink>
+          </template>
         </nav>
       </aside>
     </div>

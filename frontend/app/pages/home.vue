@@ -55,8 +55,8 @@ const authStore = useAuthStore()
 <script lang="ts">
 const quickAccess = [
   { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap', description: 'Planejamento de produtos' },
-  { label: 'Cadastros', icon: 'i-lucide-package', to: '/products', description: 'Projetos e produtos base' },
-  { label: 'KPIs', icon: 'i-lucide-bar-chart-2', to: '/kpis', description: 'Indicadores chave' },
-  { label: 'Indicadores', icon: 'i-lucide-trending-up', to: '/indicators', description: 'Métricas e análises', disabled: true, badge: 'Em breve' }
+  { label: 'Indicadores de KPIs', icon: 'i-lucide-trending-up', to: '/indicators', description: 'Métricas e análises', disabled: true, badge: 'Em breve' },
+  { label: 'Cadastro de Projetos', icon: 'i-lucide-package', to: '/products', description: 'Projetos e produtos base' },
+  { label: 'Cadastro de KPIs', icon: 'i-lucide-bar-chart-2', to: '/kpis', description: 'Indicadores chave' }
 ]
 </script>
