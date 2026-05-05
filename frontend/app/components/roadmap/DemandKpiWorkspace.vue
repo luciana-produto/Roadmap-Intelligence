@@ -60,6 +60,7 @@ const kpiLinkDeletingId = ref<string | null>(null)
 const editingPersistedKpiLinkId = ref<string | null>(null)
 const measurementSavingKpiId = ref<string | null>(null)
 const measurementDeletingId = ref<string | null>(null)
+const helpModalType = ref<'confidence' | 'kpi-catalog' | null>(null)
 
 type AutomaticMeasurementResult = MeasurementResult
 
@@ -74,6 +75,22 @@ const confidenceLevelOptions = [
   { value: 'Medium', label: 'Média' },
   { value: 'Low', label: 'Baixa' }
 ]
+
+const kpiTypeLabels = {
+  Business: 'Negócio',
+  Product: 'Produto'
+} as const
+
+const kpiLeverLabels = {
+  Growth: 'Crescer',
+  Efficiency: 'Eficiência',
+  Customer: 'Cliente'
+} as const
+
+const kpiObjectiveLabels = {
+  Increase: 'Aumentar',
+  Decrease: 'Reduzir'
+} as const
 
 const noKpiClassificationOptions = [
   { value: 'Relationship', label: 'Relacionamento' },
@@ -451,6 +468,97 @@ function getPersistedKpiImpactSummary(link: DemandKpiLink) {
   return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, link.estimatedImpact != null)} ${kpi.name}`
 }
 
+function getDisplayedMeasurementResult(kpiId: string, measurement: KpiMeasurement) {
+  return computeAutomaticMeasurementResult(kpiId, measurement.measuredValue)
+}
+
+function getMeasurementsChronological(kpiId: string) {
+  return [...getMeasurementsForKpi(kpiId)].sort((left, right) => {
+    const dateCompare = left.measurementDate.localeCompare(right.measurementDate)
+    if (dateCompare !== 0)
+      return dateCompare
+
+    return left.createdAt.localeCompare(right.createdAt)
+  })
+}
+
+function getMeasurementsTimeline(kpiId: string) {
+  return [...getMeasurementsForKpi(kpiId)].sort((left, right) => {
+    const dateCompare = right.measurementDate.localeCompare(left.measurementDate)
+    if (dateCompare !== 0)
+      return dateCompare
+
+    return right.createdAt.localeCompare(left.createdAt)
+  })
+}
+
+function getMeasurementSequenceIndex(kpiId: string, measurementId: string) {
+  return getMeasurementsTimeline(kpiId).findIndex(measurement => measurement.id === measurementId) + 1
+}
+
+function getMeasurementChartData(kpiId: string) {
+  const measurements = getMeasurementsChronological(kpiId)
+  if (!measurements.length)
+    return null
+
+  const width = 380
+  const height = 116
+  const paddingX = 18
+  const paddingTop = 18
+  const paddingBottom = 18
+  const values = measurements.map(measurement => measurement.measuredValue)
+  const estimatedImpact = persistedKpiLinks.value.find(link => link.kpiId === kpiId)?.estimatedImpact
+  const chartValues = estimatedImpact == null ? values : [...values, estimatedImpact]
+  const minValue = Math.min(...chartValues)
+  const maxValue = Math.max(...chartValues)
+  const range = maxValue - minValue || 1
+  const plotWidth = width - paddingX * 2
+  const plotHeight = height - paddingTop - paddingBottom
+  const stepX = measurements.length === 1 ? 0 : plotWidth / (measurements.length - 1)
+
+  const points = measurements.map((measurement, index) => {
+    const x = paddingX + (stepX * index)
+    const y = paddingTop + ((maxValue - measurement.measuredValue) / range) * plotHeight
+    return {
+      ...measurement,
+      x,
+      y,
+      labelY: Math.max(11, y - 7),
+      result: getDisplayedMeasurementResult(kpiId, measurement)
+    }
+  })
+
+  const linePath = points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`).join(' ')
+  const areaPath = `${linePath} L ${points[points.length - 1]!.x} ${height - paddingBottom} L ${points[0]!.x} ${height - paddingBottom} Z`
+  const estimatedImpactY = estimatedImpact == null
+    ? null
+    : paddingTop + ((maxValue - estimatedImpact) / range) * plotHeight
+
+  const gridLines = Array.from({ length: 4 }, (_, index) => {
+    const ratio = index / 3
+    return {
+      id: `grid-${index}`,
+      y: paddingTop + (plotHeight * ratio),
+      value: maxValue - (range * ratio)
+    }
+  })
+
+  return {
+    width,
+    height,
+    points,
+    linePath,
+    areaPath,
+    estimatedImpact,
+    estimatedImpactY,
+    gridLines,
+    minValue,
+    maxValue,
+    firstLabel: formatMeasurementDate(measurements[0]!.measurementDate),
+    lastLabel: formatMeasurementDate(measurements[measurements.length - 1]!.measurementDate)
+  }
+}
+
 function hasMeasurementForKpi(kpiId: string) {
   return getMeasurementsForKpi(kpiId).length > 0
 }
@@ -515,6 +623,31 @@ async function persistKpiLinks(links: DemandKpiLinkInput[]) {
 
   persistedKpiLinksState.value = await kpiStore.updateDemandKpiLinks(props.demand.id, links)
   await roadmapStore.fetchDemands()
+}
+
+async function recalculateMeasurementResults(kpiId: string) {
+  const measurements = getMeasurementsForKpi(kpiId)
+  if (!measurements.length)
+    return
+
+  let hasChanges = false
+
+  for (const measurement of measurements) {
+    const nextResult = computeAutomaticMeasurementResult(kpiId, measurement.measuredValue)
+    if (nextResult === measurement.result)
+      continue
+
+    await kpiStore.updateDemandKpiMeasurement(measurement.id, {
+      measuredValue: measurement.measuredValue,
+      measurementDate: measurement.measurementDate,
+      result: nextResult,
+      observation: measurement.observation || undefined
+    })
+    hasChanges = true
+  }
+
+  if (hasChanges)
+    await refreshDemandMeasurements()
 }
 
 function cancelKpiLinkDraft(draftId: string) {
@@ -650,6 +783,7 @@ async function savePersistedKpiLink(linkId: string) {
     })
 
     await persistKpiLinks(nextLinks)
+    await recalculateMeasurementResults(draft.kpiId)
     cancelKpiLinkDraft(linkId)
     editingPersistedKpiLinkId.value = null
     toast.add({ title: 'KPI atualizado', color: 'success' })
@@ -695,6 +829,30 @@ function sortMeasurements(measurements: KpiMeasurement[]) {
 }
 
 const persistedKpiLinks = computed(() => persistedKpiLinksState.value)
+const standaloneKpiLinkDrafts = computed(() => {
+  const persistedIds = new Set(persistedKpiLinks.value.map(link => link.id))
+  return kpiLinkDrafts.value.filter(draft => !persistedIds.has(draft.draftId))
+})
+
+const helpModalTitle = computed(() => {
+  if (helpModalType.value === 'confidence')
+    return 'Ajuda: Nível de confiança'
+  if (helpModalType.value === 'kpi-catalog')
+    return 'Ajuda: KPIs relacionados'
+  return ''
+})
+
+const availableKpiCatalog = computed(() =>
+  [...(props.availableKpis ?? [])].sort((left, right) => left.name.localeCompare(right.name, 'pt-BR'))
+)
+
+const helpModalOpen = computed({
+  get: () => helpModalType.value !== null,
+  set: (open: boolean) => {
+    if (!open)
+      helpModalType.value = null
+  }
+})
 
 const measurementSectionState = computed(() => {
   if (!props.demand?.id)
@@ -708,6 +866,23 @@ const measurementSectionState = computed(() => {
 
 function getMeasurementsForKpi(kpiId: string) {
   return kpiMeasurements.value.filter(measurement => measurement.kpiId === kpiId)
+}
+
+function openConfidenceHelp() {
+  helpModalType.value = 'confidence'
+}
+
+function openKpiCatalogHelp() {
+  helpModalType.value = 'kpi-catalog'
+}
+
+function closeHelpModal() {
+  helpModalType.value = null
+}
+
+function cancelPersistedKpiLinkEdit(linkId: string) {
+  cancelKpiLinkDraft(linkId)
+  editingPersistedKpiLinkId.value = null
 }
 
 function getCurrentMeasurement(kpiId: string) {
@@ -945,9 +1120,23 @@ async function deleteMeasurement(measurementId: string) {
 
               <div
                 v-else
-                class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto]"
+                class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-start"
               >
-                <UFormField label="KPI relacionado" required>
+                <div class="space-y-1">
+                  <div class="flex items-center gap-1.5 text-sm">
+                    <span class="text-highlighted">KPI relacionado</span>
+                    <span class="text-error">*</span>
+                    <UButton
+                      type="button"
+                      icon="i-lucide-circle-help"
+                      variant="ghost"
+                      color="neutral"
+                      size="xs"
+                      class="h-4 min-h-0 w-4 min-w-0 p-0"
+                      aria-label="Abrir catálogo de KPIs"
+                      @click="openKpiCatalogHelp"
+                    />
+                  </div>
                   <USelect
                     :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.kpiId ?? link.kpiId"
                     :items="getKpiOptionsForRow(kpiLinkDrafts.find(item => item.draftId === link.id)?.kpiId ?? link.kpiId)"
@@ -956,7 +1145,7 @@ async function deleteMeasurement(measurementId: string) {
                     class="w-full"
                     @update:model-value="(value) => updateDraftKpiId(link.id, value as string | undefined)"
                   />
-                </UFormField>
+                </div>
 
                 <UFormField label="Tipo de impacto">
                   <USelect
@@ -975,37 +1164,19 @@ async function deleteMeasurement(measurementId: string) {
                   />
                 </UFormField>
 
-                <div class="relative pt-6">
-                  <div class="absolute inset-x-0 top-0 flex items-center justify-between gap-1.5 text-sm leading-none">
-                    <span class="text-sm text-highlighted">Nível de confiança</span>
-                    <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
-                      <UButton
-                        type="button"
-                        icon="i-lucide-circle-help"
-                        variant="ghost"
-                        color="neutral"
-                        size="xs"
-                        class="h-4 min-h-0 w-4 min-w-0 p-0"
-                        aria-label="Explicar níveis de confiança"
-                      />
-                      <template #content>
-                        <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
-                          <p class="font-medium text-highlighted">
-                            Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
-                          </p>
-                          <div
-                            v-for="item in confidenceLevelHelp"
-                            :key="item.title"
-                            class="space-y-1 rounded-lg border border-default p-2.5"
-                          >
-                            <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
-                            <p>👉 {{ item.summary }}</p>
-                            <p class="text-muted">{{ item.signals }}</p>
-                            <p class="text-muted">{{ item.detail }}</p>
-                          </div>
-                        </div>
-                      </template>
-                    </UPopover>
+                <div class="space-y-1">
+                  <div class="flex items-center gap-1.5 text-sm">
+                    <span class="text-highlighted">Nível de confiança</span>
+                    <UButton
+                      type="button"
+                      icon="i-lucide-circle-help"
+                      variant="ghost"
+                      color="neutral"
+                      size="xs"
+                      class="h-4 min-h-0 w-4 min-w-0 p-0"
+                      aria-label="Explicar níveis de confiança"
+                      @click="openConfidenceHelp"
+                    />
                   </div>
                   <USelect
                     :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.confidenceLevel ?? link.confidenceLevel"
@@ -1018,8 +1189,8 @@ async function deleteMeasurement(measurementId: string) {
                   />
                 </div>
 
-                <div class="md:col-span-5 flex flex-col gap-2 md:flex-row md:items-end">
-                  <UFormField label="Observação" class="flex-1">
+                <div class="md:col-span-4">
+                  <UFormField label="Observação" class="w-full">
                     <UTextarea
                       :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.observationInput ?? ''"
                       :rows="2"
@@ -1028,14 +1199,15 @@ async function deleteMeasurement(measurementId: string) {
                       @update:model-value="(value) => updateDraftObservation(link.id, value)"
                     />
                   </UFormField>
+                </div>
 
-                  <div class="flex justify-end gap-2 pb-0.5">
+                <div class="flex items-end justify-end gap-2 md:row-span-2 md:self-stretch">
                     <UButton
                       type="button"
                       variant="ghost"
                       color="neutral"
                       label="Cancelar"
-                      @click="cancelKpiLinkDraft(link.id); editingPersistedKpiLinkId = null"
+                      @click="cancelPersistedKpiLinkEdit(link.id)"
                     />
                     <UButton
                       type="button"
@@ -1044,19 +1216,32 @@ async function deleteMeasurement(measurementId: string) {
                       :loading="kpiLinkSavingDraftId === link.id"
                       @click="savePersistedKpiLink(link.id)"
                     />
-                  </div>
                 </div>
               </div>
             </article>
           </div>
 
           <article
-            v-for="draft in kpiLinkDrafts"
+            v-for="draft in standaloneKpiLinkDrafts"
             :key="draft.draftId"
             class="rounded-xl border border-dashed border-primary/30 bg-primary/5 p-3"
           >
-            <div class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto]">
-              <UFormField label="KPI relacionado" required>
+            <div class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-start">
+              <div class="space-y-1">
+                <div class="flex items-center gap-1.5 text-sm">
+                  <span class="text-highlighted">KPI relacionado</span>
+                  <span class="text-error">*</span>
+                  <UButton
+                    type="button"
+                    icon="i-lucide-circle-help"
+                    variant="ghost"
+                    color="neutral"
+                    size="xs"
+                    class="h-4 min-h-0 w-4 min-w-0 p-0"
+                    aria-label="Abrir catálogo de KPIs"
+                    @click="openKpiCatalogHelp"
+                  />
+                </div>
                 <USelect
                   :model-value="draft.kpiId"
                   :items="getKpiOptionsForRow(draft.kpiId)"
@@ -1064,7 +1249,7 @@ async function deleteMeasurement(measurementId: string) {
                   class="w-full"
                   @update:model-value="(value) => updateDraftKpiId(draft.draftId, value as string | undefined)"
                 />
-              </UFormField>
+              </div>
 
               <UFormField label="Tipo de impacto">
                 <USelect
@@ -1088,37 +1273,19 @@ async function deleteMeasurement(measurementId: string) {
                 />
               </UFormField>
 
-              <div class="relative pt-6">
-                <div class="absolute inset-x-0 top-0 flex items-center justify-between gap-1.5 text-sm leading-none">
-                  <span class="text-sm text-highlighted">Nível de confiança</span>
-                  <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
-                    <UButton
-                      type="button"
-                      icon="i-lucide-circle-help"
-                      variant="ghost"
-                      color="neutral"
-                      size="xs"
-                      class="h-4 min-h-0 w-4 min-w-0 p-0"
-                      aria-label="Explicar níveis de confiança"
-                    />
-                    <template #content>
-                      <div class="max-h-[70vh] w-[min(28rem,calc(100vw-2rem))] space-y-2.5 overflow-y-auto p-3 text-sm text-highlighted">
-                        <p class="font-medium text-highlighted">
-                          Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
-                        </p>
-                        <div
-                          v-for="item in confidenceLevelHelp"
-                          :key="item.title"
-                          class="space-y-1 rounded-lg border border-default p-2.5"
-                        >
-                          <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
-                          <p>👉 {{ item.summary }}</p>
-                          <p class="text-muted">{{ item.signals }}</p>
-                          <p class="text-muted">{{ item.detail }}</p>
-                        </div>
-                      </div>
-                    </template>
-                  </UPopover>
+              <div class="space-y-1">
+                <div class="flex items-center gap-1.5 text-sm">
+                  <span class="text-highlighted">Nível de confiança</span>
+                  <UButton
+                    type="button"
+                    icon="i-lucide-circle-help"
+                    variant="ghost"
+                    color="neutral"
+                    size="xs"
+                    class="h-4 min-h-0 w-4 min-w-0 p-0"
+                    aria-label="Explicar níveis de confiança"
+                    @click="openConfidenceHelp"
+                  />
                 </div>
                 <USelect
                   v-model="draft.confidenceLevel"
@@ -1127,8 +1294,8 @@ async function deleteMeasurement(measurementId: string) {
                 />
               </div>
 
-              <div class="md:col-span-5 flex flex-col gap-2 md:flex-row md:items-end">
-                <UFormField label="Observação" class="flex-1">
+              <div class="md:col-span-4">
+                <UFormField label="Observação" class="w-full">
                   <UTextarea
                     :model-value="draft.observationInput"
                     :rows="2"
@@ -1137,8 +1304,9 @@ async function deleteMeasurement(measurementId: string) {
                     @update:model-value="(value) => updateDraftObservation(draft.draftId, value)"
                   />
                 </UFormField>
+              </div>
 
-                <div class="flex justify-end gap-2 pb-0.5">
+              <div class="flex items-end justify-end gap-2 md:row-span-2 md:self-stretch">
                   <UButton
                     type="button"
                     variant="ghost"
@@ -1153,7 +1321,6 @@ async function deleteMeasurement(measurementId: string) {
                     :loading="kpiLinkSavingDraftId === draft.draftId"
                     @click="saveKpiLinkDraft(draft.draftId)"
                   />
-                </div>
               </div>
 
               <p v-if="getKpiImpactSummary(draft)" class="text-xs leading-relaxed text-muted md:col-span-5">
@@ -1221,15 +1388,12 @@ async function deleteMeasurement(measurementId: string) {
                 <p v-if="getPersistedKpiImpactSummary(link)" class="text-xs text-muted">
                   Impacto esperado: {{ getPersistedKpiImpactSummary(link) }}
                 </p>
+                <p v-if="link.observation" class="text-xs leading-relaxed text-muted">
+                  Observação da configuração: {{ link.observation }}
+                </p>
               </div>
 
               <div class="flex flex-wrap items-center gap-2">
-                <span
-                  v-if="getCurrentMeasurement(link.kpiId)"
-                  class="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary"
-                >
-                  Atual: {{ formatMeasurementValue(getCurrentMeasurement(link.kpiId)!.measuredValue) }} em {{ formatMeasurementDate(getCurrentMeasurement(link.kpiId)!.measurementDate) }}
-                </span>
                 <UButton
                   type="button"
                   size="xs"
@@ -1302,57 +1466,151 @@ async function deleteMeasurement(measurementId: string) {
               </div>
             </div>
 
-            <div v-if="getMeasurementsForKpi(link.kpiId).length" class="mt-4 space-y-2">
-              <article
-                v-for="(measurement, measurementIndex) in getMeasurementsForKpi(link.kpiId)"
-                :key="measurement.id"
-                class="rounded-lg border border-default bg-default p-3"
-              >
-                <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                  <div class="space-y-2">
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span
-                        v-if="measurementIndex === 0"
-                        class="inline-flex items-center rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-primary"
-                      >
-                        Atual
-                      </span>
-                      <span
-                        class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium"
-                        :class="getMeasurementResultTone(measurement.result)"
-                      >
-                        {{ getMeasurementResultLabel(measurement.result) }}
-                      </span>
-                    </div>
-                    <p class="text-sm font-medium text-highlighted">
-                      {{ formatMeasurementValue(measurement.measuredValue) }} em {{ formatMeasurementDate(measurement.measurementDate) }}
-                    </p>
-                    <p v-if="measurement.observation" class="text-xs leading-relaxed text-muted">
-                      {{ measurement.observation }}
-                    </p>
+            <div v-if="getMeasurementsForKpi(link.kpiId).length" class="mt-4 space-y-3">
+              <div v-if="getMeasurementChartData(link.kpiId)" class="rounded-lg border border-default bg-default p-4">
+                <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p class="text-sm font-semibold text-highlighted">Evolução da apuração</p>
+                    <p class="text-xs text-muted">Linha temporal das apurações registradas para este KPI.</p>
                   </div>
-
-                  <div class="flex items-center gap-1 self-end md:self-start">
-                    <UButton
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      color="neutral"
-                      icon="i-lucide-pencil"
-                      @click="openMeasurementDraft(link.kpiId, measurement)"
-                    />
-                    <UButton
-                      type="button"
-                      size="xs"
-                      variant="ghost"
-                      color="error"
-                      icon="i-lucide-trash-2"
-                      :loading="measurementDeletingId === measurement.id"
-                      @click="deleteMeasurement(measurement.id)"
-                    />
+                  <div class="flex flex-wrap items-center gap-3 text-xs text-muted">
+                    <span>Menor: {{ formatMeasurementValue(getMeasurementChartData(link.kpiId)!.minValue) }}</span>
+                    <span>Maior: {{ formatMeasurementValue(getMeasurementChartData(link.kpiId)!.maxValue) }}</span>
+                    <span v-if="getMeasurementChartData(link.kpiId)!.estimatedImpact != null">Impacto esperado: {{ formatMeasurementValue(getMeasurementChartData(link.kpiId)!.estimatedImpact!) }}</span>
                   </div>
                 </div>
-              </article>
+
+                <svg
+                  :viewBox="`0 0 ${getMeasurementChartData(link.kpiId)!.width} ${getMeasurementChartData(link.kpiId)!.height}`"
+                  class="mx-auto block w-full max-w-xl"
+                  :style="{ aspectRatio: `${getMeasurementChartData(link.kpiId)!.width} / ${getMeasurementChartData(link.kpiId)!.height}` }"
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  <defs>
+                    <linearGradient :id="`measurement-gradient-${link.kpiId}`" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="0%" stop-color="rgb(59 130 246 / 0.32)" />
+                      <stop offset="100%" stop-color="rgb(59 130 246 / 0.04)" />
+                    </linearGradient>
+                  </defs>
+
+                  <g>
+                    <line
+                      v-for="gridLine in getMeasurementChartData(link.kpiId)!.gridLines"
+                      :key="gridLine.id"
+                      x1="18"
+                      :x2="getMeasurementChartData(link.kpiId)!.width - 18"
+                      :y1="gridLine.y"
+                      :y2="gridLine.y"
+                      stroke="rgb(148 163 184 / 0.18)"
+                      stroke-dasharray="4 6"
+                    />
+                  </g>
+
+                  <path
+                    :d="getMeasurementChartData(link.kpiId)!.areaPath"
+                    :fill="`url(#measurement-gradient-${link.kpiId})`"
+                  />
+                  <path
+                    :d="getMeasurementChartData(link.kpiId)!.linePath"
+                    fill="none"
+                    stroke="rgb(59 130 246)"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="3"
+                  />
+                  <line
+                    v-if="getMeasurementChartData(link.kpiId)!.estimatedImpactY != null"
+                    x1="18"
+                    :x2="getMeasurementChartData(link.kpiId)!.width - 18"
+                    :y1="getMeasurementChartData(link.kpiId)!.estimatedImpactY!"
+                    :y2="getMeasurementChartData(link.kpiId)!.estimatedImpactY!"
+                    stroke="rgb(245 158 11)"
+                    stroke-dasharray="6 6"
+                    stroke-width="2"
+                  />
+                  <g v-for="point in getMeasurementChartData(link.kpiId)!.points" :key="point.id">
+                    <text
+                      :x="point.x"
+                      :y="point.labelY"
+                      text-anchor="middle"
+                      fill="rgb(15 23 42)"
+                      class="text-[10px] font-bold"
+                    >
+                      {{ formatMeasurementValue(point.measuredValue) }}
+                    </text>
+                    <circle :cx="point.x" :cy="point.y" r="5" fill="rgb(255 255 255)" stroke="rgb(59 130 246)" stroke-width="3" />
+                    <title>{{ `${formatMeasurementDate(point.measurementDate)} - ${formatMeasurementValue(point.measuredValue)}` }}</title>
+                  </g>
+                </svg>
+
+                <div class="mt-3 flex items-center justify-between text-xs text-muted">
+                  <span>{{ getMeasurementChartData(link.kpiId)!.firstLabel }}</span>
+                  <span>{{ getMeasurementChartData(link.kpiId)!.lastLabel }}</span>
+                </div>
+              </div>
+
+              <div class="overflow-x-auto rounded-lg border border-default bg-default">
+                <table class="w-full min-w-[720px] border-separate border-spacing-0 text-sm">
+                  <thead class="bg-elevated/70 text-xs uppercase tracking-[0.08em] text-muted">
+                    <tr>
+                      <th class="border-b border-default px-3 py-2 text-left">Seq.</th>
+                      <th class="border-b border-default px-3 py-2 text-left">Data</th>
+                      <th class="border-b border-default px-3 py-2 text-left">Impacto apurado</th>
+                      <th class="border-b border-default px-3 py-2 text-left">Resultado</th>
+                      <th class="border-b border-default px-3 py-2 text-left">Observação</th>
+                      <th class="border-b border-default px-3 py-2 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      v-for="measurement in getMeasurementsTimeline(link.kpiId)"
+                      :key="measurement.id"
+                      class="align-top hover:bg-elevated/30"
+                    >
+                      <td class="border-b border-default px-3 py-2 text-muted">
+                        {{ getMeasurementSequenceIndex(link.kpiId, measurement.id) }}
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <div>
+                          <span class="font-medium text-highlighted">{{ formatMeasurementDate(measurement.measurementDate) }}</span>
+                        </div>
+                      </td>
+                      <td class="border-b border-default px-3 py-2 font-medium text-highlighted">
+                        {{ formatMeasurementValue(measurement.measuredValue) }}
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium" :class="getMeasurementResultTone(getDisplayedMeasurementResult(link.kpiId, measurement))">
+                          {{ getMeasurementResultLabel(getDisplayedMeasurementResult(link.kpiId, measurement)) }}
+                        </span>
+                      </td>
+                      <td class="border-b border-default px-3 py-2 text-muted">
+                        {{ measurement.observation || '—' }}
+                      </td>
+                      <td class="border-b border-default px-3 py-2">
+                        <div class="flex items-center justify-end gap-1">
+                          <UButton
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            color="neutral"
+                            icon="i-lucide-pencil"
+                            @click="openMeasurementDraft(link.kpiId, measurement)"
+                          />
+                          <UButton
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            color="error"
+                            icon="i-lucide-trash-2"
+                            :loading="measurementDeletingId === measurement.id"
+                            @click="deleteMeasurement(measurement.id)"
+                          />
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <p v-else class="mt-4 text-xs italic text-muted">
@@ -1362,5 +1620,69 @@ async function deleteMeasurement(measurementId: string) {
         </div>
       </div>
     </UCard>
+
+    <UModal v-model:open="helpModalOpen" :ui="{ content: 'sm:max-w-4xl' }">
+      <template #header>
+        <h3 class="text-lg font-semibold text-highlighted">{{ helpModalTitle }}</h3>
+      </template>
+
+      <template #body>
+        <div v-if="helpModalType === 'confidence'" class="space-y-3 p-4 text-sm text-highlighted">
+          <p class="font-medium">
+            Nível de confiança = o quanto você acredita que aquele épico realmente vai impactar o KPI.
+          </p>
+          <div
+            v-for="item in confidenceLevelHelp"
+            :key="item.title"
+            class="space-y-1 rounded-lg border border-default p-3"
+          >
+            <p class="font-semibold" :class="item.color">{{ item.emoji }} {{ item.title }}</p>
+            <p>{{ item.summary }}</p>
+            <p class="text-muted">{{ item.signals }}</p>
+            <p class="text-muted">{{ item.detail }}</p>
+          </div>
+        </div>
+
+        <div v-else-if="helpModalType === 'kpi-catalog'" class="space-y-3 p-4">
+          <div v-if="!availableKpiCatalog.length" class="rounded-lg border border-default bg-elevated/40 px-3 py-4 text-sm text-muted">
+            Nenhum KPI cadastrado até o momento.
+          </div>
+
+          <article
+            v-for="kpi in availableKpiCatalog"
+            :key="kpi.id"
+            class="space-y-3 rounded-xl border border-default bg-default p-4"
+          >
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h4 class="text-base font-semibold text-highlighted">{{ kpi.name }}</h4>
+              </div>
+              <div class="flex flex-wrap gap-2 text-xs">
+                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Tipo: {{ kpiTypeLabels[kpi.type] }}</span>
+                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Alavanca: {{ kpiLeverLabels[kpi.lever] }}</span>
+                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Objetivo: {{ kpiObjectiveLabels[kpi.objective] }}</span>
+              </div>
+            </div>
+
+            <div class="grid gap-3 md:grid-cols-2">
+              <div class="space-y-1">
+                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-muted">Descrição</p>
+                <p class="text-sm text-highlighted">{{ kpi.description || '—' }}</p>
+              </div>
+              <div class="space-y-1">
+                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-muted">Como calcular</p>
+                <p class="text-sm text-highlighted">{{ kpi.calculation || '—' }}</p>
+              </div>
+            </div>
+          </article>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex justify-end">
+          <UButton label="Fechar" variant="ghost" @click="closeHelpModal" />
+        </div>
+      </template>
+    </UModal>
   </div>
 </template>

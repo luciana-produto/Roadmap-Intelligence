@@ -365,7 +365,7 @@ function getProgressPercent(kpi: Kpi): number | null {
     </div>
 
     <!-- Form Modal ──────────────────────────────────────────────────────── -->
-    <UModal v-model:open="showFormModal">
+    <UModal v-model:open="showFormModal" :ui="{ content: 'sm:max-w-5xl' }">
       <template #header>
         <h3 class="text-lg font-semibold text-highlighted">
           {{ editingKpi ? 'Editar KPI' : 'Novo KPI' }}
@@ -373,7 +373,7 @@ function getProgressPercent(kpi: Kpi): number | null {
       </template>
 
       <template #body>
-        <div class="space-y-4 p-4">
+        <div class="space-y-5 p-5">
           <UFormField label="Nome" required>
             <UInput
               v-model="formData.name"
@@ -407,11 +407,11 @@ function getProgressPercent(kpi: Kpi): number | null {
           </div>
 
           <UFormField label="Descrição">
-            <UTextarea v-model="formData.description" placeholder="Descrição do indicador..." :rows="2" class="w-full" />
+            <UTextarea v-model="formData.description" placeholder="Descrição do indicador..." :rows="4" class="w-full" />
           </UFormField>
 
           <UFormField label="Como calcular?">
-            <UTextarea v-model="formData.calculation" placeholder="Fórmula ou método de cálculo..." :rows="2" class="w-full" />
+            <UTextarea v-model="formData.calculation" placeholder="Fórmula ou método de cálculo..." :rows="4" class="w-full" />
           </UFormField>
 
           <div class="grid grid-cols-2 gap-4">
