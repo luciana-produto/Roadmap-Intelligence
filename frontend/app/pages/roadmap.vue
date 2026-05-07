@@ -1785,11 +1785,6 @@ function syncListSectionDividers() {
           const metaRow = document.createElement('div')
           metaRow.className = 'flex flex-wrap items-center gap-1.5'
 
-          const epicLabel = document.createElement('span')
-          epicLabel.className = 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted'
-          epicLabel.textContent = 'Épico'
-          metaRow.appendChild(epicLabel)
-
           const countNode = document.createElement('span')
           countNode.className = 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
           countNode.textContent = `${config.count} dem.`
@@ -1808,7 +1803,7 @@ function syncListSectionDividers() {
           const roadmapTitleLabel = headerMeta?.epic.roadmapTitle ?? config.roadmapTitle
           if (roadmapTitleLabel) {
             const roadmapLabel = document.createElement('div')
-            roadmapLabel.className = 'truncate text-[11px] text-muted'
+            roadmapLabel.className = 'truncate text-[10px] text-muted'
             roadmapLabel.textContent = roadmapTitleLabel
             titleBlock.appendChild(roadmapLabel)
           }
@@ -1818,8 +1813,8 @@ function syncListSectionDividers() {
 
           const epicTitle = document.createElement('div')
           epicTitle.className = headerMeta.epic.status === 'Deprioritized'
-            ? 'truncate text-[13px] font-medium line-through text-muted'
-            : 'truncate text-[13px] font-medium text-highlighted'
+            ? 'truncate text-[12px] font-medium line-through text-muted'
+            : 'truncate text-[12px] font-medium text-highlighted'
           epicTitle.textContent = headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
           if (headerMeta?.epic.description?.trim())
             epicTitle.title = headerMeta.epic.description.trim()
@@ -3570,13 +3565,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           h('div', { class: 'flex items-start gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-list-todo', class: 'mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600' }),
             h('div', { class: 'min-w-0 flex-1' }, [
-              h('div', { class: 'mb-1 flex flex-wrap items-center gap-1.5' }, [
-                h('span', {
-                  class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted'
-                }, 'Demanda')
-              ]),
               h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
-                h('p', { class: `min-w-0 truncate text-[13px] font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title),
+                h('p', { class: `min-w-0 truncate text-[12px] font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title),
                 ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [])
               ])
             ])

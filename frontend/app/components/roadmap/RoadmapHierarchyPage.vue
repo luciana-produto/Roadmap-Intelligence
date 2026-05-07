@@ -611,17 +611,20 @@ function getProductNamesLine(names: string[]) {
   return names.join(' · ')
 }
 
-function getRoadmapGroupProductNames(epics: RoadmapDemand[]) {
-  return getRoadmapGroupProductEntries(epics).map(product => product.label)
+function getRoadmapGroupProductNames(roadmap: RoadmapDemand, epics: RoadmapDemand[]) {
+  return getRoadmapGroupProductEntries(roadmap, epics).map(product => product.label)
 }
 
-function getRoadmapGroupProductEntries(epics: RoadmapDemand[]) {
+function getRoadmapGroupProductEntries(roadmap: RoadmapDemand, epics: RoadmapDemand[]) {
   const productsMap = new Map<string, string>()
 
-  epics.flatMap(epic => [
-    ...getProductEntries(epic),
-    ...getDemandsForEpic(epic.id).flatMap(demand => getProductEntries(demand))
-  ]).forEach((product) => {
+  ;[
+    ...getProductEntries(roadmap),
+    ...epics.flatMap(epic => [
+      ...getProductEntries(epic),
+      ...getDemandsForEpic(epic.id).flatMap(demand => getProductEntries(demand))
+    ])
+  ].forEach((product) => {
     if (!productsMap.has(product.value))
       productsMap.set(product.value, product.label)
   })
@@ -865,12 +868,12 @@ function sortItems(items: RoadmapDemand[], level: 'roadmap' | 'epic' | 'demand')
       case 'products':
         return applySortDirection(compareText(
           getProductNamesLine(left.itemType === 'Roadmap'
-            ? getRoadmapGroupProductNames(roadmapGroups.value.find(group => group.roadmap.id === left.id)?.epics ?? [])
+            ? getRoadmapGroupProductNames(left, roadmapGroups.value.find(group => group.roadmap.id === left.id)?.epics ?? [])
             : left.itemType === 'Epic'
               ? getEpicDisplayProductNames(left)
               : getProductNames(left)),
           getProductNamesLine(right.itemType === 'Roadmap'
-            ? getRoadmapGroupProductNames(roadmapGroups.value.find(group => group.roadmap.id === right.id)?.epics ?? [])
+            ? getRoadmapGroupProductNames(right, roadmapGroups.value.find(group => group.roadmap.id === right.id)?.epics ?? [])
             : right.itemType === 'Epic'
               ? getEpicDisplayProductNames(right)
               : getProductNames(right))
@@ -924,7 +927,7 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
       const hasActiveCustomerFilter = !!normalizeSearchText(hierarchyCustomersFilter.value)
       const requiresChildMatch = hasActiveProductFilter || hasActiveCustomerFilter
       const roadmapMatches = matchesHierarchyFilters(roadmap, {
-        products: getRoadmapGroupProductEntries(sourceEpics).map(product => product.value),
+        products: getRoadmapGroupProductEntries(roadmap, sourceEpics).map(product => product.value),
         customerText: getCustomersLine(getRoadmapGroupCustomerNames(sourceEpics)),
         dueText: formatDate(getDisplayedConclusionDate(roadmap))
       })
@@ -1846,10 +1849,24 @@ void initializeHierarchyPage()
                     </span>
                   </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                      <p v-if="getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)))">
-                      {{ getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic))) }}
-                    </p>
+                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                    <span v-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).allVisible && getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                      {{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}
+                    </span>
+                    <UPopover v-else-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                      <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                        <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}</span>
+                        <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).hiddenCount }}</span>
+                      </button>
+
+                      <template #content>
+                        <div class="flex max-w-xs flex-wrap gap-1.5 p-2">
+                          <span v-for="product in getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items" :key="`${group.roadmap.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                            {{ product }}
+                          </span>
+                        </div>
+                      </template>
+                    </UPopover>
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
