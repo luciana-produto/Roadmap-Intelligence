@@ -4,6 +4,7 @@ import type {
   RoadmapDemand,
   RoadmapProject,
   RoadmapItemType,
+  CustomerRename,
   DemandDependencyOption,
   DemandFormData,
   DemandType,
@@ -108,6 +109,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:open': [value: boolean]
   submit: [data: DemandFormData]
+  'trade-off-deleted': [tradeOffId: string]
 }>()
 
 const isEdit = computed(() => !!props.demand)
@@ -169,7 +171,8 @@ const statusOptions = [
   { value: 'Backlog',       label: 'Backlog' },
   { value: 'InProgress',    label: 'Doing' },
   { value: 'Done',          label: 'Concluído' },
-  { value: 'Deprioritized', label: 'Despriorizado' }
+  { value: 'Deprioritized', label: 'Despriorizado' },
+  { value: 'Blocked',       label: 'Impedido' }
 ]
 
 const deprioritizationReasonOptions = [
@@ -217,6 +220,9 @@ const dependencySearch = ref('')
 const parentSearch = ref('')
 const activeTab = ref<DemandFormTab>('general')
 const showSubmitHint = ref(false)
+const customerInputRef = useTemplateRef<HTMLInputElement>('customerInput')
+const customerRenameSource = ref<string | null>(null)
+const pendingCustomerRenames = ref<CustomerRename[]>([])
 let submitHintTimeout: ReturnType<typeof setTimeout> | null = null
 
 const hasStatusTab = computed(() => resultTabs.value.length > 1)
@@ -224,6 +230,7 @@ const hasStatusTab = computed(() => resultTabs.value.length > 1)
 const observationRequired = computed(() => form.status === 'Deprioritized')
 const deprioritizationReasonRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
+const blockedReasonRequired = computed(() => form.status === 'Blocked')
 
 const form = reactive<DemandFormState>({
   itemType: '',
@@ -246,7 +253,6 @@ const form = reactive<DemandFormState>({
   hours: undefined,
   customers: [],
   dependencyDemandIds: [],
-  isBlocked: false,
   blockedReason: '',
   promisedDate: '',
   deliveryDate: '',
@@ -378,6 +384,8 @@ const kpiMeasurements = ref<KpiMeasurement[]>([])
 const measurementDrafts = ref<Record<string, MeasurementEditorState>>({})
 const measurementSavingKpiId = ref<string | null>(null)
 const measurementDeletingId = ref<string | null>(null)
+const tradeOffDeletingId = ref<string | null>(null)
+const removedTradeOffIds = ref<string[]>([])
 const epicOptionsByProjectId = ref<Record<string, EpicParentOption[]>>({})
 
 function mapEpicParentOptions(items: RoadmapDemand[]): EpicParentOption[] {
@@ -473,7 +481,9 @@ const replacementDemandOptions = computed(() => {
     }))
 })
 
-  const tradeOffHistory = computed(() => props.demand?.tradeOffHistory ?? [])
+const tradeOffHistory = computed(() =>
+  (props.demand?.tradeOffHistory ?? []).filter(tradeOff => !removedTradeOffIds.value.includes(tradeOff.id))
+)
 
 const impactTypeOptions = [
   { value: 'Percentage', label: 'Percentual' },
@@ -587,8 +597,9 @@ function populateFormFromDemand(demand: RoadmapDemand) {
     : (demand.jiraIssue ? [{ key: demand.jiraIssue, url: '' }] : [])
   form.hours = demand.hours ?? undefined
   form.customers = demand.customers ?? []
+  customerRenameSource.value = null
+  pendingCustomerRenames.value = []
   form.dependencyDemandIds = demand.dependsOn.map(item => item.demandId)
-  form.isBlocked = demand.isBlocked
   form.blockedReason = demand.blockedReason ?? ''
   form.promisedDate = demand.promisedDate ?? ''
   form.deliveryDate = demand.deliveryDate ?? ''
@@ -636,8 +647,9 @@ function resetFormForCreate() {
   form.issueLinks = []
   form.hours = undefined
   form.customers = []
+  customerRenameSource.value = null
+  pendingCustomerRenames.value = []
   form.dependencyDemandIds = []
-  form.isBlocked = false
   form.blockedReason = ''
   form.promisedDate = ''
   form.deliveryDate = ''
@@ -655,6 +667,8 @@ watch(
   () => [props.open, props.demand?.id ?? null] as const,
   ([open]) => {
     if (!open) return
+
+    removedTradeOffIds.value = []
 
     activeTab.value = 'general'
     showSubmitHint.value = false
@@ -835,15 +849,9 @@ function isValidIssueUrl(url: string) {
   }
 }
 
-watch(() => form.isBlocked, (val) => {
-  if (!val) form.blockedReason = ''
-})
-
 watch(() => form.status, (status) => {
-  if (status === 'Done') {
-    form.isBlocked = false
+  if (status !== 'Blocked')
     form.blockedReason = ''
-  }
 
   if (status !== 'Deprioritized') {
     form.deprioritizationReason = undefined
@@ -921,10 +929,28 @@ function setCustomerTags(tags: string[]) {
   form.customers = [...new Set(tags.map(tag => tag.trim()).filter(Boolean))]
 }
 
+function registerCustomerRename(from: string, to: string) {
+  const original = from.trim()
+  const renamed = to.trim()
+
+  if (!original || !renamed || original === renamed)
+    return
+
+  pendingCustomerRenames.value = [
+    ...pendingCustomerRenames.value.filter(rename => rename.from !== original),
+    { from: original, to: renamed }
+  ]
+}
+
 function addCustomerTag(value: string) {
   const normalized = value.trim()
   if (!normalized) return
+
+  if (customerRenameSource.value)
+    registerCustomerRename(customerRenameSource.value, normalized)
+
   setCustomerTags([...customerTags.value, normalized])
+  customerRenameSource.value = null
   customerInput.value = ''
 }
 
@@ -935,6 +961,13 @@ function handleCustomerEnter() {
 
 function removeCustomerTag(tag: string) {
   setCustomerTags(customerTags.value.filter(customer => customer !== tag))
+}
+
+function editCustomerTag(tag: string) {
+  customerRenameSource.value = tag
+  customerInput.value = tag
+  removeCustomerTag(tag)
+  queueMicrotask(() => customerInputRef.value?.focus())
 }
 
 function toggleProduct(id: string, checked: boolean) {
@@ -1352,6 +1385,23 @@ async function deleteMeasurement(measurementId: string) {
   }
 }
 
+async function deleteTradeOff(tradeOffId: string) {
+  tradeOffDeletingId.value = tradeOffId
+
+  try {
+    await api.del(`/api/roadmap/trade-offs/${tradeOffId}`)
+    removedTradeOffIds.value = [...removedTradeOffIds.value, tradeOffId]
+    emit('trade-off-deleted', tradeOffId)
+    toast.add({ title: 'Trade-off removido', color: 'success' })
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    tradeOffDeletingId.value = null
+  }
+}
+
 function isKpiLinkComplete(link: EditableDemandKpiLink) {
   return !!link.kpiId
 }
@@ -1381,7 +1431,7 @@ const missingSubmitReason = computed(() => {
     return 'Preencha a observação da despriorização'
   if (deliveryDateRequired.value && !form.deliveryDate)
     return 'Informe a data de entrega para concluir a demanda'
-  if (form.isBlocked && !form.blockedReason)
+  if (blockedReasonRequired.value && !form.blockedReason.trim())
     return 'Preencha o motivo do impedimento'
 
   const normalizedIssueLinks = normalizeIssueLinks(form.issueLinks)
@@ -1467,6 +1517,7 @@ async function handleSubmit() {
     issueLinks: sanitizedIssueLinks,
     hours: Number.isNaN(form.hours as number) ? undefined : form.hours,
     customers: sanitizeCustomersForItem(form.itemType, form.customers),
+    customerRenames: form.itemType === 'Epic' ? pendingCustomerRenames.value : [],
     promisedDate: sanitizePromisedDateForItem(form.itemType, normalizedQuarterYear, normalizedQuarterNumber, form.promisedDate),
     problemClarity: form.itemType === 'Epic' ? form.problemClarity : undefined,
     classification: form.classification as DemandClassification
@@ -1884,6 +1935,15 @@ async function handleSubmit() {
                     <button
                       type="button"
                       class="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-primary/15"
+                      title="Editar cliente"
+                      @click="editCustomerTag(customer)"
+                    >
+                      <UIcon name="i-lucide-pencil" class="h-3 w-3" />
+                    </button>
+                    <button
+                      type="button"
+                      class="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-primary/15"
+                      title="Remover cliente"
                       @click="removeCustomerTag(customer)"
                     >
                       <UIcon name="i-lucide-x" class="h-3 w-3" />
@@ -1891,10 +1951,11 @@ async function handleSubmit() {
                   </span>
 
                   <input
+                    ref="customerInput"
                     v-model="customerInput"
                     type="text"
                     class="min-w-[12rem] flex-1 bg-transparent px-1 py-1 text-sm text-highlighted outline-none placeholder:text-muted"
-                    placeholder="Digite para buscar ou criar um cliente"
+                    placeholder="Digite para buscar, criar ou editar um cliente"
                     @keydown.enter.prevent="handleCustomerEnter"
                   >
                 </div>
@@ -2014,19 +2075,6 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="!isRoadmap" label="Impedimento">
-              <label class="flex h-10 items-center gap-2 cursor-pointer select-none">
-                <input
-                  v-model="form.isBlocked"
-                  type="checkbox"
-                  class="h-4 w-4 accent-red-500"
-                >
-                <span class="text-sm" :class="form.isBlocked ? 'text-red-600 dark:text-red-400 font-medium' : 'text-muted'">
-                  {{ form.isBlocked ? 'Demanda impedida' : 'Sem impedimento' }}
-                </span>
-              </label>
-            </UFormField>
-
             <UFormField v-if="!isRoadmap && deliveryDateRequired" label="Data de entrega" required>
               <UInput
                 v-model="form.deliveryDate"
@@ -2037,11 +2085,7 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <UFormField
-            v-if="form.isBlocked"
-            label="Motivo do impedimento"
-            required
-          >
+          <UFormField v-if="blockedReasonRequired" label="Motivo do impedimento" required>
             <UInput
               v-model="form.blockedReason"
               placeholder="Descreva o motivo do impedimento"
@@ -2112,10 +2156,24 @@ async function handleSubmit() {
               :key="tradeOff.id"
               class="rounded-lg border border-default bg-elevated p-3 space-y-2"
             >
-              <div class="flex flex-wrap items-center gap-2">
-                <UBadge variant="subtle" color="neutral">{{ tradeOff.projectName }}</UBadge>
-                <UBadge variant="subtle" color="primary">{{ tradeOff.quarterLabel }}</UBadge>
-                <UBadge variant="subtle" color="warning">{{ deprioritizationReasonLabels[tradeOff.reason] }}</UBadge>
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <UBadge variant="subtle" color="neutral">{{ tradeOff.projectName }}</UBadge>
+                  <UBadge variant="subtle" color="primary">{{ tradeOff.quarterLabel }}</UBadge>
+                  <UBadge variant="subtle" color="warning">{{ deprioritizationReasonLabels[tradeOff.reason] }}</UBadge>
+                </div>
+
+                <UButton
+                  size="xs"
+                  color="error"
+                  variant="ghost"
+                  icon="i-lucide-trash-2"
+                  :loading="tradeOffDeletingId === tradeOff.id"
+                  :disabled="tradeOffDeletingId !== null && tradeOffDeletingId !== tradeOff.id"
+                  @click="deleteTradeOff(tradeOff.id)"
+                >
+                  Excluir
+                </UButton>
               </div>
 
               <p v-if="tradeOff.replacementDemandTitle" class="text-sm text-highlighted">

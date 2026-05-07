@@ -12,7 +12,8 @@ const statusConfig: Record<DemandStatus, { color: string, dot: string, label: st
   Backlog:      { color: 'text-muted', dot: 'bg-neutral-400 dark:bg-neutral-500', label: 'Backlog' },
   InProgress:   { color: 'text-blue-500', dot: 'bg-blue-500 dark:bg-blue-400', label: 'Doing' },
   Done:         { color: 'text-green-500', dot: 'bg-green-500 dark:bg-green-400', label: 'Concluído' },
-  Deprioritized:{ color: 'text-amber-500', dot: 'bg-amber-500 dark:bg-amber-400', label: 'Despriorizado' }
+  Deprioritized:{ color: 'text-amber-500', dot: 'bg-amber-500 dark:bg-amber-400', label: 'Despriorizado' },
+  Blocked:      { color: 'text-red-500', dot: 'bg-red-500 dark:bg-red-400', label: 'Impedido' }
 }
 
 function formatDate(value?: string) {
@@ -59,7 +60,7 @@ const hasInconsistentDependency = computed(() =>
 
 const statusTooltip = computed(() => {
   const notes = []
-  if (props.demand.isBlocked && props.demand.blockedReason)
+  if (props.demand.status === 'Blocked' && props.demand.blockedReason)
     notes.push(`Impedimento\n${props.demand.blockedReason}`)
   if (props.demand.status === 'Deprioritized' && props.demand.observation)
     notes.push(`Despriorização\n${props.demand.observation}`)
@@ -133,13 +134,6 @@ function getDependencyTooltip(prefix: 'É bloqueado por' | 'Bloqueia', dependenc
           <span class="inline-block h-2.5 w-2.5 shrink-0 rounded-full" :class="displayedStatus.dot" />
           <span class="text-xs truncate" :class="displayedStatus.color">
             {{ displayedStatus.label }}
-          </span>
-          <span
-            v-if="demand.isBlocked"
-            class="flex items-center gap-0.5 text-xs bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400 rounded-full px-1.5 py-0.5 font-medium"
-          >
-            <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
-            Impedido
           </span>
           <span
             v-if="statusTooltip"

@@ -4,7 +4,9 @@ import Sortable from 'sortablejs'
 import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
-import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType } from '~/types/roadmap'
+import type { ApiResponse } from '~/types/api'
+import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType, BulkEditRoadmapItemsData, CustomerRename } from '~/types/roadmap'
+import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 import {
@@ -21,6 +23,7 @@ import {
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
 const route = useRoute()
+const api = useApi()
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
 const toast = useToast()
@@ -40,6 +43,7 @@ const itemsById = computed(() => new Map(demands.value.map(item => [item.id, ite
 
 // ─── View mode ───────────────────────────────────────────────────────────────
 const viewMode = ref<'list' | 'hierarchy'>(route.query.view === 'hierarchy' ? 'hierarchy' : 'list')
+const planningBulkEditModalOpen = ref(false)
 
 // ─── Quarter phase ────────────────────────────────────────────────────────────
 const now = new Date()
@@ -101,6 +105,10 @@ const quarterFilterLabel = computed(() => {
 function formatDemandCustomers(customers?: string[]): string {
   return customers?.join(', ') ?? ''
 }
+
+const INLINE_LIST_AVG_CHAR_PX = 6.4
+const INLINE_LIST_SIDE_PADDING_PX = 22
+const INLINE_LIST_MORE_BADGE_PX = 28
 
 function normalizeCustomerList(customers?: string[]): string[] {
   return (customers ?? []).map(customer => customer.trim()).filter(Boolean)
@@ -211,7 +219,7 @@ function getDemandKpiSummary(demand: RoadmapDemand) {
   }
 
   return {
-    label: 'Incluir KPI',
+    label: '+KPI',
     tone: 'border-error/40 bg-error/10 text-error',
     actionLabel: 'Incluir KPI'
   }
@@ -385,7 +393,7 @@ function showDemandDelayMarker(demand: RoadmapDemand) {
 
 function getDemandNotesTooltip(demand: RoadmapDemand): string {
   const notes = []
-  if (demand.isBlocked && demand.blockedReason)
+  if (demand.status === 'Blocked' && demand.blockedReason)
     notes.push(`Impedimento\n${demand.blockedReason}`)
   if (demand.status === 'Deprioritized' && demand.observation)
     notes.push(`Despriorização${demand.deprioritizationReason ? ` · ${getDeprioritizationReasonLabel(demand.deprioritizationReason)}` : ''}\n${demand.observation}`)
@@ -663,18 +671,22 @@ const quarterScopedDemands = computed(() => {
   )
 })
 
+const capacityScopedDemands = computed(() =>
+  quarterScopedDemands.value.filter(demand => demand.status !== 'Deprioritized')
+)
+
 const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
   if (!activeCapacityScope.value) return null
 
-  const committedHours = quarterScopedDemands.value
+  const committedHours = capacityScopedDemands.value
     .filter(demand => demand.type !== 'Additional')
     .reduce((total, demand) => total + (demand.hours ?? 0), 0)
 
-  const additionalHours = quarterScopedDemands.value
+  const additionalHours = capacityScopedDemands.value
     .filter(demand => demand.type === 'Additional')
     .reduce((total, demand) => total + (demand.hours ?? 0), 0)
 
-  const nonEstimatedDemandCount = quarterScopedDemands.value
+  const nonEstimatedDemandCount = capacityScopedDemands.value
     .filter(demand => !isDemandEstimated(demand))
     .length
 
@@ -1018,6 +1030,12 @@ function getDemandDragScopeKey(demand: RoadmapDemand) {
 function ensureDemandCanMoveToStatus(demand: RoadmapDemand, status: DemandStatus) {
   if (status === 'Done' && !demand.deliveryDate) {
     toast.add({ title: 'Informe a data de entrega antes de concluir', color: 'warning' })
+    openEditModal(demand, status)
+    return false
+  }
+
+  if (status === 'Blocked' && !demand.blockedReason) {
+    toast.add({ title: 'Informe o motivo do impedimento antes de alterar o status', color: 'warning' })
     openEditModal(demand, status)
     return false
   }
@@ -1782,20 +1800,6 @@ function syncListSectionDividers() {
             classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
             classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
             metaRow.appendChild(classificationBadge)
-
-            headerMeta.issueLinks.forEach((issueLink) => {
-              const jiraTag = issueLink.url ? document.createElement('a') : document.createElement('span')
-              jiraTag.className = 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
-              jiraTag.textContent = issueLink.key
-
-              if (jiraTag instanceof HTMLAnchorElement) {
-                jiraTag.href = issueLink.url
-                jiraTag.target = '_blank'
-                jiraTag.rel = 'noopener noreferrer'
-              }
-
-              metaRow.appendChild(jiraTag)
-            })
           }
 
           const titleBlock = document.createElement('div')
@@ -1809,12 +1813,23 @@ function syncListSectionDividers() {
             titleBlock.appendChild(roadmapLabel)
           }
 
+          const epicTitleRow = document.createElement('div')
+          epicTitleRow.className = 'flex min-w-0 items-center gap-1.5'
+
           const epicTitle = document.createElement('div')
-          epicTitle.className = 'truncate text-[13px] font-medium text-highlighted'
+          epicTitle.className = headerMeta.epic.status === 'Deprioritized'
+            ? 'truncate text-[13px] font-medium line-through text-muted'
+            : 'truncate text-[13px] font-medium text-highlighted'
           epicTitle.textContent = headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
           if (headerMeta?.epic.description?.trim())
             epicTitle.title = headerMeta.epic.description.trim()
-          titleBlock.appendChild(epicTitle)
+          epicTitleRow.appendChild(epicTitle)
+
+          const issueTrigger = createIssueTriggerElement(headerMeta?.issueLinks ?? [])
+          if (issueTrigger)
+            epicTitleRow.appendChild(issueTrigger)
+
+          titleBlock.appendChild(epicTitleRow)
 
           if (headerMeta) {
             appendEpicDependencyRow(titleBlock, headerMeta.epic, headerMeta.epic.dependsOn, 'dependsOn')
@@ -1920,7 +1935,7 @@ function syncListSectionDividers() {
             badge.textContent = statusLabels[headerMeta.epic.status]
             statusRow.appendChild(badge)
 
-            if (headerMeta.epic.isBlocked) {
+            if (headerMeta.epic.status === 'Blocked') {
               const blockedBadge = document.createElement('span')
               blockedBadge.className = 'inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
               blockedBadge.appendChild(createSvgIcon(['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01'], 'h-3 w-3'))
@@ -1935,10 +1950,22 @@ function syncListSectionDividers() {
 
             container.appendChild(statusRow)
 
+            cell.appendChild(container)
+          }
+          grid.appendChild(cell)
+          continue
+        }
+
+        if (column.id === 'conclusion') {
+          const cell = createGridCell('px-4 py-2.5 align-top')
+          if (headerMeta) {
+            const container = document.createElement('div')
+            container.className = 'flex flex-col gap-1'
+
             const promisedDate = getDisplayedConclusionDate(headerMeta.epic)
             if (promisedDate) {
               const promisedRow = document.createElement('div')
-              promisedRow.className = 'flex items-center gap-1 text-[11px] text-muted'
+              promisedRow.className = `flex items-center gap-1 text-[11px] ${headerMeta.epic.status === 'Done' && headerMeta.epic.deliveryDate ? 'text-green-600 dark:text-green-400' : 'text-muted'}`
               promisedRow.appendChild(createSvgIcon(['M8 2v4', 'M16 2v4', 'M3 10h18', 'M8 14h.01', 'M12 14h.01', 'M16 14h.01', 'M8 18h.01', 'M12 18h.01', 'M16 18h.01', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2'], 'h-3 w-3'))
               const promisedText = document.createElement('span')
               promisedText.textContent = formatDemandDate(promisedDate)
@@ -1956,6 +1983,13 @@ function syncListSectionDividers() {
               container.appendChild(delayRow)
             }
 
+            if (!container.childElementCount) {
+              const empty = document.createElement('span')
+              empty.className = 'text-xs text-muted'
+              empty.textContent = '—'
+              container.appendChild(empty)
+            }
+
             cell.appendChild(container)
           }
           grid.appendChild(cell)
@@ -1965,24 +1999,9 @@ function syncListSectionDividers() {
         if (column.id === 'customers') {
           const cell = createGridCell('px-4 py-2.5 align-top')
           if (headerMeta?.customers.length) {
-            const customersWrap = document.createElement('div')
-            customersWrap.className = 'flex flex-wrap gap-1'
-
-            headerMeta.customers.slice(0, 2).forEach((customer) => {
-              const badge = document.createElement('span')
-              badge.className = 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted'
-              badge.textContent = customer
-              customersWrap.appendChild(badge)
-            })
-
-            if (headerMeta.customers.length > 2) {
-              const more = document.createElement('span')
-              more.className = 'text-[11px] text-muted'
-              more.textContent = `+${headerMeta.customers.length - 2}`
-              customersWrap.appendChild(more)
-            }
-
-            cell.appendChild(customersWrap)
+            const customerTrigger = createCustomerTriggerElement(headerMeta.customers, getBaseListColPixelWidth('customers', 110))
+            if (customerTrigger)
+              cell.appendChild(customerTrigger)
           }
           else {
             const empty = document.createElement('span')
@@ -2296,6 +2315,69 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
   }
 }
 
+function normalizeCustomerName(value?: string) {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function sanitizeCustomerRenames(renames?: CustomerRename[]) {
+  const result: CustomerRename[] = []
+  const seen = new Set<string>()
+
+  for (const rename of renames ?? []) {
+    const from = rename.from.trim()
+    const to = rename.to.trim()
+    const key = normalizeCustomerName(from)
+
+    if (!from || !to || key === normalizeCustomerName(to) || seen.has(key))
+      continue
+
+    seen.add(key)
+    result.push({ from, to })
+  }
+
+  return result
+}
+
+function applyCustomerRenames(customers: string[] | undefined, renames: CustomerRename[]) {
+  const renameByCustomer = new Map(
+    renames.map(rename => [normalizeCustomerName(rename.from), rename.to.trim()] as const)
+  )
+  const nextCustomers: string[] = []
+
+  for (const customer of customers ?? []) {
+    const renamed = renameByCustomer.get(normalizeCustomerName(customer)) ?? customer.trim()
+
+    if (renamed && !nextCustomers.includes(renamed))
+      nextCustomers.push(renamed)
+  }
+
+  return nextCustomers
+}
+
+async function propagateEpicCustomerRenames(sourceEpicId: string, renames: CustomerRename[]) {
+  if (!renames.length)
+    return
+
+  const response = await api.get<ApiResponse<RoadmapDemand[]>>('/api/roadmap/demands')
+  const impactedEpics = (response.data ?? []).filter((item) => {
+    if (item.itemType !== 'Epic' || item.id === sourceEpicId)
+      return false
+
+    return (item.customers ?? []).some(customer =>
+      renames.some(rename => normalizeCustomerName(customer) === normalizeCustomerName(rename.from))
+    )
+  })
+
+  for (const epic of impactedEpics) {
+    await roadmapStore.updateDemand(epic.id, buildDemandFormData(epic, {
+      customers: applyCustomerRenames(epic.customers, renames),
+      customerRenames: []
+    }))
+  }
+
+  await roadmapStore.fetchCustomerSuggestions()
+}
+
 async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) {
   const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
@@ -2389,6 +2471,7 @@ async function handleSubmit(data: DemandFormData) {
 
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  const customerRenames = sanitizeCustomerRenames(data.customerRenames)
 
   try {
     isSavingDemand.value = true
@@ -2396,6 +2479,10 @@ async function handleSubmit(data: DemandFormData) {
 
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
+
+      if (editingDemand.value.itemType === 'Epic')
+        await propagateEpicCustomerRenames(editingDemand.value.id, customerRenames)
+
       toast.add({ title: 'Item atualizado', color: 'success' })
     }
     else {
@@ -2412,6 +2499,16 @@ async function handleSubmit(data: DemandFormData) {
   }
   finally {
     isSavingDemand.value = false
+  }
+}
+
+function handleTradeOffDeleted(tradeOffId: string) {
+  if (!editingDemand.value)
+    return
+
+  editingDemand.value = {
+    ...editingDemand.value,
+    tradeOffHistory: editingDemand.value.tradeOffHistory.filter(item => item.id !== tradeOffId)
   }
 }
 
@@ -2464,19 +2561,21 @@ async function confirmDelete() {
 
 // ─── List view labels ──────────────────────────────────────────────────────────
 const statusLabels: Record<DemandStatus, string> = {
-  Backlog: 'Backlog', InProgress: 'Doing', Done: 'Concluído', Deprioritized: 'Despriorizado'
+  Backlog: 'Backlog', InProgress: 'Doing', Done: 'Concluído', Deprioritized: 'Despriorizado', Blocked: 'Impedido'
 }
 const statusTextClass: Record<DemandStatus, string> = {
   Backlog: 'text-muted',
   InProgress: 'text-blue-600 dark:text-blue-400',
   Done: 'text-green-600 dark:text-green-400',
-  Deprioritized: 'text-red-600 dark:text-red-400'
+  Deprioritized: 'text-red-600 dark:text-red-400',
+  Blocked: 'text-amber-600 dark:text-amber-400'
 }
 const statusDotClass: Record<DemandStatus, string> = {
   Backlog: 'bg-neutral-400 dark:bg-neutral-500',
   InProgress: 'bg-blue-500 dark:bg-blue-400',
   Done: 'bg-green-500 dark:bg-green-400',
-  Deprioritized: 'bg-red-500 dark:bg-red-400'
+  Deprioritized: 'bg-red-500 dark:bg-red-400',
+  Blocked: 'bg-amber-500 dark:bg-amber-400'
 }
 const typeLabels: Record<DemandType, string> = {
   Planned: 'Planejado', Spillover: 'Transbordo', Unplanned: 'Não Planejado', Additional: 'Adicional'
@@ -2644,6 +2743,10 @@ const selectedDemands = computed(() => {
   const selectedIds = new Set(selectedDemandIds.value)
   return demandItems.value.filter(demand => selectedIds.has(demand.id))
 })
+const selectedPlanningEpics = computed(() => {
+  const selectedIds = new Set(selectedEpicIds.value)
+  return epicItems.value.filter(epic => selectedIds.has(epic.id))
+})
 const selectedEpicDemands = computed(() => {
   if (!groupDemandsByEpic.value || !selectedEpicIds.value.length)
     return []
@@ -2660,6 +2763,15 @@ const selectedPlanningDemands = computed(() => {
   return Array.from(selectedById.values())
 })
 const selectedDemandCount = computed(() => selectedPlanningDemands.value.length)
+const selectedPlanningItems = computed(() => {
+  const selectedById = new Map<string, RoadmapDemand>()
+
+  selectedPlanningEpics.value.forEach(epic => selectedById.set(epic.id, epic))
+  selectedPlanningDemands.value.forEach(demand => selectedById.set(demand.id, demand))
+
+  return Array.from(selectedById.values())
+})
+const selectedPlanningItemCount = computed(() => selectedPlanningItems.value.length)
 
 const LIST_COL_MIN = 60
 
@@ -2681,6 +2793,7 @@ const STATUS_SELECT_OPTIONS = [
   { label: 'Doing',  value: 'InProgress' },
   { label: 'Concluído',     value: 'Done' },
   { label: 'Despriorizado', value: 'Deprioritized' },
+  { label: 'Impedido',      value: 'Blocked' },
 ]
 const TYPE_SELECT_OPTIONS = [
   { label: 'Planejado',     value: 'Planned' },
@@ -2706,6 +2819,7 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'products',       label: 'Produtos',      defaultWidth: 148, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
   { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
+  { id: 'conclusion',     label: 'Conclusão',     defaultWidth: 118, disableFilter: true },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'text' },
   { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
 ]
@@ -2714,6 +2828,27 @@ listColumnOrder.value = LIST_COL_DEFS.map(column => column.id)
 
 const listOrderedCols = ref<ListColMeta[]>([...LIST_COL_DEFS])
 const listHeaderRowRef = ref<HTMLElement | null>(null)
+
+const listQuarterFilterOptions = computed(() => {
+  const seen = new Set<string>()
+
+  return tableDemands.value
+    .map((demand) => {
+      const value = buildQuarterValue(demand.quarterYear, demand.quarterNumber)
+      return {
+        value,
+        label: quarterShortLabel(value)
+      }
+    })
+    .filter((option) => {
+      if (seen.has(option.value))
+        return false
+
+      seen.add(option.value)
+      return true
+    })
+    .sort((left, right) => left.label.localeCompare(right.label, 'pt-BR'))
+})
 
 onMounted(() => {
   if (listHeaderRowRef.value) {
@@ -2820,6 +2955,89 @@ function toggleEpicSelection(epicId: string, selected: boolean) {
 function clearSelectedDemands() {
   selectedDemandIds.value = []
   selectedEpicIds.value = []
+
+  queueMicrotask(() => {
+    syncListSectionDividers()
+  })
+}
+
+function buildBulkEditOverrides(demand: RoadmapDemand, changes: BulkEditRoadmapItemsData): Partial<DemandFormData> {
+  const overrides: Partial<DemandFormData> = {}
+
+  if (changes.status) {
+    overrides.status = changes.status
+
+    if (changes.status === 'Done')
+      overrides.deliveryDate = changes.deliveryDate ?? demand.deliveryDate ?? ''
+
+    if (changes.status === 'Blocked')
+      overrides.blockedReason = changes.blockedReason ?? demand.blockedReason ?? ''
+
+    if (changes.status === 'Deprioritized') {
+      overrides.observation = changes.observation ?? demand.observation ?? ''
+      overrides.deprioritizationReason = changes.deprioritizationReason ?? demand.deprioritizationReason ?? undefined
+
+      if (Object.prototype.hasOwnProperty.call(changes, 'replacementDemandId'))
+        overrides.replacementDemandId = changes.replacementDemandId
+    }
+    else {
+      overrides.deprioritizationReason = undefined
+      overrides.replacementDemandId = undefined
+
+      if (changes.status !== 'Blocked')
+        overrides.blockedReason = ''
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, 'promisedDate'))
+    overrides.promisedDate = changes.promisedDate
+
+  if (demand.itemType === 'Demand') {
+    if (changes.type)
+      overrides.type = changes.type
+
+    if (changes.quarterYear != null && changes.quarterNumber != null) {
+      overrides.quarterYear = changes.quarterYear
+      overrides.quarterNumber = changes.quarterNumber
+    }
+  }
+
+  return overrides
+}
+
+async function handlePlanningBulkEdit(changes: BulkEditRoadmapItemsData) {
+  if (!selectedPlanningItems.value.length || isBulkPlanning.value)
+    return
+
+  const updatedCount = selectedPlanningItems.value.length
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  isBulkPlanning.value = true
+
+  try {
+    for (const item of selectedPlanningItems.value) {
+      await roadmapStore.updateDemand(
+        item.id,
+        buildDemandFormData(item, buildBulkEditOverrides(item, changes))
+      )
+    }
+
+    planningBulkEditModalOpen.value = false
+    clearSelectedDemands()
+    await refreshListPresentation(listScrollTop, listScrollLeft)
+    toast.add({
+      title: 'Itens atualizados em lote',
+      description: `${updatedCount.toLocaleString('pt-BR')} itens atualizados com sucesso.`,
+      color: 'success'
+    })
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    isBulkPlanning.value = false
+    sanitizeSelectedDemands()
+  }
 }
 
 async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: number | null) {
@@ -2888,6 +3106,247 @@ function toggleListSort(colId: string) {
   else if (!active.desc) listSorting.value = [{ id: colId, desc: true }]
   else listSorting.value = []
 }
+function getListSortIcon(colId: string) {
+  const active = listSorting.value.find(s => s.id === colId)
+
+  if (!active)
+    return 'i-lucide-arrow-up-down'
+
+  return active.desc ? 'i-lucide-arrow-down' : 'i-lucide-arrow-up'
+}
+
+function getListFilterOptions(col: ListColMeta) {
+  if (col.id === 'products') {
+    return selectedProjectProducts.value.map(product => ({
+      label: product.name,
+      value: product.id
+    }))
+  }
+
+  if (col.id === 'quarterLabel')
+    return listQuarterFilterOptions.value
+
+  return col.selectOptions ?? []
+}
+
+function renderIssueTrigger(issueLinks: Array<{ key: string, url?: string }>) {
+  if (!issueLinks.length)
+    return null
+
+  if (issueLinks.length === 1 && issueLinks[0]?.url) {
+    return h('a', {
+      href: issueLinks[0].url,
+      target: '_blank',
+      rel: 'noopener noreferrer',
+      class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
+    }, [
+      h(UIconComp, { name: 'i-lucide-link-2', class: 'h-3 w-3' })
+    ])
+  }
+
+  return h(UPopoverComp, { content: { side: 'bottom', align: 'start', sideOffset: 8 } }, {
+    default: () => [
+      h('button', {
+        type: 'button',
+        class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
+      }, [
+        h(UIconComp, { name: 'i-lucide-link-2', class: 'h-3 w-3' }),
+        ...(issueLinks.length > 1 ? [h('span', String(issueLinks.length))] : [])
+      ])
+    ],
+    content: () => [
+      h('div', { class: 'flex min-w-40 flex-col gap-1 p-1' }, issueLinks.map(issue => issue.url
+        ? h('a', {
+            href: issue.url,
+            target: '_blank',
+            rel: 'noopener noreferrer',
+            class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:border-primary/40'
+          }, issue.key)
+        : h('span', {
+            class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary'
+          }, issue.key)
+      ))
+    ]
+  })
+}
+
+function createIssueTriggerElement(issueLinks: Array<{ key: string, url?: string }>) {
+  if (!issueLinks.length)
+    return null
+
+  if (issueLinks.length === 1 && issueLinks[0]?.url) {
+    const anchor = document.createElement('a')
+    anchor.href = issueLinks[0].url
+    anchor.target = '_blank'
+    anchor.rel = 'noopener noreferrer'
+    anchor.className = 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
+    anchor.appendChild(createSvgIcon(['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07L11.8 5.13', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07L12.2 18.87'], 'h-3 w-3'))
+    return anchor
+  }
+
+  const details = document.createElement('details')
+  details.className = 'relative inline-flex shrink-0'
+
+  const summary = document.createElement('summary')
+  summary.className = 'inline-flex h-5 list-none items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40 cursor-pointer'
+  summary.appendChild(createSvgIcon(['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07L11.8 5.13', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07L12.2 18.87'], 'h-3 w-3'))
+  if (issueLinks.length > 1) {
+    const count = document.createElement('span')
+    count.textContent = String(issueLinks.length)
+    summary.appendChild(count)
+  }
+  details.appendChild(summary)
+
+  const panel = document.createElement('div')
+  panel.className = 'absolute left-0 top-full z-20 mt-2 flex min-w-40 flex-col gap-1 rounded-lg border border-default bg-default p-1 shadow-lg'
+
+  issueLinks.forEach((issue) => {
+    const item = issue.url ? document.createElement('a') : document.createElement('span')
+    item.className = 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:border-primary/40'
+    item.textContent = issue.key
+
+    if (item instanceof HTMLAnchorElement) {
+      item.href = issue.url
+      item.target = '_blank'
+      item.rel = 'noopener noreferrer'
+    }
+
+    panel.appendChild(item)
+  })
+
+  details.appendChild(panel)
+  return details
+}
+
+function getAdaptiveInlineListDisplay(items: string[], columnWidth: number, separator = ', ') {
+  const normalizedItems = items.filter(Boolean)
+  const fullLabel = normalizedItems.join(separator)
+
+  if (!normalizedItems.length) {
+    return {
+      items: normalizedItems,
+      visibleItems: [] as string[],
+      hiddenCount: 0,
+      previewLabel: '',
+      fullLabel,
+      allVisible: true
+    }
+  }
+
+  const availableWidth = Math.max(columnWidth - INLINE_LIST_SIDE_PADDING_PX, 36)
+  const visibleItems: string[] = []
+  let usedWidth = 0
+
+  for (let index = 0; index < normalizedItems.length; index++) {
+    const item = normalizedItems[index]!
+    const remainingAfterCurrent = normalizedItems.length - index - 1
+    const reserveForMore = remainingAfterCurrent > 0
+      ? INLINE_LIST_MORE_BADGE_PX + String(remainingAfterCurrent).length * INLINE_LIST_AVG_CHAR_PX
+      : 0
+    const chunk = `${visibleItems.length ? separator : ''}${item}`
+    const nextWidth = usedWidth + chunk.length * INLINE_LIST_AVG_CHAR_PX
+
+    if (visibleItems.length && nextWidth + reserveForMore > availableWidth)
+      break
+
+    visibleItems.push(item)
+    usedWidth = nextWidth
+
+    if (!visibleItems.length)
+      break
+  }
+
+  if (!visibleItems.length)
+    visibleItems.push(normalizedItems[0]!)
+
+  const hiddenCount = Math.max(normalizedItems.length - visibleItems.length, 0)
+
+  return {
+    items: normalizedItems,
+    visibleItems,
+    hiddenCount,
+    previewLabel: visibleItems.join(separator),
+    fullLabel,
+    allVisible: hiddenCount === 0
+  }
+}
+
+function renderCustomerTrigger(customers: string[], columnWidth: number) {
+  const display = getAdaptiveInlineListDisplay(customers, columnWidth)
+  if (!display.items.length)
+    return null
+
+  if (display.allVisible) {
+    return h('span', {
+      class: 'block max-w-full truncate text-[11px] text-highlighted',
+      title: display.fullLabel
+    }, display.previewLabel)
+  }
+
+  return h(UPopoverComp, { content: { side: 'bottom', align: 'start', sideOffset: 8 } }, {
+    default: () => [
+      h('button', {
+        type: 'button',
+        class: 'inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted transition-colors hover:border-primary/40',
+        title: display.fullLabel
+      }, [
+        h('span', { class: 'max-w-[140px] truncate' }, display.previewLabel),
+        h('span', { class: 'shrink-0 text-muted' }, `+${display.hiddenCount}`)
+      ])
+    ],
+    content: () => [
+      h('div', { class: 'flex min-w-44 flex-col gap-1 p-1' }, display.items.map(customer => h('span', {
+        class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted'
+      }, customer)))
+    ]
+  })
+}
+
+function createCustomerTriggerElement(customers: string[], columnWidth: number) {
+  const display = getAdaptiveInlineListDisplay(customers, columnWidth)
+  if (!display.items.length)
+    return null
+
+  if (display.allVisible) {
+    const label = document.createElement('span')
+    label.className = 'block max-w-full truncate text-[11px] text-highlighted'
+    label.textContent = display.previewLabel
+    label.title = display.fullLabel
+    return label
+  }
+
+  const details = document.createElement('details')
+  details.className = 'relative inline-flex max-w-full'
+
+  const summary = document.createElement('summary')
+  summary.className = 'inline-flex max-w-full list-none items-center gap-1 rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted transition-colors hover:border-primary/40 cursor-pointer'
+  summary.title = display.fullLabel
+
+  const previewLabel = document.createElement('span')
+  previewLabel.className = 'max-w-[140px] truncate'
+  previewLabel.textContent = display.previewLabel
+  summary.appendChild(previewLabel)
+
+  const more = document.createElement('span')
+  more.className = 'shrink-0 text-muted'
+  more.textContent = `+${display.hiddenCount}`
+  summary.appendChild(more)
+  details.appendChild(summary)
+
+  const panel = document.createElement('div')
+  panel.className = 'absolute left-0 top-full z-20 mt-2 flex min-w-44 flex-col gap-1 rounded-lg border border-default bg-default p-1 shadow-lg'
+
+  display.items.forEach((customer) => {
+    const item = document.createElement('span')
+    item.className = 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted'
+    item.textContent = customer
+    panel.appendChild(item)
+  })
+
+  details.appendChild(panel)
+  return details
+}
+
 function startListResize(colId: string, e: MouseEvent) {
   e.preventDefault()
   e.stopPropagation()
@@ -3092,10 +3551,12 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         }
 
         if (d.epicTitle) {
+          const epic = d.epicId ? itemsById.value.get(d.epicId) : null
+          const isEpicDeprioritized = epic?.itemType === 'Epic' && epic.status === 'Deprioritized'
           hierarchyNodes.push(h('div', { class: 'mb-1 flex min-w-0 items-center gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-star', class: 'h-3.5 w-3.5 shrink-0 text-amber-500' }),
             h('span', {
-              class: 'min-w-0 flex-1 truncate text-[11px] text-highlighted',
+              class: `min-w-0 flex-1 truncate text-[11px] ${isEpicDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`,
               title: d.epicTitle
             }, d.epicTitle)
           ]))
@@ -3112,20 +3573,12 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               h('div', { class: 'mb-1 flex flex-wrap items-center gap-1.5' }, [
                 h('span', {
                   class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted'
-                }, 'Demanda'),
-                ...issueLinks.map(issue => issue.url
-                  ? h('a', {
-                      href: issue.url,
-                      target: '_blank',
-                      rel: 'noopener noreferrer',
-                      class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
-                    }, issue.key)
-                  : h('span', {
-                      class: 'inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary'
-                    }, issue.key)
-                )
+                }, 'Demanda')
               ]),
-              h('p', { class: `truncate text-[13px] font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title)
+              h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
+                h('p', { class: `min-w-0 truncate text-[13px] font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title),
+                ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [])
+              ])
             ])
           ])
         ]
@@ -3155,22 +3608,14 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         textNodes.push(h('div', { class: 'pl-8' }, groupedContentNodes))
       }
       else {
-        textNodes.push(h('p', { class: `font-medium truncate ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title))
+        textNodes.push(h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
+          h('p', { class: `min-w-0 flex-1 truncate font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title),
+          ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [])
+        ]))
       }
 
       if (!groupDemandsByEpic.value || !d.epicId) {
         const relationshipNodes = [
-          ...issueLinks.map(issue => issue.url
-            ? h('a', {
-                href: issue.url,
-                target: '_blank',
-                rel: 'noopener noreferrer',
-                class: 'inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700 hover:border-blue-300 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
-              }, issue.key)
-            : h('span', {
-                class: 'inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-mono text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
-              }, issue.key)
-          ),
           ...d.dependsOn.slice(0, 2).map(dependency => renderDependsOnBadge(d, dependency)),
           ...(d.dependsOn.length > 2
             ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
@@ -3273,6 +3718,16 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { style: { td: () => ({ width: listColWidth('status', 124) }), th: () => ({ width: listColWidth('status', 124) }) } },
   },
   {
+    id: 'conclusion',
+    header: 'Conclusão',
+    accessorFn: row => getDisplayedConclusionDate(row) ?? '',
+    enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => (getDisplayedConclusionDate(left) ?? '').localeCompare(getDisplayedConclusionDate(right) ?? '', 'pt-BR')),
+    enableColumnFilter: false,
+    size: 118,
+    meta: { style: { td: () => ({ width: listColWidth('conclusion', 118) }), th: () => ({ width: listColWidth('conclusion', 118) }) } },
+  },
+  {
     accessorKey: 'products',
     header: 'Produtos',
     enableSorting: false,
@@ -3320,15 +3775,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!customers.length)
         return h('span', { class: 'text-xs text-muted' }, '—')
 
-      return h('div', { class: 'flex flex-wrap gap-1' },
-        customers.slice(0, 2).map(customer => h('span', {
-          class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted'
-        }, customer)).concat(
-          customers.length > 2
-            ? [h('span', { class: 'text-[11px] text-muted' }, `+${customers.length - 2}`)]
-            : []
-        )
-      )
+      return renderCustomerTrigger(customers, getBaseListColPixelWidth('customers', 110))
     },
   },
   {
@@ -3448,6 +3895,11 @@ function buildListBlobUrl(rows: RoadmapDemand[]): string {
     if (c.id === 'priority') return priorityRankByDemandId.value[row.id] ? `#${priorityRankByDemandId.value[row.id]}` : ''
     if (c.id === 'kpis') return getDemandKpiSummary(row).label
     if (c.id === 'status') return getDisplayedDemandStatus(row).label
+    if (c.id === 'conclusion') {
+      const conclusionDate = getDisplayedConclusionDate(row)
+      const conclusionLabel = conclusionDate ? formatDemandDate(conclusionDate) : ''
+      return showDemandDelayMarker(row) ? `${conclusionLabel}${conclusionLabel ? ' · ' : ''}Atrasado` : conclusionLabel
+    }
     if (c.id === 'type') return typeLabels[row.type]
     if (c.id === 'classification') {
       const classification = getEffectiveDemandClassification(row)
@@ -3759,28 +4211,179 @@ watch(activeDemandKpiId, async (value) => {
             :disabled="!activeCapacityScope"
             @click="openCapacityModal"
           />
+          <UButton
+            type="button"
+            size="xs"
+            color="neutral"
+            :variant="groupDemandsByEpic ? 'soft' : 'outline'"
+            :icon="groupDemandsByEpic ? 'i-lucide-fold-vertical' : 'i-lucide-unfold-vertical'"
+            :label="groupDemandsByEpic ? 'Desagrupar por épico' : 'Agrupar por épico'"
+            @click="groupDemandsByEpic = !groupDemandsByEpic"
+          />
+          <UButton
+            v-if="groupDemandsByEpic"
+            type="button"
+            size="xs"
+            color="neutral"
+            variant="outline"
+            icon="i-lucide-chevrons-up-down"
+            :disabled="!visibleEpicIds.length"
+            :label="areAllEpicGroupsCollapsed ? 'Expandir épicos' : 'Recolher épicos'"
+            @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
+          />
         </div>
+      </div>
+
+      <div class="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-default pt-3">
+        <UPopover v-if="selectedDemandCount">
+          <UButton
+            size="xs"
+            color="primary"
+            variant="soft"
+            trailing-icon="i-lucide-chevron-down"
+            leading-icon="i-lucide-calendar-range"
+            :loading="isBulkPlanning"
+          >
+            Mover {{ selectedDemandCount.toLocaleString('pt-BR') }} demandas
+          </UButton>
+          <template #content>
+            <div class="max-h-72 w-64 overflow-y-auto py-1">
+              <button
+                v-for="option in bulkMoveQuarterOptions"
+                :key="option.value"
+                class="w-full truncate px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                @click="planSelectedDemandsToQuarter(option.value)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+          </template>
+        </UPopover>
+
+        <UButton
+          v-if="selectedPlanningItemCount"
+          size="xs"
+          color="neutral"
+          variant="soft"
+          icon="i-lucide-pencil-ruler"
+          :loading="isBulkPlanning"
+          @click="planningBulkEditModalOpen = true"
+        >
+          Editar {{ selectedPlanningItemCount.toLocaleString('pt-BR') }} itens
+        </UButton>
+
+        <UButton
+          v-if="selectedPlanningItemCount"
+          size="xs"
+          color="neutral"
+          variant="ghost"
+          leading-icon="i-lucide-square-minus"
+          @click="clearSelectedDemands"
+        >
+          Desmarcar todos
+        </UButton>
       </div>
 
       <div class="mt-3 overflow-hidden rounded-xl border border-default">
         <div class="overflow-hidden bg-elevated/30" :style="{ transform: `translateX(-${listHeaderScrollLeft}px)` }">
           <table class="w-full table-fixed border-collapse" :style="{ width: listTableWidth }">
             <thead>
-              <tr>
+              <tr ref="listHeaderRowRef">
                 <th
                   v-for="col in listOrderedCols"
                   :key="col.id"
                   class="relative border-b border-default bg-elevated/40 text-left align-top"
                   :style="{ width: listColWidth(col.id, col.defaultWidth) }"
                 >
-                  <div class="px-3 py-2 text-xs font-semibold text-muted">
-                    {{ col.label }}
+                  <div class="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-muted">
+                    <button
+                      v-if="!col.disableSorting"
+                      type="button"
+                      class="flex min-w-0 flex-1 items-center gap-1 text-left transition-colors hover:text-highlighted"
+                      @click="toggleListSort(col.id)"
+                    >
+                      <span class="truncate">{{ col.label }}</span>
+                      <UIcon :name="getListSortIcon(col.id)" class="h-3.5 w-3.5 shrink-0" />
+                    </button>
+                    <span v-else class="truncate">{{ col.label }}</span>
+                    <button
+                      v-if="col.id !== '_actions'"
+                      type="button"
+                      class="list-col-drag inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-default hover:text-highlighted"
+                      title="Reordenar coluna"
+                    >
+                      <UIcon name="i-lucide-grip-vertical" class="h-3.5 w-3.5" />
+                    </button>
                   </div>
                   <span
                     v-if="col.id !== '_actions'"
                     class="absolute right-0 top-0 h-full w-[4px] cursor-col-resize select-none hover:bg-primary active:bg-primary"
                     @mousedown.prevent.stop="startListResize(col.id, $event)"
                   />
+                </th>
+              </tr>
+              <tr>
+                <th
+                  v-for="col in listOrderedCols"
+                  :key="`${col.id}-filter`"
+                  class="border-b border-default bg-elevated/35 px-3 py-2 align-top"
+                  :style="{ width: listColWidth(col.id, col.defaultWidth) }"
+                >
+                  <input
+                    v-if="col.filterType === 'text'"
+                    :value="getListColFilter(col.id)"
+                    type="text"
+                    :placeholder="col.label"
+                    class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40"
+                    @input="setListColFilter(col.id, ($event.target as HTMLInputElement).value)"
+                  >
+
+                  <UPopover v-else-if="col.filterType === 'multi-select'" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
+                      <span class="flex-1 truncate text-left text-highlighted">{{ getListMultiFilterLabel(col) }}</span>
+                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                    <template #content>
+                      <div class="min-w-48 space-y-1 p-1">
+                        <button
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                          :class="getListMultiFilter(col.id).length === 0 ? 'text-primary' : 'text-highlighted'"
+                          @click="setListMultiFilter(col.id, [])"
+                        >
+                          <UIcon v-if="getListMultiFilter(col.id).length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ col.allLabel ?? 'Todos' }}
+                        </button>
+                        <button
+                          v-for="option in getListFilterOptions(col)"
+                          :key="`${col.id}-${option.value}`"
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                          :class="getListMultiFilter(col.id).includes(option.value) ? 'text-primary' : 'text-highlighted'"
+                          @click="toggleListMultiFilterValue(col.id, option.value)"
+                        >
+                          <UIcon v-if="getListMultiFilter(col.id).includes(option.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ option.label }}
+                        </button>
+                      </div>
+                    </template>
+                  </UPopover>
+
+                  <div v-else-if="listHasActiveFilters && col.id === '_actions'" class="flex justify-end">
+                    <UButton
+                      size="xs"
+                      color="neutral"
+                      variant="ghost"
+                      icon="i-lucide-filter-x"
+                      @click="clearListFilters"
+                    >
+                      Limpar
+                    </UButton>
+                  </div>
+
+                  <span v-else class="block h-8" />
                 </th>
               </tr>
             </thead>
@@ -3817,7 +4420,7 @@ watch(activeDemandKpiId, async (value) => {
                       {{ getDisplayedDemandStatus(row.original).label }}
                     </span>
                     <span
-                      v-if="row.original.isBlocked"
+                      v-if="row.original.status === 'Blocked'"
                       class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
                     >
                       <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
@@ -3829,6 +4432,13 @@ watch(activeDemandKpiId, async (value) => {
                       <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
                     </span>
                   </div>
+                  </template>
+                  <span v-else class="text-xs text-muted">—</span>
+                </div>
+              </template>
+              <template #conclusion-cell="{ row }">
+                <div class="flex flex-col gap-1">
+                  <template v-if="!isCollapsedRepresentative(row.original)">
                   <div
                     v-if="getDisplayedConclusionDate(row.original)"
                     class="flex items-center gap-1 text-[11px]"
@@ -4004,6 +4614,14 @@ watch(activeDemandKpiId, async (value) => {
       <RoadmapHierarchyPage />
     </template>
 
+    <BulkEditRoadmapItemsModal
+      v-model:open="planningBulkEditModalOpen"
+      :selected-items="selectedPlanningItems"
+      :dependency-options="dependencyOptions"
+      :is-saving="isBulkPlanning"
+      @submit="handlePlanningBulkEdit"
+    />
+
     <!-- Create / Edit modal -->
     <RoadmapDemandFormModal
       v-model:open="modalOpen"
@@ -4020,6 +4638,7 @@ watch(activeDemandKpiId, async (value) => {
       :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? undefined"
       :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? undefined"
       :is-saving="isSavingDemand"
+      @trade-off-deleted="handleTradeOffDeleted"
       @submit="handleSubmit"
     />
 

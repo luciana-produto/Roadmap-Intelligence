@@ -10,6 +10,7 @@ namespace ProductHub.Application.Roadmap.Commands.CreateDemand;
 public sealed class CreateRoadmapDemandCommandHandler(
     IRoadmapDemandRepository demandRepository,
     IRoadmapProjectRepository projectRepository,
+    IKpiRepository kpiRepository,
     IUnitOfWork unitOfWork)
     : IRequestHandler<CreateRoadmapDemandCommand, RoadmapDemandDto>
 {
@@ -18,12 +19,16 @@ public sealed class CreateRoadmapDemandCommandHandler(
         CancellationToken cancellationToken)
     {
         Enum.TryParse<RoadmapItemType>(request.ItemType, true, out var itemType);
+        Enum.TryParse<DemandStatus>(request.Status, true, out var status);
         var dependencyDemandIds = (request.DependencyDemandIds ?? [])
             .Where(id => id != Guid.Empty)
             .Distinct()
             .ToArray();
-        var relatedDemandIds = request.ReplacementDemandId.HasValue
-            ? [.. dependencyDemandIds, request.ReplacementDemandId.Value]
+        var replacementDemandId = status == DemandStatus.Deprioritized
+            ? request.ReplacementDemandId
+            : null;
+        var relatedDemandIds = replacementDemandId.HasValue
+            ? [.. dependencyDemandIds, replacementDemandId.Value]
             : dependencyDemandIds;
 
         RoadmapProject? project = null;
@@ -71,17 +76,22 @@ public sealed class CreateRoadmapDemandCommandHandler(
         foreach (var dependencyDemandId in dependencyDemandIds)
             if (!dependencyDemandMap.ContainsKey(dependencyDemandId))
                 throw new NotFoundException("RoadmapDemand", dependencyDemandId);
-        if (request.ReplacementDemandId.HasValue && !dependencyDemandMap.ContainsKey(request.ReplacementDemandId.Value))
-            throw new NotFoundException("RoadmapDemand", request.ReplacementDemandId.Value);
+        if (replacementDemandId.HasValue && !dependencyDemandMap.ContainsKey(replacementDemandId.Value))
+            throw new NotFoundException("RoadmapDemand", replacementDemandId.Value);
 
         Enum.TryParse<DemandType>(request.Type, true, out var type);
         Enum.TryParse<DemandClassification>(request.Classification, true, out var classification);
-        Enum.TryParse<DemandStatus>(request.Status, true, out var status);
         NoKpiClassification? noKpiClassification = null;
         if (!string.IsNullOrWhiteSpace(request.NoKpiClassification))
         {
             Enum.TryParse<NoKpiClassification>(request.NoKpiClassification, true, out var parsedNoKpiClassification);
             noKpiClassification = parsedNoKpiClassification;
+        }
+        DeprioritizationReason? deprioritizationReason = null;
+        if (!string.IsNullOrWhiteSpace(request.DeprioritizationReason))
+        {
+            Enum.TryParse<DeprioritizationReason>(request.DeprioritizationReason, true, out var parsedDeprioritizationReason);
+            deprioritizationReason = parsedDeprioritizationReason;
         }
 
         var nextSortOrder = itemType == RoadmapItemType.Demand && request.ProjectId.HasValue
@@ -113,12 +123,34 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.IsBlocked,
             request.BlockedReason,
             request.PromisedDate,
+            request.Observation,
+            deprioritizationReason,
+            replacementDemandId,
+            request.DeliveryDate,
             request.ProblemClarity,
             request.HasNoKpi,
             noKpiClassification);
 
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
+
+        if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
+        {
+            foreach (var tradeOffProjectId in GetAssociatedProjectIds(itemType, request.ProjectId, request.ProjectIds))
+            {
+                await kpiRepository.AddTradeOffAsync(
+                    DemandTradeOff.Create(
+                        tradeOffProjectId,
+                        request.QuarterYear,
+                        request.QuarterNumber,
+                        demand.Id,
+                        replacementDemandId,
+                        deprioritizationReason.Value,
+                        request.Observation),
+                    cancellationToken);
+            }
+        }
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         var currentDemand = await demandRepository.GetByIdWithProductsAsync(demand.Id, cancellationToken)
@@ -146,12 +178,35 @@ public sealed class CreateRoadmapDemandCommandHandler(
         var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
             .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync([demand.Id, .. dependencyDemandIds], cancellationToken);
+        var tradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(currentDemand.Id, cancellationToken);
+        var tradeOffRelatedDemandIds = tradeOffs
+            .Where(tradeOff => tradeOff.ReplacementDemandId.HasValue)
+            .Select(tradeOff => tradeOff.ReplacementDemandId!.Value)
+            .Where(currentDemandId => currentDemandId != currentDemand.Id)
+            .Except(dependencyDemands.Select(item => item.Id))
+            .ToArray();
+        var tradeOffRelatedDemands = await demandRepository.GetByIdsAsync(tradeOffRelatedDemandIds, cancellationToken);
         var demandsById = dependencyDemands
             .Concat(hierarchyDemands)
+            .Concat(tradeOffRelatedDemands)
             .Concat([currentDemand])
             .GroupBy(item => item.Id)
             .ToDictionary(group => group.Key, group => group.First());
 
-        return RoadmapDemandDtoMapper.Map(currentDemand, productMap, demandsById, projectNamesById, dependencyLinks);
+        return RoadmapDemandDtoMapper.Map(currentDemand, productMap, demandsById, projectNamesById, dependencyLinks, tradeOffs: tradeOffs);
+    }
+
+    private static IReadOnlyList<Guid> GetAssociatedProjectIds(
+        RoadmapItemType itemType,
+        Guid? projectId,
+        IReadOnlyList<Guid>? projectIds)
+    {
+        if (itemType == RoadmapItemType.Demand)
+            return projectId.HasValue ? [projectId.Value] : [];
+
+        return (projectIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
     }
 }

@@ -2,6 +2,7 @@ using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using ProductHub.Application.Roadmap.Commands.CreateDemand;
 using ProductHub.Application.Roadmap.Commands.DeleteDemand;
+using ProductHub.Application.Roadmap.Commands.DeleteDemandTradeOff;
 using ProductHub.Application.Roadmap.Commands.ReorderDemand;
 using ProductHub.Application.Roadmap.Commands.UpsertCapacity;
 using ProductHub.Application.Roadmap.Commands.UpdateDemand;
@@ -93,6 +94,15 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
         CancellationToken cancellationToken)
     {
         await sender.Send(new DeleteRoadmapDemandCommand(id), cancellationToken);
+        return Ok(ApiResponse.Ok(CorrelationId));
+    }
+
+    [HttpDelete("trade-offs/{id:guid}")]
+    public async Task<IActionResult> DeleteTradeOff(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        await sender.Send(new DeleteDemandTradeOffCommand(id), cancellationToken);
         return Ok(ApiResponse.Ok(CorrelationId));
     }
 

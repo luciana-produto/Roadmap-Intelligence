@@ -67,6 +67,8 @@ export function sanitizePromisedDateForItem(
 
 function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemandMutationPayload {
   const issueLinks = sanitizeIssueLinksForItem(payload.itemType, payload.issueLinks)
+  const isDeprioritized = payload.status === 'Deprioritized'
+  const isBlocked = payload.status === 'Blocked'
 
   return {
     itemType: payload.itemType,
@@ -81,15 +83,15 @@ function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemand
     classification: payload.classification,
     productIds: payload.productIds,
     dependencyDemandIds: payload.dependencyDemandIds ?? [],
-    replacementDemandId: payload.replacementDemandId || undefined,
+    replacementDemandId: isDeprioritized ? payload.replacementDemandId || undefined : undefined,
     jiraIssue: issueLinks[0]?.key || payload.jiraIssue || undefined,
     issueLinks,
     hours: payload.hours ?? undefined,
     promisedDate: sanitizePromisedDateForItem(payload.itemType, payload.quarterYear, payload.quarterNumber, payload.promisedDate),
     customers: sanitizeCustomersForItem(payload.itemType, payload.customers),
-    isBlocked: payload.isBlocked ?? false,
-    blockedReason: payload.blockedReason || undefined,
-    deprioritizationReason: payload.deprioritizationReason || undefined,
+    isBlocked,
+    blockedReason: isBlocked ? payload.blockedReason?.trim() || undefined : undefined,
+    deprioritizationReason: isDeprioritized ? payload.deprioritizationReason || undefined : undefined,
     problemClarity: payload.itemType === 'Epic' ? payload.problemClarity ?? undefined : undefined,
     hasNoKpi: payload.hasNoKpi ?? false,
     noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
@@ -117,6 +119,7 @@ export function buildUpdateDemandPayload(id: string, payload: DemandFormData) {
 
 export function buildStatusPatchPayload(demand: RoadmapDemand, status: DemandStatus) {
   const issueLinks = sanitizeIssueLinksForItem(demand.itemType, demand.issueLinks)
+  const isBlocked = status === 'Blocked'
 
   return {
     id: demand.id,
@@ -137,8 +140,8 @@ export function buildStatusPatchPayload(demand: RoadmapDemand, status: DemandSta
     issueLinks,
     hours: demand.hours ?? undefined,
     customers: sanitizeCustomersForItem(demand.itemType, demand.customers),
-    isBlocked: demand.isBlocked ?? false,
-    blockedReason: demand.blockedReason || undefined,
+    isBlocked,
+    blockedReason: isBlocked ? demand.blockedReason || undefined : undefined,
     deliveryDate: demand.deliveryDate || undefined,
     problemClarity: demand.itemType === 'Epic' ? demand.problemClarity ?? undefined : undefined,
     hasNoKpi: demand.hasNoKpi ?? false,

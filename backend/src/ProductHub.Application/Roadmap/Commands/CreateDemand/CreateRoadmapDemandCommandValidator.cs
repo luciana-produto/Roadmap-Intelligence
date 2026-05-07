@@ -45,7 +45,20 @@ public sealed class CreateRoadmapDemandCommandValidator
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(value => Enum.TryParse<DemandStatus>(value, true, out _))
-            .WithMessage("Status must be Backlog, InProgress, Done or Deprioritized.");
+            .WithMessage("Status must be Backlog, InProgress, Done, Deprioritized or Blocked.");
+        RuleFor(x => x.Observation)
+            .NotEmpty().WithMessage("Observation is required when status is Deprioritized.")
+            .When(x => x.Status is "Deprioritized");
+        RuleFor(x => x.Observation).MaximumLength(2000);
+        RuleFor(x => x.DeprioritizationReason)
+            .NotEmpty().WithMessage("Deprioritization reason is required when status is Deprioritized.")
+            .When(x => x.Status is "Deprioritized");
+        RuleFor(x => x.DeprioritizationReason)
+            .Must(value => string.IsNullOrWhiteSpace(value) || Enum.TryParse<DeprioritizationReason>(value, true, out _))
+            .WithMessage("Invalid deprioritization reason.");
+        RuleFor(x => x.DeprioritizationReason)
+            .Empty().WithMessage("Deprioritization reason must be empty when status is not Deprioritized.")
+            .When(x => x.Status is not "Deprioritized");
         RuleFor(x => x.Type)
             .NotEmpty()
             .Must(t => Enum.TryParse<DemandType>(t, true, out _))
@@ -83,8 +96,14 @@ public sealed class CreateRoadmapDemandCommandValidator
             .WithMessage("Customers must have a maximum combined length of 500 characters.");
         RuleFor(x => x.BlockedReason)
             .NotEmpty().WithMessage("Blocked reason is required when demand is blocked.")
-            .When(x => x.IsBlocked);
+            .When(x => x.Status is "Blocked");
+        RuleFor(x => x.BlockedReason)
+            .Empty().WithMessage("Blocked reason must be empty when status is not Blocked.")
+            .When(x => x.Status is not "Blocked");
         RuleFor(x => x.BlockedReason).MaximumLength(500);
+        RuleFor(x => x.DeliveryDate)
+            .NotNull().WithMessage("Delivery date is required when status is Done.")
+            .When(x => x.Status is "Done");
         RuleFor(x => x.ProblemClarity)
             .InclusiveBetween(0, 10).When(x => x.ProblemClarity.HasValue)
             .WithMessage("Problem clarity must be between 0 and 10.");

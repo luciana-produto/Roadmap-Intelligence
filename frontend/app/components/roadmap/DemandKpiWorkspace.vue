@@ -200,7 +200,6 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     promisedDate: demand.promisedDate ?? '',
     customers: demand.customers ?? [],
     dependencyDemandIds: demand.dependsOn.map(item => item.demandId),
-    isBlocked: demand.isBlocked,
     blockedReason: demand.blockedReason ?? '',
     deliveryDate: demand.deliveryDate ?? '',
     problemClarity: demand.problemClarity ?? undefined,

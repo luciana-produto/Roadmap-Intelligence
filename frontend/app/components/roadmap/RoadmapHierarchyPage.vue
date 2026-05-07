@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { ApiResponse } from '~/types/api'
-import type { DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
+import type { BulkEditRoadmapItemsData, CustomerRename, DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
+import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import { buildDemandDueSearchText, buildDueSortKey, hasPlannedQuarter } from '~/utils/roadmapDue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 
@@ -42,11 +43,14 @@ const defaultProjectId = ref<string | undefined>()
 const defaultProjectIds = ref<string[]>([])
 const deleteTarget = ref<RoadmapDemand | null>(null)
 const confirmDeleteOpen = ref(false)
+const bulkEditModalOpen = ref(false)
 const collapsedRoadmapIds = ref<string[]>([])
 const collapsedEpicIds = ref<string[]>([])
 const isSavingDemand = ref(false)
+const isBulkEditing = ref(false)
 const isHierarchyLoading = ref(false)
 const hierarchyDemands = ref<RoadmapDemand[]>([])
+const selectedHierarchyItemIds = ref<string[]>([])
 const selectedProjectIds = ref<string[]>([])
 const hierarchyItemFilter = ref('')
 const hierarchyStatusFilter = ref<string[]>([])
@@ -69,7 +73,7 @@ const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
   hours: 56,
   classification: 104,
   customers: 128,
-  due: 112,
+  due: 136,
   kpi: 64,
   actions: 116
 }
@@ -296,14 +300,16 @@ const statusLabels: Record<DemandStatus, string> = {
   Backlog: 'Backlog',
   InProgress: 'Doing',
   Done: 'Concluído',
-  Deprioritized: 'Despriorizado'
+  Deprioritized: 'Despriorizado',
+  Blocked: 'Impedido'
 }
 
 const statusTone: Record<DemandStatus, string> = {
   Backlog: 'border-default bg-elevated text-muted',
   InProgress: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
   Done: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300',
-  Deprioritized: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300'
+  Deprioritized: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300',
+  Blocked: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300'
 }
 
 const classificationLabels: Record<RoadmapDemand['classification'], string> = {
@@ -324,6 +330,16 @@ const classificationBadgeClass: Record<RoadmapDemand['classification'], string> 
   Mandatory: 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800',
   Homologation: 'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800',
   Customizacao: 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800'
+}
+
+const classificationDisplayLabels: Record<RoadmapDemand['classification'], string> = {
+  TechnicalDebtSecurity: 'Déb. Técnico',
+  Strategic: 'Estratégico',
+  Evolution: 'Evolução',
+  ImprovementGap: 'Melhoria/Gap',
+  Mandatory: 'Mandatório',
+  Homologation: 'Homologação',
+  Customizacao: 'Customização'
 }
 
 const createMenuItems = computed(() => [[
@@ -355,6 +371,21 @@ function formatDate(value?: string) {
   return new Intl.DateTimeFormat('pt-BR', {
     day: '2-digit',
     month: 'short',
+    year: '2-digit'
+  }).format(new Date(year, month - 1, day))
+}
+
+function formatShortDate(value?: string) {
+  if (!value)
+    return '—'
+
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day)
+    return value
+
+  return new Intl.DateTimeFormat('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
     year: '2-digit'
   }).format(new Date(year, month - 1, day))
 }
@@ -452,6 +483,10 @@ function normalizeCustomers(customers?: string[]) {
   return (customers ?? []).map(customer => customer.trim()).filter(Boolean)
 }
 
+const INLINE_LIST_AVG_CHAR_PX = 6.4
+const INLINE_LIST_SIDE_PADDING_PX = 22
+const INLINE_LIST_MORE_BADGE_PX = 28
+
 function getDisplayedCustomers(item: RoadmapDemand) {
   if (item.itemType === 'Epic')
     return normalizeCustomers(item.customers)
@@ -464,6 +499,103 @@ function getDisplayedCustomers(item: RoadmapDemand) {
 
 function getCustomersLine(customers: string[]) {
   return customers.join(' · ')
+}
+
+function getAdaptiveInlineListDisplay(items: string[], columnWidth: number, separator = ' · ') {
+  const normalizedItems = items.filter(Boolean)
+  const fullLabel = normalizedItems.join(separator)
+
+  if (!normalizedItems.length) {
+    return {
+      items: normalizedItems,
+      visibleItems: [] as string[],
+      hiddenCount: 0,
+      previewLabel: '',
+      fullLabel,
+      allVisible: true
+    }
+  }
+
+  const availableWidth = Math.max(columnWidth - INLINE_LIST_SIDE_PADDING_PX, 36)
+  const visibleItems: string[] = []
+  let usedWidth = 0
+
+  for (let index = 0; index < normalizedItems.length; index++) {
+    const item = normalizedItems[index]!
+    const remainingAfterCurrent = normalizedItems.length - index - 1
+    const reserveForMore = remainingAfterCurrent > 0
+      ? INLINE_LIST_MORE_BADGE_PX + String(remainingAfterCurrent).length * INLINE_LIST_AVG_CHAR_PX
+      : 0
+    const chunk = `${visibleItems.length ? separator : ''}${item}`
+    const nextWidth = usedWidth + chunk.length * INLINE_LIST_AVG_CHAR_PX
+
+    if (visibleItems.length && nextWidth + reserveForMore > availableWidth)
+      break
+
+    visibleItems.push(item)
+    usedWidth = nextWidth
+  }
+
+  if (!visibleItems.length)
+    visibleItems.push(normalizedItems[0]!)
+
+  const hiddenCount = Math.max(normalizedItems.length - visibleItems.length, 0)
+
+  return {
+    items: normalizedItems,
+    visibleItems,
+    hiddenCount,
+    previewLabel: visibleItems.join(separator),
+    fullLabel,
+    allVisible: hiddenCount === 0
+  }
+}
+
+function getCustomerCellDisplay(item: RoadmapDemand) {
+  return getAdaptiveInlineListDisplay(getDisplayedCustomers(item), getHierarchyColSize('customers'))
+}
+
+function getProductCellDisplay(names: string[]) {
+  return getAdaptiveInlineListDisplay(names, getHierarchyColSize('products'))
+}
+
+function getDueDateLabel(item: RoadmapDemand) {
+  const date = getDisplayedConclusionDate(item)
+  return date ? formatShortDate(date) : ''
+}
+
+function getDueQuarterLabel(item: RoadmapDemand) {
+  return hasPlannedQuarter(item) && item.quarterLabel ? item.quarterLabel : ''
+}
+
+function getDueTooltip(item: RoadmapDemand) {
+  const dateLabel = getDueDateLabel(item)
+  const quarterLabel = getDueQuarterLabel(item)
+  const parts = [
+    dateLabel ? `Data: ${dateLabel}` : '',
+    quarterLabel ? `Quarter: ${quarterLabel}` : '',
+    isDelayed(item) ? 'Atrasado' : ''
+  ].filter(Boolean)
+
+  return parts.join(' · ') || 'Sem conclusão definida'
+}
+
+function getClassificationDisplayLabel(classification: RoadmapDemand['classification']) {
+  return classificationDisplayLabels[classification] ?? classificationLabels[classification]
+}
+
+function getDueDateTone(item: RoadmapDemand) {
+  return item.status === 'Done' && item.deliveryDate
+    ? 'text-green-600 dark:text-green-400'
+    : 'text-muted'
+}
+
+function getDueDateClass(item: RoadmapDemand) {
+  if (isDelayed(item)) {
+    return 'inline-flex shrink-0 items-center rounded-md border border-amber-300 bg-amber-50/80 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300'
+  }
+
+  return `truncate ${getDueDateTone(item)}`
 }
 
 function getRoadmapGroupCustomerNames(epics: RoadmapDemand[]) {
@@ -555,7 +687,7 @@ function getKpiSummary(item: RoadmapDemand) {
   }
 
   return {
-    label: 'Incluir KPI',
+    label: '+KPI',
     tone: 'border-error/40 bg-error/10 text-error',
     actionLabel: 'Incluir KPI',
     clickable: true
@@ -639,6 +771,10 @@ function getDisplayedConclusionDate(item: RoadmapDemand) {
     return item.deliveryDate
 
   return getDisplayedPromisedDate(item)
+}
+
+function isDelayed(item: RoadmapDemand) {
+  return item.isOverdue || item.isDeliveredLate
 }
 
 function matchesTextFilter(haystackParts: Array<string | undefined>, query: string) {
@@ -785,6 +921,8 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
       const sourceEpics = sourceGroup?.epics ?? []
       const roadmapProjectMatch = hasProjectIntersection(roadmap)
       const hasActiveProductFilter = hierarchyProductsFilter.value.length > 0
+      const hasActiveCustomerFilter = !!normalizeSearchText(hierarchyCustomersFilter.value)
+      const requiresChildMatch = hasActiveProductFilter || hasActiveCustomerFilter
       const roadmapMatches = matchesHierarchyFilters(roadmap, {
         products: getRoadmapGroupProductEntries(sourceEpics).map(product => product.value),
         customerText: getCustomersLine(getRoadmapGroupCustomerNames(sourceEpics)),
@@ -817,7 +955,7 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
               dueText: getDemandDueSearchText(demand)
             }))
 
-          if (hasActiveProductFilter && !epicMatches && matchingDemands.length === 0)
+          if (requiresChildMatch && !epicMatches && matchingDemands.length === 0)
             return null
 
           if (!roadmapMatches && !epicMatches && matchingDemands.length === 0)
@@ -825,14 +963,14 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
 
           return {
             epic,
-            demands: hasActiveProductFilter
+            demands: requiresChildMatch
               ? matchingDemands
               : (roadmapMatches || epicMatches ? sortItems(projectScopedDemands, 'demand') : matchingDemands)
           }
         })
         .filter((entry): entry is DisplayEpicGroup => !!entry)
 
-      if ((!roadmapMatches && epics.length === 0) || (hasActiveProductFilter && epics.length === 0))
+      if ((!roadmapMatches && epics.length === 0) || (requiresChildMatch && epics.length === 0))
         return null
 
       return { roadmap, epics }
@@ -857,6 +995,34 @@ const displayOrphanDemands = computed(() =>
     dueText: getDemandDueSearchText(demand)
   }))
 )
+
+const visibleHierarchySelectableItems = computed(() => {
+  const items = new Map<string, RoadmapDemand>()
+
+  displayRoadmapGroups.value.forEach((group) => {
+    group.epics.forEach((entry) => {
+      items.set(entry.epic.id, entry.epic)
+      entry.demands.forEach(demand => items.set(demand.id, demand))
+    })
+  })
+
+  displayOrphanEpics.value.forEach(epic => items.set(epic.id, epic))
+  displayOrphanDemands.value.forEach(demand => items.set(demand.id, demand))
+
+  return Array.from(items.values())
+})
+
+const selectedHierarchyItems = computed(() => {
+  const selectedIds = new Set(selectedHierarchyItemIds.value)
+  return visibleHierarchySelectableItems.value.filter(item => selectedIds.has(item.id))
+})
+
+const selectedHierarchyItemCount = computed(() => selectedHierarchyItems.value.length)
+
+watch(visibleHierarchySelectableItems, (items) => {
+  const validIds = new Set(items.map(item => item.id))
+  selectedHierarchyItemIds.value = selectedHierarchyItemIds.value.filter(id => validIds.has(id))
+}, { immediate: true })
 
 function isRoadmapCollapsed(roadmapId: string) {
   return collapsedRoadmapIds.value.includes(roadmapId)
@@ -1008,6 +1174,25 @@ function clearHierarchyClassificationFilter() {
   hierarchyClassificationFilter.value = []
 }
 
+function isHierarchyItemSelected(itemId: string) {
+  return selectedHierarchyItemIds.value.includes(itemId)
+}
+
+function toggleHierarchyItemSelection(itemId: string, selected: boolean) {
+  if (selected) {
+    if (!selectedHierarchyItemIds.value.includes(itemId))
+      selectedHierarchyItemIds.value = [...selectedHierarchyItemIds.value, itemId]
+
+    return
+  }
+
+  selectedHierarchyItemIds.value = selectedHierarchyItemIds.value.filter(id => id !== itemId)
+}
+
+function clearHierarchySelection() {
+  selectedHierarchyItemIds.value = []
+}
+
 function openCreateModal(
   itemType?: RoadmapItemType,
   parentDemandId?: string,
@@ -1027,6 +1212,184 @@ function openEditModal(item: RoadmapDemand) {
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
   modalOpen.value = true
+}
+
+function buildDemandFormData(item: RoadmapDemand, overrides?: Partial<DemandFormData>): DemandFormData {
+  return {
+    itemType: item.itemType,
+    parentDemandId: item.parentDemandId,
+    title: item.title,
+    description: item.description ?? '',
+    projectId: item.projectId,
+    projectIds: item.projectIds ?? (item.projectId ? [item.projectId] : []),
+    quarterYear: item.quarterYear,
+    quarterNumber: item.quarterNumber,
+    type: item.type,
+    classification: item.classification,
+    productIds: item.products.map(product => product.productId),
+    status: item.status,
+    observation: item.observation ?? '',
+    deprioritizationReason: item.deprioritizationReason ?? undefined,
+    replacementDemandId: item.replacementDemandId ?? undefined,
+    jiraIssue: item.jiraIssue ?? '',
+    issueLinks: item.issueLinks?.map(issue => ({ key: issue.key, url: issue.url ?? '' })) ?? [],
+    hours: item.hours,
+    promisedDate: item.promisedDate ?? '',
+    customers: item.customers ?? [],
+    dependencyDemandIds: item.dependsOn.map(dependency => dependency.demandId),
+    blockedReason: item.blockedReason ?? '',
+    deliveryDate: item.deliveryDate ?? '',
+    problemClarity: item.problemClarity ?? undefined,
+    hasNoKpi: item.hasNoKpi,
+    noKpiClassification: item.noKpiClassification ?? undefined,
+    ...overrides
+  }
+}
+
+function normalizeCustomerName(value?: string) {
+  return value?.trim().toLowerCase() ?? ''
+}
+
+function sanitizeCustomerRenames(renames?: CustomerRename[]) {
+  const result: CustomerRename[] = []
+  const seen = new Set<string>()
+
+  for (const rename of renames ?? []) {
+    const from = rename.from.trim()
+    const to = rename.to.trim()
+    const key = normalizeCustomerName(from)
+
+    if (!from || !to || key === normalizeCustomerName(to) || seen.has(key))
+      continue
+
+    seen.add(key)
+    result.push({ from, to })
+  }
+
+  return result
+}
+
+function applyCustomerRenames(customers: string[] | undefined, renames: CustomerRename[]) {
+  const renameByCustomer = new Map(
+    renames.map(rename => [normalizeCustomerName(rename.from), rename.to.trim()] as const)
+  )
+  const nextCustomers: string[] = []
+
+  for (const customer of customers ?? []) {
+    const renamed = renameByCustomer.get(normalizeCustomerName(customer)) ?? customer.trim()
+
+    if (renamed && !nextCustomers.includes(renamed))
+      nextCustomers.push(renamed)
+  }
+
+  return nextCustomers
+}
+
+async function propagateEpicCustomerRenames(sourceEpicId: string, renames: CustomerRename[]) {
+  if (!renames.length)
+    return
+
+  const response = await api.get<ApiResponse<RoadmapDemand[]>>('/api/roadmap/demands')
+  const impactedEpics = (response.data ?? []).filter((item) => {
+    if (item.itemType !== 'Epic' || item.id === sourceEpicId)
+      return false
+
+    return (item.customers ?? []).some(customer =>
+      renames.some(rename => normalizeCustomerName(customer) === normalizeCustomerName(rename.from))
+    )
+  })
+
+  for (const epic of impactedEpics) {
+    await roadmapStore.updateDemand(epic.id, buildDemandFormData(epic, {
+      customers: applyCustomerRenames(epic.customers, renames),
+      customerRenames: []
+    }))
+  }
+
+  await roadmapStore.fetchCustomerSuggestions()
+}
+
+function buildBulkEditOverrides(item: RoadmapDemand, changes: BulkEditRoadmapItemsData): Partial<DemandFormData> {
+  const overrides: Partial<DemandFormData> = {}
+
+  if (changes.status) {
+    overrides.status = changes.status
+
+    if (changes.status === 'Done')
+      overrides.deliveryDate = changes.deliveryDate ?? item.deliveryDate ?? ''
+
+    if (changes.status === 'Blocked')
+      overrides.blockedReason = changes.blockedReason ?? item.blockedReason ?? ''
+
+    if (changes.status === 'Deprioritized') {
+      overrides.observation = changes.observation ?? item.observation ?? ''
+      overrides.deprioritizationReason = changes.deprioritizationReason ?? item.deprioritizationReason ?? undefined
+
+      if (Object.prototype.hasOwnProperty.call(changes, 'replacementDemandId'))
+        overrides.replacementDemandId = changes.replacementDemandId
+    }
+    else {
+      overrides.deprioritizationReason = undefined
+      overrides.replacementDemandId = undefined
+
+      if (changes.status !== 'Blocked')
+        overrides.blockedReason = ''
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(changes, 'promisedDate'))
+    overrides.promisedDate = changes.promisedDate
+
+  if (item.itemType === 'Demand') {
+    if (changes.type)
+      overrides.type = changes.type
+
+    if (changes.quarterYear != null && changes.quarterNumber != null) {
+      overrides.quarterYear = changes.quarterYear
+      overrides.quarterNumber = changes.quarterNumber
+    }
+  }
+
+  return overrides
+}
+
+async function handleBulkEditSubmit(changes: BulkEditRoadmapItemsData) {
+  if (!selectedHierarchyItems.value.length || isBulkEditing.value)
+    return
+
+  const updatedCount = selectedHierarchyItems.value.length
+  isBulkEditing.value = true
+
+  try {
+    for (const item of selectedHierarchyItems.value) {
+      await roadmapStore.updateDemand(item.id, buildDemandFormData(item, buildBulkEditOverrides(item, changes)))
+    }
+
+    await loadPageData()
+    bulkEditModalOpen.value = false
+    clearHierarchySelection()
+    toast.add({
+      title: 'Itens atualizados em lote',
+      description: `${updatedCount.toLocaleString('pt-BR')} itens atualizados com sucesso.`,
+      color: 'success'
+    })
+  }
+  catch {
+    // handled by useApi
+  }
+  finally {
+    isBulkEditing.value = false
+  }
+}
+
+function handleTradeOffDeleted(tradeOffId: string) {
+  if (!editingDemand.value)
+    return
+
+  editingDemand.value = {
+    ...editingDemand.value,
+    tradeOffHistory: editingDemand.value.tradeOffHistory.filter(item => item.id !== tradeOffId)
+  }
 }
 
 function promptDelete(item: RoadmapDemand) {
@@ -1056,10 +1419,16 @@ async function handleSubmit(data: DemandFormData) {
   if (isSavingDemand.value)
     return
 
+  const customerRenames = sanitizeCustomerRenames(data.customerRenames)
+
   try {
     isSavingDemand.value = true
     if (editingDemand.value) {
       await roadmapStore.updateDemand(editingDemand.value.id, data)
+
+      if (editingDemand.value.itemType === 'Epic')
+        await propagateEpicCustomerRenames(editingDemand.value.id, customerRenames)
+
       await loadPageData()
       toast.add({ title: 'Item atualizado', color: 'success' })
     }
@@ -1214,54 +1583,77 @@ void initializeHierarchyPage()
             </UPopover>
           </UFormField>
 
-          <div class="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:whitespace-nowrap lg:pb-0.5">
-            <UButton
-              size="xs"
-              color="neutral"
-              variant="outline"
-              icon="i-lucide-chevrons-up-down"
-              :disabled="!hasCollapsibleRoadmaps"
-              @click="areAllRoadmapsCollapsed ? expandAllRoadmaps() : collapseAllRoadmaps()"
-            >
-              {{ areAllRoadmapsCollapsed ? 'Expandir roadmaps' : 'Recolher roadmaps' }}
-            </UButton>
-            <UButton
-              size="xs"
-              color="neutral"
-              variant="outline"
-              icon="i-lucide-chevrons-up-down"
-              :disabled="!hasCollapsibleEpics"
-              @click="areAllEpicsCollapsed ? expandAllEpics() : collapseAllEpics()"
-            >
-              {{ areAllEpicsCollapsed ? 'Expandir épicos' : 'Recolher épicos' }}
-            </UButton>
-            <UButton
-              size="xs"
-              color="neutral"
-              variant="outline"
-              icon="i-lucide-fold-vertical"
-              :disabled="!hasCollapsibleRoadmaps && !hasCollapsibleEpics"
-              @click="collapseAllRoadmaps(); collapseAllEpics()"
-            >
-              Recolher tudo
-            </UButton>
-            <UButton
-              size="xs"
-              color="neutral"
-              variant="outline"
-              icon="i-lucide-unfold-vertical"
-              :disabled="(!collapsedRoadmapIds.length && !collapsedEpicIds.length)"
-              @click="expandAllRoadmaps(); expandAllEpics()"
-            >
-              Expandir tudo
-            </UButton>
-          </div>
-        </div>
+          <div class="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between xl:gap-3">
+            <div class="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:whitespace-nowrap lg:pb-0.5">
+              <UButton
+                size="xs"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-chevrons-up-down"
+                :disabled="!hasCollapsibleRoadmaps"
+                @click="areAllRoadmapsCollapsed ? expandAllRoadmaps() : collapseAllRoadmaps()"
+              >
+                {{ areAllRoadmapsCollapsed ? 'Expandir roadmaps' : 'Recolher roadmaps' }}
+              </UButton>
+              <UButton
+                size="xs"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-chevrons-up-down"
+                :disabled="!hasCollapsibleEpics"
+                @click="areAllEpicsCollapsed ? expandAllEpics() : collapseAllEpics()"
+              >
+                {{ areAllEpicsCollapsed ? 'Expandir épicos' : 'Recolher épicos' }}
+              </UButton>
+              <UButton
+                size="xs"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-fold-vertical"
+                :disabled="!hasCollapsibleRoadmaps && !hasCollapsibleEpics"
+                @click="collapseAllRoadmaps(); collapseAllEpics()"
+              >
+                Recolher tudo
+              </UButton>
+              <UButton
+                size="xs"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-unfold-vertical"
+                :disabled="(!collapsedRoadmapIds.length && !collapsedEpicIds.length)"
+                @click="expandAllRoadmaps(); expandAllEpics()"
+              >
+                Expandir tudo
+              </UButton>
+              <UButton
+                v-if="selectedHierarchyItemCount"
+                size="xs"
+                color="neutral"
+                variant="soft"
+                icon="i-lucide-pencil-ruler"
+                :loading="isBulkEditing"
+                @click="bulkEditModalOpen = true"
+              >
+                Editar {{ selectedHierarchyItemCount.toLocaleString('pt-BR') }} itens
+              </UButton>
+              <UButton
+                v-if="selectedHierarchyItemCount"
+                size="xs"
+                color="neutral"
+                variant="ghost"
+                icon="i-lucide-square-minus"
+                @click="clearHierarchySelection"
+              >
+                Desmarcar
+              </UButton>
+            </div>
 
-        <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-          <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ roadmapItems.length }} roadmaps</span>
-          <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ epicItems.length }} épicos</span>
-          <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ demandItems.length }} demandas</span>
+            <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted xl:justify-end">
+              <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ roadmapItems.length }} roadmaps</span>
+              <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ epicItems.length }} épicos</span>
+              <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ demandItems.length }} demandas</span>
+            </div>
+          </div>
         </div>
       </div>
     </UCard>
@@ -1423,8 +1815,8 @@ void initializeHierarchyPage()
 
               <template v-for="group in displayRoadmapGroups" :key="group.roadmap.id">
                 <tr class="border-b border-default bg-default hover:bg-elevated/30 transition-colors">
-                  <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
-                    <div class="flex items-start gap-1.5">
+                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                    <div class="flex items-start gap-1">
                       <button
                         type="button"
                         class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:text-highlighted"
@@ -1438,67 +1830,62 @@ void initializeHierarchyPage()
                       </button>
 
                       <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(group.roadmap)">
-                        <div class="flex flex-wrap items-center gap-1.5">
-                          <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
-                            Roadmap
-                          </span>
-                          <span class="inline-flex items-center rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary">
-                            {{ group.epics.length }} épico<span v-if="group.epics.length !== 1">s</span>
-                          </span>
-                          <span class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-medium text-muted">
-                            {{ group.epics.reduce((total, epic) => total + getDemandsForEpic(epic.id).length, 0) }} demandas
-                          </span>
-                        </div>
-                        <div class="mt-0.5 flex items-start gap-1.5">
+                        <div class="mt-0.5 flex items-start gap-1">
                           <UIcon name="i-lucide-map" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
                           <div class="min-w-0">
-                            <p class="truncate text-[13px] font-semibold text-highlighted" :title="group.roadmap.description || undefined">{{ group.roadmap.title }}</p>
+                            <p class="truncate text-[12px] font-semibold text-highlighted" :title="group.roadmap.description || undefined">{{ group.roadmap.title }}</p>
                           </div>
                         </div>
                       </div>
                     </div>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top">
-                    <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[group.roadmap.status]">
+                  <td class="border-b border-default px-2.5 py-1.5 align-top">
+                    <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[group.roadmap.status]">
                       {{ statusLabels[group.roadmap.status] }}
                     </span>
                   </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
                       <p v-if="getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic)))">
                       {{ getProductNamesLine(getRoadmapGroupProductNames(group.epics.map(entry => entry.epic))) }}
                     </p>
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                  <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                     <span v-if="getDisplayedHours(group.roadmap) !== null">{{ getDisplayedHours(group.roadmap) }}h</span>
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                     <span class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                     <span class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                    {{ formatDate(getDisplayedConclusionDate(group.roadmap)) }}
+                  <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                    <div v-if="getDueDateLabel(group.roadmap) || getDueQuarterLabel(group.roadmap) || isDelayed(group.roadmap)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(group.roadmap)">
+                      <span v-if="getDueDateLabel(group.roadmap)" :class="getDueDateClass(group.roadmap)">{{ getDueDateLabel(group.roadmap) }}</span>
+                      <span v-if="getDueQuarterLabel(group.roadmap)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                        {{ getDueQuarterLabel(group.roadmap) }}
+                      </span>
+                    </div>
+                    <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                  <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                     <span class="text-xs text-muted">—</span>
                   </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
-                        <span class="h-6 w-6" />
-                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Novo épico" @click="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
-                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar roadmap" @click="openEditModal(group.roadmap)" />
-                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Excluir roadmap" @click="promptDelete(group.roadmap)" />
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
+                        <span class="h-5 w-5" />
+                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-5 w-5 p-0" title="Novo épico" @click="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
+                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar roadmap" @click="openEditModal(group.roadmap)" />
+                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Excluir roadmap" @click="promptDelete(group.roadmap)" />
                     </div>
                   </td>
                 </tr>
@@ -1517,8 +1904,15 @@ void initializeHierarchyPage()
                     v-show="!isRoadmapCollapsed(group.roadmap.id)"
                     class="bg-elevated/10 hover:bg-elevated/20 transition-colors"
                   >
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
-                      <div class="flex items-start gap-1.5 pl-8">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                      <div class="flex items-start gap-1 pl-5">
+                        <input
+                          type="checkbox"
+                          class="mt-1 h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary"
+                          :checked="isHierarchyItemSelected(epicEntry.epic.id)"
+                          @click.stop
+                          @change="toggleHierarchyItemSelection(epicEntry.epic.id, ($event.target as HTMLInputElement).checked)"
+                        >
                         <button
                           type="button"
                           class="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border border-default bg-default text-muted transition-colors hover:text-highlighted"
@@ -1531,75 +1925,120 @@ void initializeHierarchyPage()
                             class="h-3.5 w-3.5"
                           />
                         </button>
-                        <UIcon name="i-lucide-star" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" :class="getCrossProjectWatermarkClass(epicEntry.epic)" />
                         <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(epicEntry.epic)">
-                          <div class="flex flex-wrap items-center gap-1.5">
-                            <span class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
-                              Épico
-                            </span>
-                            <span v-if="!epicEntry.demands.length" class="inline-flex items-center rounded-md border border-amber-300/70 bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-amber-700 dark:border-amber-700/60 dark:bg-amber-950/20 dark:text-amber-300">
-                              Órfão
-                            </span>
-                            <span v-if="isOutsideSelectedProject(epicEntry.epic)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-warning">
+                          <div class="flex flex-wrap items-center gap-1">
+                            <span v-if="isOutsideSelectedProject(epicEntry.epic)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-warning">
                               Outro projeto
                             </span>
-                            <span class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
-                              {{ epicEntry.demands.length }} demandas
-                            </span>
-                            <a
-                              v-for="issue in getDisplayIssueLinks(epicEntry.epic)"
-                              :key="`${epicEntry.epic.id}-${issue.key}`"
-                              :href="issue.url || undefined"
-                              :target="issue.url ? '_blank' : undefined"
-                              rel="noreferrer"
-                              class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                            >
-                              {{ issue.key }}
-                            </a>
                           </div>
-                          <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epicEntry.epic.description || undefined">{{ epicEntry.epic.title }}</p>
+                          <div class="mt-0.5 flex items-start gap-1">
+                            <UIcon name="i-lucide-star" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" :class="getCrossProjectWatermarkClass(epicEntry.epic)" />
+                            <div class="flex min-w-0 items-center gap-1">
+                              <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="epicEntry.epic.description || undefined">{{ epicEntry.epic.title }}</p>
+                              <a
+                                v-if="getDisplayIssueLinks(epicEntry.epic).length === 1 && getDisplayIssueLinks(epicEntry.epic)[0]?.url"
+                                :href="getDisplayIssueLinks(epicEntry.epic)[0]?.url"
+                                target="_blank"
+                                rel="noreferrer"
+                                class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
+                              >
+                                <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                              </a>
+                              <UPopover v-else-if="getDisplayIssueLinks(epicEntry.epic).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                                <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
+                                  <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                                  <span v-if="getDisplayIssueLinks(epicEntry.epic).length > 1">{{ getDisplayIssueLinks(epicEntry.epic).length }}</span>
+                                </button>
+                                <template #content>
+                                  <div class="flex min-w-40 flex-col gap-1 p-1">
+                                    <a
+                                      v-for="issue in getDisplayIssueLinks(epicEntry.epic)"
+                                      :key="`${epicEntry.epic.id}-${issue.key}`"
+                                      :href="issue.url || undefined"
+                                      :target="issue.url ? '_blank' : undefined"
+                                      rel="noreferrer"
+                                      class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:border-primary/40"
+                                    >
+                                      {{ issue.key }}
+                                    </a>
+                                  </div>
+                                </template>
+                              </UPopover>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                      <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[epicEntry.epic.status]">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[epicEntry.epic.status]">
                         {{ statusLabels[epicEntry.epic.status] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                      <p v-if="getEpicDisplayProductNames(epicEntry.epic).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic))">
-                        {{ getProductNamesLine(getEpicDisplayProductNames(epicEntry.epic)) }}
-                      </p>
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                      <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                        {{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}
+                      </span>
+                      <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                          <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}</span>
+                          <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).hiddenCount }}</span>
+                        </button>
+                        <template #content>
+                          <div class="flex min-w-44 flex-col gap-1 p-1">
+                            <span v-for="product in getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items" :key="`${epicEntry.epic.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                              {{ product }}
+                            </span>
+                          </div>
+                        </template>
+                      </UPopover>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                       <span v-if="getDisplayedHours(epicEntry.epic) !== null">{{ getDisplayedHours(epicEntry.epic) }}h</span>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                      <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epicEntry.epic.classification]">
-                        {{ classificationLabels[epicEntry.epic.classification] }}
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[epicEntry.epic.classification]" :title="classificationLabels[epicEntry.epic.classification]">
+                        {{ getClassificationDisplayLabel(epicEntry.epic.classification) }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                      <p v-if="getDisplayedCustomers(epicEntry.epic).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(epicEntry.epic))">
-                        {{ getCustomersLine(getDisplayedCustomers(epicEntry.epic)) }}
-                      </p>
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                      <span v-if="getCustomerCellDisplay(epicEntry.epic).allVisible && getCustomerCellDisplay(epicEntry.epic).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(epicEntry.epic).fullLabel">
+                        {{ getCustomerCellDisplay(epicEntry.epic).previewLabel }}
+                      </span>
+                      <UPopover v-else-if="getCustomerCellDisplay(epicEntry.epic).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(epicEntry.epic).fullLabel">
+                          <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(epicEntry.epic).previewLabel }}</span>
+                          <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(epicEntry.epic).hiddenCount }}</span>
+                        </button>
+                        <template #content>
+                          <div class="flex min-w-44 flex-col gap-1 p-1">
+                            <span v-for="customer in getCustomerCellDisplay(epicEntry.epic).items" :key="`${epicEntry.epic.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                              {{ customer }}
+                            </span>
+                          </div>
+                        </template>
+                      </UPopover>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                      {{ formatDate(getDisplayedConclusionDate(epicEntry.epic)) }}
+                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                      <div v-if="getDueDateLabel(epicEntry.epic) || getDueQuarterLabel(epicEntry.epic) || isDelayed(epicEntry.epic)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(epicEntry.epic)">
+                        <span v-if="getDueDateLabel(epicEntry.epic)" :class="getDueDateClass(epicEntry.epic)">{{ getDueDateLabel(epicEntry.epic) }}</span>
+                        <span v-if="getDueQuarterLabel(epicEntry.epic)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                          {{ getDueQuarterLabel(epicEntry.epic) }}
+                        </span>
+                      </div>
+                      <span v-else class="text-xs text-muted">—</span>
                     </td>
-
-                    <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                    <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <div class="flex min-w-0 flex-col items-start gap-1">
-                        <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
+                        <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
                           {{ getKpiSummary(epicEntry.epic).label }}
                         </button>
                         <span v-if="getKpiSecondaryLabel(epicEntry.epic)" class="text-[11px] text-muted">
@@ -1608,12 +2047,12 @@ void initializeHierarchyPage()
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
-                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epicEntry.epic)" />
-                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Nova demanda" @click="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
-                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epicEntry.epic)" />
-                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Excluir épico" @click="promptDelete(epicEntry.epic)" />
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
+                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-5 w-5 p-0" title="Abrir KPIs do épico" @click="openKpiWorkspace(epicEntry.epic)" />
+                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-5 w-5 p-0" title="Nova demanda" @click="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
+                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar épico" @click="openEditModal(epicEntry.epic)" />
+                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Excluir épico" @click="promptDelete(epicEntry.epic)" />
                       </div>
                     </td>
                   </tr>
@@ -1624,88 +2063,137 @@ void initializeHierarchyPage()
                     :key="demand.id"
                     class="bg-default hover:bg-elevated/10 transition-colors"
                   >
-                    <td class="border-b border-default px-3 py-2 align-top">
-                      <div class="flex items-start gap-1.5 pl-20">
-                        <UIcon name="i-lucide-list-todo" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" :class="getCrossProjectWatermarkClass(demand)" />
+                    <td class="border-b border-default px-2.5 py-1.5 align-top">
+                      <div class="flex items-start gap-1 pl-12">
+                        <input
+                          type="checkbox"
+                          class="mt-1 h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary"
+                          :checked="isHierarchyItemSelected(demand.id)"
+                          @click.stop
+                          @change="toggleHierarchyItemSelection(demand.id, ($event.target as HTMLInputElement).checked)"
+                        >
                         <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(demand)">
-                          <div class="flex flex-wrap items-center gap-1.5">
-                            <span class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted">
-                              Demanda
-                            </span>
-                            <span v-if="isOutsideSelectedProject(demand)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-warning">
+                          <div class="flex flex-wrap items-center gap-1">
+                            <span v-if="isOutsideSelectedProject(demand)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-warning">
                               Outro projeto
                             </span>
-                            <a
-                              v-for="issue in getDisplayIssueLinks(demand)"
-                              :key="`${demand.id}-${issue.key}`"
-                              :href="issue.url || undefined"
-                              :target="issue.url ? '_blank' : undefined"
-                              rel="noreferrer"
-                              class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
-                            >
-                              {{ issue.key }}
-                            </a>
                           </div>
-                          <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
+                          <div class="mt-0.5 flex items-start gap-1">
+                            <UIcon name="i-lucide-list-todo" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" :class="getCrossProjectWatermarkClass(demand)" />
+                            <div class="flex min-w-0 items-center gap-1">
+                              <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
+                              <a
+                                v-if="getDisplayIssueLinks(demand).length === 1 && getDisplayIssueLinks(demand)[0]?.url"
+                                :href="getDisplayIssueLinks(demand)[0]?.url"
+                                target="_blank"
+                                rel="noreferrer"
+                                class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
+                              >
+                                <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                              </a>
+                              <UPopover v-else-if="getDisplayIssueLinks(demand).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                                <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
+                                  <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                                  <span v-if="getDisplayIssueLinks(demand).length > 1">{{ getDisplayIssueLinks(demand).length }}</span>
+                                </button>
+                                <template #content>
+                                  <div class="flex min-w-40 flex-col gap-1 p-1">
+                                    <a
+                                      v-for="issue in getDisplayIssueLinks(demand)"
+                                      :key="`${demand.id}-${issue.key}`"
+                                      :href="issue.url || undefined"
+                                      :target="issue.url ? '_blank' : undefined"
+                                      rel="noreferrer"
+                                      class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:border-primary/40"
+                                    >
+                                      {{ issue.key }}
+                                    </a>
+                                  </div>
+                                </template>
+                              </UPopover>
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                      <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[demand.status]">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[demand.status]">
                         {{ statusLabels[demand.status] }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                      <p v-if="getProductNames(demand).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
-                        {{ getProductNamesLine(getProductNames(demand)) }}
-                      </p>
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                      <span v-if="getProductCellDisplay(getProductNames(demand)).allVisible && getProductCellDisplay(getProductNames(demand)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
+                        {{ getProductCellDisplay(getProductNames(demand)).previewLabel }}
+                      </span>
+                      <UPopover v-else-if="getProductCellDisplay(getProductNames(demand)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
+                          <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getProductNames(demand)).previewLabel }}</span>
+                          <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getProductNames(demand)).hiddenCount }}</span>
+                        </button>
+                        <template #content>
+                          <div class="flex min-w-44 flex-col gap-1 p-1">
+                            <span v-for="product in getProductCellDisplay(getProductNames(demand)).items" :key="`${demand.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                              {{ product }}
+                            </span>
+                          </div>
+                        </template>
+                      </UPopover>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                       <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                      <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]">
-                        {{ classificationLabels[getDisplayedClassification(demand)] }}
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]" :title="classificationLabels[getDisplayedClassification(demand)]">
+                        {{ getClassificationDisplayLabel(getDisplayedClassification(demand)) }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                      <p v-if="getDisplayedCustomers(demand).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(demand))">
-                        {{ getCustomersLine(getDisplayedCustomers(demand)) }}
-                      </p>
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                      <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(demand).fullLabel">
+                        {{ getCustomerCellDisplay(demand).previewLabel }}
+                      </span>
+                      <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(demand).fullLabel">
+                          <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
+                          <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
+                        </button>
+                        <template #content>
+                          <div class="flex min-w-44 flex-col gap-1 p-1">
+                            <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                              {{ customer }}
+                            </span>
+                          </div>
+                        </template>
+                      </UPopover>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                      <div class="flex flex-col gap-0.5">
-                        <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex max-w-fit items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-highlighted">
-                          {{ demand.quarterLabel }}
-                        </span>
-                        <span v-if="getDisplayedConclusionDate(demand)" class="text-[11px] text-muted">
-                          {{ formatDate(getDisplayedConclusionDate(demand)) }}
-                        </span>
-                        <span v-else-if="demand.status === 'Backlog'" class="text-xs text-muted">
-                          —
+                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                      <div v-if="getDueDateLabel(demand) || getDueQuarterLabel(demand) || isDelayed(demand)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(demand)">
+                        <span v-if="getDueDateLabel(demand)" :class="getDueDateClass(demand)">{{ getDueDateLabel(demand) }}</span>
+                        <span v-if="getDueQuarterLabel(demand)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                          {{ getDueQuarterLabel(demand) }}
                         </span>
                       </div>
+                      <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                    <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <span class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
-                        <span class="h-6 w-6" />
-                        <span class="h-6 w-6" />
-                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar demanda" @click="openEditModal(demand)" />
-                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover demanda" @click="promptDelete(demand)" />
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
+                        <span class="h-5 w-5" />
+                        <span class="h-5 w-5" />
+                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar demanda" @click="openEditModal(demand)" />
+                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Remover demanda" @click="promptDelete(demand)" />
                       </div>
                     </td>
                   </tr>
@@ -1723,62 +2211,119 @@ void initializeHierarchyPage()
                 :key="`orphan-${epic.id}`"
                 class="bg-rose-50/30 hover:bg-rose-50/50 dark:bg-rose-950/10 dark:hover:bg-rose-950/20 transition-colors"
               >
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
-                  <div class="flex items-start gap-1.5">
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                  <div class="flex items-start gap-1">
+                    <input
+                      type="checkbox"
+                      class="mt-1 h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary"
+                      :checked="isHierarchyItemSelected(epic.id)"
+                      @click.stop
+                      @change="toggleHierarchyItemSelection(epic.id, ($event.target as HTMLInputElement).checked)"
+                    >
                     <UIcon name="i-lucide-triangle-alert" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-500" />
                     <div class="min-w-0 flex-1">
-                      <span class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
+                      <span class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
                         Épico órfão
                       </span>
-                      <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
-                      <div class="mt-1 flex flex-wrap gap-1.5">
+                      <div class="mt-0.5 flex items-center gap-1">
+                        <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
                         <a
-                          v-for="issue in getDisplayIssueLinks(epic)"
-                          :key="`orphan-${epic.id}-${issue.key}`"
-                          :href="issue.url || undefined"
-                          :target="issue.url ? '_blank' : undefined"
+                          v-if="getDisplayIssueLinks(epic).length === 1 && getDisplayIssueLinks(epic)[0]?.url"
+                          :href="getDisplayIssueLinks(epic)[0]?.url"
+                          target="_blank"
                           rel="noreferrer"
-                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
+                          class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
                         >
-                          {{ issue.key }}
+                          <UIcon name="i-lucide-link-2" class="h-3 w-3" />
                         </a>
-                        <span v-if="!getDisplayIssueLinks(epic).length" class="text-xs text-muted">—</span>
+                        <UPopover v-else-if="getDisplayIssueLinks(epic).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                          <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
+                            <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                            <span v-if="getDisplayIssueLinks(epic).length > 1">{{ getDisplayIssueLinks(epic).length }}</span>
+                          </button>
+                          <template #content>
+                            <div class="flex min-w-40 flex-col gap-1 p-1">
+                              <a
+                                v-for="issue in getDisplayIssueLinks(epic)"
+                                :key="`orphan-${epic.id}-${issue.key}`"
+                                :href="issue.url || undefined"
+                                :target="issue.url ? '_blank' : undefined"
+                                rel="noreferrer"
+                                class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:border-primary/40"
+                              >
+                                {{ issue.key }}
+                              </a>
+                            </div>
+                          </template>
+                        </UPopover>
                       </div>
                     </div>
                   </div>
                 </td>
-                    <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                  <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[epic.status]">
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[epic.status]">
                     {{ statusLabels[epic.status] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                  <p v-if="getEpicDisplayProductNames(epic).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getEpicDisplayProductNames(epic))">
-                    {{ getProductNamesLine(getEpicDisplayProductNames(epic)) }}
-                  </p>
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                  <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
+                    {{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}
+                  </span>
+                  <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
+                      <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}</span>
+                      <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epic)).hiddenCount }}</span>
+                    </button>
+                    <template #content>
+                      <div class="flex min-w-44 flex-col gap-1 p-1">
+                        <span v-for="product in getProductCellDisplay(getEpicDisplayProductNames(epic)).items" :key="`${epic.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                          {{ product }}
+                        </span>
+                      </div>
+                    </template>
+                  </UPopover>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                   <span v-if="getDisplayedHours(epic) !== null">{{ getDisplayedHours(epic) }}h</span>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                  <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[epic.classification]">
-                    {{ classificationLabels[epic.classification] }}
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[epic.classification]" :title="classificationLabels[epic.classification]">
+                    {{ getClassificationDisplayLabel(epic.classification) }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                  <p v-if="getDisplayedCustomers(epic).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(epic))">
-                    {{ getCustomersLine(getDisplayedCustomers(epic)) }}
-                  </p>
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                  <span v-if="getCustomerCellDisplay(epic).allVisible && getCustomerCellDisplay(epic).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(epic).fullLabel">
+                    {{ getCustomerCellDisplay(epic).previewLabel }}
+                  </span>
+                  <UPopover v-else-if="getCustomerCellDisplay(epic).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(epic).fullLabel">
+                      <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(epic).previewLabel }}</span>
+                      <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(epic).hiddenCount }}</span>
+                    </button>
+                    <template #content>
+                      <div class="flex min-w-44 flex-col gap-1 p-1">
+                        <span v-for="customer in getCustomerCellDisplay(epic).items" :key="`${epic.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                          {{ customer }}
+                        </span>
+                      </div>
+                    </template>
+                  </UPopover>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                  {{ formatDate(getDisplayedConclusionDate(epic)) }}
+                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                  <div v-if="getDueDateLabel(epic) || getDueQuarterLabel(epic) || isDelayed(epic)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(epic)">
+                    <span v-if="getDueDateLabel(epic)" :class="getDueDateClass(epic)">{{ getDueDateLabel(epic) }}</span>
+                    <span v-if="getDueQuarterLabel(epic)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                      {{ getDueQuarterLabel(epic) }}
+                    </span>
+                  </div>
+                  <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <div class="flex min-w-0 flex-col items-start gap-1">
-                    <button type="button" class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
+                    <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
                       {{ getKpiSummary(epic).label }}
                     </button>
                     <span v-if="getKpiSecondaryLabel(epic)" class="text-[11px] text-muted">
@@ -1786,12 +2331,12 @@ void initializeHierarchyPage()
                     </span>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
-                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" title="Abrir KPIs do épico" @click="openKpiWorkspace(epic)" />
-                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" title="Nova demanda" @click="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
-                    <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar épico" @click="openEditModal(epic)" />
-                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Excluir épico" @click="promptDelete(epic)" />
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
+                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-5 w-5 p-0" title="Abrir KPIs do épico" @click="openKpiWorkspace(epic)" />
+                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-5 w-5 p-0" title="Nova demanda" @click="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
+                    <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar épico" @click="openEditModal(epic)" />
+                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Excluir épico" @click="promptDelete(epic)" />
                   </div>
                 </td>
               </tr>
@@ -1807,84 +2352,131 @@ void initializeHierarchyPage()
                 :key="`orphan-demand-${demand.id}`"
                 class="bg-sky-50/20 hover:bg-sky-50/40 dark:bg-sky-950/10 dark:hover:bg-sky-950/20 transition-colors"
               >
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('item') }">
-                  <div class="flex items-start gap-1.5">
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                  <div class="flex items-start gap-1">
+                    <input
+                      type="checkbox"
+                      class="mt-1 h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary"
+                      :checked="isHierarchyItemSelected(demand.id)"
+                      @click.stop
+                      @change="toggleHierarchyItemSelection(demand.id, ($event.target as HTMLInputElement).checked)"
+                    >
                     <UIcon name="i-lucide-link-2-off" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" />
                     <div class="min-w-0 flex-1">
-                      <div class="flex flex-wrap items-center gap-1.5">
-                        <span class="inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-sky-700 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300">
+                      <div class="flex flex-wrap items-center gap-1">
+                        <span class="inline-flex items-center rounded-md border border-sky-200 bg-sky-50 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-sky-700 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300">
                           Demanda órfã
                         </span>
-                        <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted">
+                        <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
                           {{ demand.quarterLabel }}
                         </span>
                         <span v-else class="text-xs text-muted">—</span>
                       </div>
-                      <p class="mt-0.5 truncate text-[13px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
-                      <div class="mt-1 flex flex-wrap gap-1.5">
+                      <div class="mt-0.5 flex items-center gap-1">
+                        <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
                         <a
-                          v-for="issue in getDisplayIssueLinks(demand)"
-                          :key="`orphan-demand-${demand.id}-${issue.key}`"
-                          :href="issue.url || undefined"
-                          :target="issue.url ? '_blank' : undefined"
+                          v-if="getDisplayIssueLinks(demand).length === 1 && getDisplayIssueLinks(demand)[0]?.url"
+                          :href="getDisplayIssueLinks(demand)[0]?.url"
+                          target="_blank"
                           rel="noreferrer"
-                          class="inline-flex items-center rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40"
+                          class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
                         >
-                          {{ issue.key }}
+                          <UIcon name="i-lucide-link-2" class="h-3 w-3" />
                         </a>
-                        <span v-if="!getDisplayIssueLinks(demand).length" class="text-xs text-muted">—</span>
+                        <UPopover v-else-if="getDisplayIssueLinks(demand).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                          <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
+                            <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                            <span v-if="getDisplayIssueLinks(demand).length > 1">{{ getDisplayIssueLinks(demand).length }}</span>
+                          </button>
+                          <template #content>
+                            <div class="flex min-w-40 flex-col gap-1 p-1">
+                              <a
+                                v-for="issue in getDisplayIssueLinks(demand)"
+                                :key="`orphan-demand-${demand.id}-${issue.key}`"
+                                :href="issue.url || undefined"
+                                :target="issue.url ? '_blank' : undefined"
+                                rel="noreferrer"
+                                class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:border-primary/40"
+                              >
+                                {{ issue.key }}
+                              </a>
+                            </div>
+                          </template>
+                        </UPopover>
                       </div>
                     </div>
                   </div>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                  <span class="inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium" :class="statusTone[demand.status]">
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[demand.status]">
                     {{ statusLabels[demand.status] }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                  <p v-if="getProductNames(demand).length" class="max-w-[160px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getProductNamesLine(getProductNames(demand))">
-                    {{ getProductNamesLine(getProductNames(demand)) }}
-                  </p>
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                  <span v-if="getProductCellDisplay(getProductNames(demand)).allVisible && getProductCellDisplay(getProductNames(demand)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
+                    {{ getProductCellDisplay(getProductNames(demand)).previewLabel }}
+                  </span>
+                  <UPopover v-else-if="getProductCellDisplay(getProductNames(demand)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
+                      <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getProductNames(demand)).previewLabel }}</span>
+                      <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getProductNames(demand)).hiddenCount }}</span>
+                    </button>
+                    <template #content>
+                      <div class="flex min-w-44 flex-col gap-1 p-1">
+                        <span v-for="product in getProductCellDisplay(getProductNames(demand)).items" :key="`${demand.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                          {{ product }}
+                        </span>
+                      </div>
+                    </template>
+                  </UPopover>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                   <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                  <span class="inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]">
-                    {{ classificationLabels[getDisplayedClassification(demand)] }}
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]" :title="classificationLabels[getDisplayedClassification(demand)]">
+                    {{ getClassificationDisplayLabel(getDisplayedClassification(demand)) }}
                   </span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                  <p v-if="getDisplayedCustomers(demand).length" class="max-w-[130px] overflow-hidden text-[11px] leading-4 text-highlighted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2]" :title="getCustomersLine(getDisplayedCustomers(demand))">
-                    {{ getCustomersLine(getDisplayedCustomers(demand)) }}
-                  </p>
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                  <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(demand).fullLabel">
+                    {{ getCustomerCellDisplay(demand).previewLabel }}
+                  </span>
+                  <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(demand).fullLabel">
+                      <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
+                      <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
+                    </button>
+                    <template #content>
+                      <div class="flex min-w-44 flex-col gap-1 p-1">
+                        <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                          {{ customer }}
+                        </span>
+                      </div>
+                    </template>
+                  </UPopover>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                  <div class="flex flex-col gap-0.5">
-                    <span v-if="hasPlannedQuarter(demand) && demand.quarterLabel" class="inline-flex max-w-fit items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] font-medium text-highlighted">
-                      {{ demand.quarterLabel }}
-                    </span>
-                    <span v-if="getDisplayedConclusionDate(demand)" class="text-[11px] text-muted">
-                      {{ formatDate(getDisplayedConclusionDate(demand)) }}
-                    </span>
-                    <span v-else-if="demand.status === 'Backlog'" class="text-xs text-muted">
-                      —
+                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                  <div v-if="getDueDateLabel(demand) || getDueQuarterLabel(demand) || isDelayed(demand)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(demand)">
+                    <span v-if="getDueDateLabel(demand)" :class="getDueDateClass(demand)">{{ getDueDateLabel(demand) }}</span>
+                    <span v-if="getDueQuarterLabel(demand)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                      {{ getDueQuarterLabel(demand) }}
                     </span>
                   </div>
+                  <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2 py-2 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <span class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-3 py-2 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-1">
-                    <span class="h-6 w-6" />
-                    <span class="h-6 w-6" />
-                    <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" title="Editar demanda" @click="openEditModal(demand)" />
-                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" title="Remover demanda" @click="promptDelete(demand)" />
+                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
+                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
+                    <span class="h-5 w-5" />
+                    <span class="h-5 w-5" />
+                    <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar demanda" @click="openEditModal(demand)" />
+                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Remover demanda" @click="promptDelete(demand)" />
                   </div>
                 </td>
               </tr>
@@ -1893,6 +2485,14 @@ void initializeHierarchyPage()
         </div>
       </div>
     </template>
+
+    <BulkEditRoadmapItemsModal
+      v-model:open="bulkEditModalOpen"
+      :selected-items="selectedHierarchyItems"
+      :dependency-options="dependencyOptions"
+      :is-saving="isBulkEditing"
+      @submit="handleBulkEditSubmit"
+    />
 
     <RoadmapDemandFormModal
       v-model:open="modalOpen"
@@ -1915,6 +2515,7 @@ void initializeHierarchyPage()
       }))"
       :available-kpis="availableKpis"
       :is-saving="isSavingDemand"
+      @trade-off-deleted="handleTradeOffDeleted"
       @submit="handleSubmit"
     />
 

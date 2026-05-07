@@ -17,7 +17,9 @@ public sealed record CreateRoadmapDemandCommand(
     string Classification,
     IReadOnlyList<Guid> ProductIds,
     IReadOnlyList<Guid>? DependencyDemandIds = null,
-        IReadOnlyList<IssueLinkInput>? IssueLinks = null,
+    string? Observation = null,
+    IReadOnlyList<IssueLinkInput>? IssueLinks = null,
+    string? DeprioritizationReason = null,
     Guid? ReplacementDemandId = null,
     string? JiraIssue = null,
     decimal? Hours = null,
@@ -25,6 +27,7 @@ public sealed record CreateRoadmapDemandCommand(
     IReadOnlyList<string>? Customers = null,
     bool IsBlocked = false,
     string? BlockedReason = null,
+    DateOnly? DeliveryDate = null,
     int? ProblemClarity = null,
     bool HasNoKpi = false,
     string? NoKpiClassification = null) : IRequest<RoadmapDemandDto>;

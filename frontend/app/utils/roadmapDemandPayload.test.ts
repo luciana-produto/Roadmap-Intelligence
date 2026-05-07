@@ -83,6 +83,26 @@ describe('roadmapDemandPayload', () => {
     })
   })
 
+  it('derives impediment from blocked status', () => {
+    expect(buildCreateDemandPayload(createBaseFormData({
+      status: 'Blocked',
+      blockedReason: 'Dependência externa'
+    }))).toMatchObject({
+      status: 'Blocked',
+      isBlocked: true,
+      blockedReason: 'Dependência externa'
+    })
+
+    expect(buildCreateDemandPayload(createBaseFormData({
+      status: 'InProgress',
+      blockedReason: 'Não deve seguir'
+    }))).toMatchObject({
+      status: 'InProgress',
+      isBlocked: false,
+      blockedReason: undefined
+    })
+  })
+
   it('builds status patch payload from roadmap demand with sanitized customers', () => {
     const demand: RoadmapDemand = {
       id: 'demand-1',

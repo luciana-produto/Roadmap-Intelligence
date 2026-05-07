@@ -46,7 +46,7 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.Status)
             .NotEmpty()
             .Must(s => Enum.TryParse<DemandStatus>(s, true, out _))
-            .WithMessage("Status must be Backlog, InProgress, Done or Deprioritized.");
+            .WithMessage("Status must be Backlog, InProgress, Done, Deprioritized or Blocked.");
         RuleFor(x => x.Observation)
             .NotEmpty().WithMessage("Observation is required when status is Deprioritized.")
             .When(x => x.Status is "Deprioritized");
@@ -62,7 +62,10 @@ public sealed class UpdateRoadmapDemandCommandValidator
             .When(x => x.Status is not "Deprioritized");
         RuleFor(x => x.BlockedReason)
             .NotEmpty().WithMessage("Blocked reason is required when demand is blocked.")
-            .When(x => x.IsBlocked);
+            .When(x => x.Status is "Blocked");
+        RuleFor(x => x.BlockedReason)
+            .Empty().WithMessage("Blocked reason must be empty when status is not Blocked.")
+            .When(x => x.Status is not "Blocked");
         RuleFor(x => x.BlockedReason).MaximumLength(500);
         RuleFor(x => x.DeliveryDate)
             .NotNull().WithMessage("Delivery date is required when status is Done.")

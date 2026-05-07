@@ -1,4 +1,4 @@
-export type DemandStatus = 'Backlog' | 'InProgress' | 'Done' | 'Deprioritized'
+export type DemandStatus = 'Backlog' | 'InProgress' | 'Done' | 'Deprioritized' | 'Blocked'
 export type DemandType = 'Planned' | 'Spillover' | 'Unplanned' | 'Additional'
 export type RoadmapItemType = 'Roadmap' | 'Epic' | 'Demand'
 export type DemandClassification =
@@ -176,6 +176,7 @@ export interface DemandFormData {
   issueLinks?: IssueLinkInput[]
   hours?: number
   customers?: string[]
+  customerRenames?: CustomerRename[]
   dependencyDemandIds?: string[]
   isBlocked?: boolean
   blockedReason?: string
@@ -184,6 +185,24 @@ export interface DemandFormData {
   problemClarity?: number
   hasNoKpi?: boolean
   noKpiClassification?: NoKpiClassification
+}
+
+export interface CustomerRename {
+  from: string
+  to: string
+}
+
+export interface BulkEditRoadmapItemsData {
+  status?: DemandStatus
+  observation?: string
+  deprioritizationReason?: DeprioritizationReason
+  replacementDemandId?: string
+  promisedDate?: string
+  deliveryDate?: string
+  blockedReason?: string
+  type?: DemandType
+  quarterYear?: number
+  quarterNumber?: number
 }
 
 export interface CapacityFormData {

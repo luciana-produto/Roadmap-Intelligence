@@ -149,7 +149,7 @@ function handleMobileNavGroupToggle(label: string) {
 
 const sidebarStyle = computed(() => `background-color: var(--color-${appConfig.ui.colors.primary}-950);`)
 const desktopSidebarClasses = computed(() =>
-  isSidebarCollapsed.value ? 'md:w-20' : 'md:w-72'
+  isSidebarCollapsed.value ? 'md:w-16' : 'md:w-72'
 )
 const mainContentWidthClass = computed(() =>
   route.path.startsWith('/roadmap') ? 'max-w-none' : 'max-w-[1600px]'
@@ -164,8 +164,8 @@ const mainContentWidthClass = computed(() =>
       :style="sidebarStyle"
     >
       <div
-        class="flex px-4 py-4 border-b border-white/10"
-        :class="isSidebarCollapsed ? 'justify-center' : 'items-center gap-3 justify-between'"
+        class="flex border-b border-white/10"
+        :class="isSidebarCollapsed ? 'justify-center px-2 py-3' : 'items-center gap-3 justify-between px-4 py-4'"
       >
         <div class="flex items-center gap-3 min-w-0">
           <div class="w-10 h-10 rounded-xl bg-white/10 flex items-center justify-center shrink-0">
@@ -194,15 +194,15 @@ const mainContentWidthClass = computed(() =>
         />
       </div>
 
-      <nav class="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav class="flex-1 space-y-1 overflow-y-auto" :class="isSidebarCollapsed ? 'px-2 py-3' : 'px-3 py-4'">
         <template v-for="link in navLinks" :key="link.label">
           <button
             v-if="link.disabled"
             type="button"
             :title="isSidebarCollapsed ? (link.badge ? `${link.label} · ${link.badge}` : link.label) : undefined"
-            class="flex rounded-xl px-3 py-2.5 text-sm transition-colors"
+            class="flex rounded-xl text-sm transition-colors"
             :class="[
-              isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
+              isSidebarCollapsed ? 'justify-center px-2 py-2.5' : 'items-center gap-3 px-3 py-2.5',
               'cursor-not-allowed text-white/40'
             ]"
             disabled
@@ -226,9 +226,9 @@ const mainContentWidthClass = computed(() =>
             <button
               type="button"
               :title="isSidebarCollapsed ? link.label : undefined"
-              class="flex w-full rounded-xl px-3 py-2.5 text-sm transition-colors"
+              class="flex w-full rounded-xl text-sm transition-colors"
               :class="[
-                isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
+                isSidebarCollapsed ? 'justify-center px-2 py-2.5' : 'items-center gap-3 px-3 py-2.5',
                 isNavLinkActive(link)
                   ? 'bg-white/12 text-white'
                   : 'text-white/75 hover:bg-white/8 hover:text-white'
@@ -268,9 +268,9 @@ const mainContentWidthClass = computed(() =>
             v-else
             :to="link.to"
             :title="isSidebarCollapsed ? link.label : undefined"
-            class="flex rounded-xl px-3 py-2.5 text-sm transition-colors"
+            class="flex rounded-xl text-sm transition-colors"
             :class="[
-              isSidebarCollapsed ? 'justify-center' : 'items-center gap-3',
+              isSidebarCollapsed ? 'justify-center px-2 py-2.5' : 'items-center gap-3 px-3 py-2.5',
               isNavLinkActive(link)
                 ? 'bg-white/12 text-white'
                 : 'text-white/75 hover:bg-white/8 hover:text-white'
@@ -282,11 +282,11 @@ const mainContentWidthClass = computed(() =>
         </template>
       </nav>
 
-      <div class="px-3 py-3 border-t border-white/10">
+      <div class="border-t border-white/10" :class="isSidebarCollapsed ? 'px-2 py-3' : 'px-3 py-3'">
         <UDropdownMenu :items="userMenuItems">
           <button
-            class="w-full flex rounded-xl px-3 py-2.5 text-left text-white/85 hover:bg-white/8 transition-colors"
-            :class="isSidebarCollapsed ? 'justify-center' : 'items-center gap-3'"
+            class="w-full flex rounded-xl text-left text-white/85 hover:bg-white/8 transition-colors"
+            :class="isSidebarCollapsed ? 'justify-center px-2 py-2.5' : 'items-center gap-3 px-3 py-2.5'"
           >
             <UAvatar :text="userInitials" size="sm" class="shrink-0" />
             <div v-if="!isSidebarCollapsed" class="min-w-0 flex-1">

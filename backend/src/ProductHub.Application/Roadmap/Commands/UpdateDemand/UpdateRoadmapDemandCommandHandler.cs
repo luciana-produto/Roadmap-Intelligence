@@ -19,12 +19,16 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         CancellationToken cancellationToken)
     {
         Enum.TryParse<RoadmapItemType>(request.ItemType, true, out var itemType);
+        Enum.TryParse<DemandStatus>(request.Status, true, out var status);
         var dependencyDemandIds = (request.DependencyDemandIds ?? [])
             .Where(id => id != Guid.Empty)
             .Distinct()
             .ToArray();
-        var relatedDemandIds = request.ReplacementDemandId.HasValue
-            ? [.. dependencyDemandIds, request.ReplacementDemandId.Value]
+        var replacementDemandId = status == DemandStatus.Deprioritized
+            ? request.ReplacementDemandId
+            : null;
+        var relatedDemandIds = replacementDemandId.HasValue
+            ? [.. dependencyDemandIds, replacementDemandId.Value]
             : dependencyDemandIds;
 
         var demand = await demandRepository.GetByIdForUpdateAsync(request.Id, cancellationToken)
@@ -92,10 +96,9 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         foreach (var dependencyDemandId in dependencyDemandIds)
             if (!dependencyDemandMap.ContainsKey(dependencyDemandId))
                 throw new NotFoundException("RoadmapDemand", dependencyDemandId);
-        if (request.ReplacementDemandId.HasValue && !dependencyDemandMap.ContainsKey(request.ReplacementDemandId.Value))
-            throw new NotFoundException("RoadmapDemand", request.ReplacementDemandId.Value);
+        if (replacementDemandId.HasValue && !dependencyDemandMap.ContainsKey(replacementDemandId.Value))
+            throw new NotFoundException("RoadmapDemand", replacementDemandId.Value);
 
-        Enum.TryParse<DemandStatus>(request.Status, true, out var status);
         Enum.TryParse<DemandType>(request.Type, true, out var type);
         Enum.TryParse<DemandClassification>(request.Classification, true, out var classification);
         NoKpiClassification? noKpiClassification = null;
@@ -138,7 +141,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             nextSortOrder,
             request.Observation,
             deprioritizationReason,
-            request.ReplacementDemandId,
+            replacementDemandId,
             request.JiraIssue,
                         request.IssueLinks?.Select(issue => RoadmapIssueLink.Create(issue.Key, issue.Url)),
             request.Hours,
@@ -151,37 +154,39 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.HasNoKpi,
             noKpiClassification);
 
-        if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue && demand.ProjectId.HasValue)
+        if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
         {
             var existingTradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(demand.Id, cancellationToken);
-            var matchingTradeOffId = existingTradeOffs
-                .Where(tradeOff => tradeOff.DeprioritizedDemandId == demand.Id)
-            .Where(tradeOff => tradeOff.ProjectId == demand.ProjectId.Value)
-                .Where(tradeOff => tradeOff.QuarterYear == request.QuarterYear)
-                .Where(tradeOff => tradeOff.QuarterNumber == request.QuarterNumber)
-                .OrderByDescending(tradeOff => tradeOff.CreatedAt)
-                .Select(tradeOff => tradeOff.Id)
-                .FirstOrDefault();
-
-            var shouldUpdateExistingTradeOff = originalStatus == DemandStatus.Deprioritized
-                && originalQuarterYear == request.QuarterYear
-                && originalQuarterNumber == request.QuarterNumber
-                && matchingTradeOffId != Guid.Empty;
-
-            if (shouldUpdateExistingTradeOff)
+            foreach (var tradeOffProjectId in GetAssociatedProjectIds(itemType, request.ProjectId, request.ProjectIds))
             {
-                var existingTradeOff = await kpiRepository.GetTradeOffByIdAsync(matchingTradeOffId, cancellationToken);
-                existingTradeOff?.Update(request.ReplacementDemandId, deprioritizationReason.Value, request.Observation);
-            }
-            else
-            {
+                var matchingTradeOffId = existingTradeOffs
+                    .Where(tradeOff => tradeOff.DeprioritizedDemandId == demand.Id)
+                    .Where(tradeOff => tradeOff.ProjectId == tradeOffProjectId)
+                    .Where(tradeOff => tradeOff.QuarterYear == request.QuarterYear)
+                    .Where(tradeOff => tradeOff.QuarterNumber == request.QuarterNumber)
+                    .OrderByDescending(tradeOff => tradeOff.CreatedAt)
+                    .Select(tradeOff => tradeOff.Id)
+                    .FirstOrDefault();
+
+                var shouldUpdateExistingTradeOff = originalStatus == DemandStatus.Deprioritized
+                    && originalQuarterYear == request.QuarterYear
+                    && originalQuarterNumber == request.QuarterNumber
+                    && matchingTradeOffId != Guid.Empty;
+
+                if (shouldUpdateExistingTradeOff)
+                {
+                    var existingTradeOff = await kpiRepository.GetTradeOffByIdAsync(matchingTradeOffId, cancellationToken);
+                    existingTradeOff?.Update(replacementDemandId, deprioritizationReason.Value, request.Observation);
+                    continue;
+                }
+
                 await kpiRepository.AddTradeOffAsync(
                     DemandTradeOff.Create(
-                        demand.ProjectId.Value,
+                        tradeOffProjectId,
                         request.QuarterYear,
                         request.QuarterNumber,
                         demand.Id,
-                        request.ReplacementDemandId,
+                        replacementDemandId,
                         deprioritizationReason.Value,
                         request.Observation),
                     cancellationToken);
@@ -234,5 +239,19 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             .ToDictionary(group => group.Key, group => group.First());
 
         return RoadmapDemandDtoMapper.Map(currentDemand, productMap, demandsById, projectNamesById, dependencyLinks, tradeOffs: tradeOffs);
+    }
+
+    private static IReadOnlyList<Guid> GetAssociatedProjectIds(
+        RoadmapItemType itemType,
+        Guid? projectId,
+        IReadOnlyList<Guid>? projectIds)
+    {
+        if (itemType == RoadmapItemType.Demand)
+            return projectId.HasValue ? [projectId.Value] : [];
+
+        return (projectIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
     }
 }

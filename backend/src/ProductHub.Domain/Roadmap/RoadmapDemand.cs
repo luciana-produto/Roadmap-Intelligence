@@ -64,6 +64,10 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         bool isBlocked = false,
         string? blockedReason = null,
         DateOnly? promisedDate = null,
+        string? observation = null,
+        DeprioritizationReason? deprioritizationReason = null,
+        Guid? replacementDemandId = null,
+        DateOnly? deliveryDate = null,
         int? problemClarity = null,
         bool hasNoKpi = false,
         NoKpiClassification? noKpiClassification = null)
@@ -77,6 +81,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
+        var normalizedBlockedReason = NormalizeBlockedReason(status, blockedReason);
 
         var demand = new RoadmapDemand
         {
@@ -91,13 +96,17 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             Type = type,
             Classification = classification,
             SortOrder = sortOrder,
+            Observation = observation,
+            DeprioritizationReason = NormalizeDeprioritizationReason(status, deprioritizationReason),
+            ReplacementDemandId = status == DemandStatus.Deprioritized ? replacementDemandId : null,
             JiraIssue = jiraIssue,
             _issueLinks = NormalizeIssueLinks(issueLinks),
             Hours = normalizedHours,
             Customers = NormalizeCustomers(customers),
-            IsBlocked = isBlocked,
-            BlockedReason = isBlocked ? blockedReason : null,
+            IsBlocked = status == DemandStatus.Blocked,
+            BlockedReason = normalizedBlockedReason,
             PromisedDate = promisedDate,
+            DeliveryDate = deliveryDate,
             ProblemClarity = problemClarity,
             HasNoKpi = hasNoKpi,
             NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification)
@@ -149,6 +158,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
+        var normalizedBlockedReason = NormalizeBlockedReason(status, blockedReason);
 
         ItemType = itemType;
         ParentDemandId = parentDemandId;
@@ -169,8 +179,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         _issueLinks = NormalizeIssueLinks(issueLinks);
         Hours = normalizedHours;
         Customers = NormalizeCustomers(customers);
-        IsBlocked = isBlocked;
-        BlockedReason = isBlocked ? blockedReason : null;
+        IsBlocked = status == DemandStatus.Blocked;
+        BlockedReason = normalizedBlockedReason;
         PromisedDate = promisedDate;
         DeliveryDate = deliveryDate;
         ProblemClarity = problemClarity;
@@ -189,8 +199,14 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public void SetSortOrder(int sortOrder) =>
         SortOrder = sortOrder;
 
-    public void SetStatus(DemandStatus status) =>
+    public void SetStatus(DemandStatus status)
+    {
         Status = status;
+        IsBlocked = status == DemandStatus.Blocked;
+
+        if (status != DemandStatus.Blocked)
+            BlockedReason = null;
+    }
 
     private static NoKpiClassification? NormalizeNoKpiClassification(
         bool hasNoKpi,
@@ -216,6 +232,19 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             throw new ArgumentException("Deprioritization reason is required when the demand is deprioritized.", nameof(deprioritizationReason));
 
         return deprioritizationReason.Value;
+    }
+
+    private static string? NormalizeBlockedReason(
+        DemandStatus status,
+        string? blockedReason)
+    {
+        if (status != DemandStatus.Blocked)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(blockedReason))
+            throw new ArgumentException("Blocked reason is required when the demand is blocked.", nameof(blockedReason));
+
+        return blockedReason.Trim();
     }
 
     private static IReadOnlyList<string> NormalizeCustomers(IEnumerable<string>? customers) =>
