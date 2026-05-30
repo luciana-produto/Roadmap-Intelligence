@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { ApiResponse } from '~/types/api'
-import type { BulkEditRoadmapItemsData, CustomerRename, DemandFormData, DemandStatus, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
+import type { BulkEditRoadmapItemsData, CustomerRename, DemandFormData, DemandStatus, DeprioritizationReason, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import { buildDemandDueSearchText, buildDueSortKey, hasPlannedQuarter } from '~/utils/roadmapDue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
@@ -49,8 +49,34 @@ const collapsedEpicIds = ref<string[]>([])
 const isSavingDemand = ref(false)
 const isBulkEditing = ref(false)
 const isHierarchyLoading = ref(false)
+const isSavingAllHierarchyEdits = ref(false)
 const hierarchyDemands = ref<RoadmapDemand[]>([])
 const selectedHierarchyItemIds = ref<string[]>([])
+type HierarchyInlineDraft = {
+  status: DemandStatus
+  dueDate: string
+  hoursInput: string
+  classification: RoadmapDemand['classification']
+  productIds: string[]
+  customers: string[]
+  observation: string
+  blockedReason: string
+  deliveryDate: string
+  deprioritizationReason?: DeprioritizationReason
+  replacementDemandId?: string
+}
+type HierarchyEditableField = 'status' | 'dueDate' | 'hours' | 'classification' | 'products' | 'customers'
+type HierarchyActiveCell = {
+  itemId: string
+  field: HierarchyEditableField
+}
+const hierarchyInlineDrafts = ref<Record<string, HierarchyInlineDraft>>({})
+const hierarchyInlineSavingIds = ref<string[]>([])
+const activeHierarchyCell = ref<HierarchyActiveCell | null>(null)
+const hierarchyCustomerInputs = ref<Record<string, string>>({})
+const hierarchyStatusModalOpen = ref(false)
+const hierarchyStatusModalItemId = ref<string | null>(null)
+const hierarchyStatusModalSnapshot = ref<HierarchyInlineDraft | null>(null)
 const selectedProjectIds = ref<string[]>([])
 const hierarchyItemFilter = ref('')
 const hierarchyStatusFilter = ref<string[]>([])
@@ -58,6 +84,7 @@ const hierarchyClassificationFilter = ref<string[]>([])
 const hierarchyProductsFilter = ref<string[]>([])
 const hierarchyCustomersFilter = ref('')
 const hierarchyDueFilter = ref('')
+const hierarchyProblemFilter = ref<string[]>([])
 const hierarchySort = ref<{ key: HierarchySortKey | null, direction: 'asc' | 'desc' }>({ key: null, direction: 'asc' })
 const hierarchyTableContainerRef = ref<HTMLElement | null>(null)
 const hierarchyContainerWidth = ref(0)
@@ -79,6 +106,23 @@ const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
 }
 const hierarchyColumnSizing = ref<Partial<Record<HierarchyColumnId, number>>>({})
 
+const deprioritizationReasonOptions = [
+  { value: 'Strategic', label: 'Estratégico' },
+  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
+  { value: 'LowImpact', label: 'Baixo impacto' },
+  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
+  { value: 'ContextChange', label: 'Mudança de contexto' },
+  { value: 'Customizacao', label: 'Customização' }
+] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
+
+const hierarchyProblemOptions = [
+  { value: 'overdueOpen', label: 'Demandas atrasadas' },
+  { value: 'deliveredLate', label: 'Demandas entregues com atraso' },
+  { value: 'noKpi', label: 'Demandas sem KPIs' },
+  { value: 'noJira', label: 'Demandas sem issue Jira' },
+  { value: 'noHours', label: 'Demandas sem horas' }
+] as const
+
 function updateHierarchyContainerWidth() {
   hierarchyContainerWidth.value = hierarchyTableContainerRef.value?.clientWidth ?? 0
 }
@@ -88,14 +132,6 @@ function syncHierarchyHeaderScroll() {
 }
 
 function getHierarchyColSize(columnId: HierarchyColumnId) {
-  if (columnId === 'item' && hierarchyColumnSizing.value.item == null) {
-    const otherColumnsTotal = hierarchyColumnOrder
-      .filter(currentColumnId => currentColumnId !== 'item')
-      .reduce((total, currentColumnId) => total + (hierarchyColumnSizing.value[currentColumnId] ?? hierarchyColumnDefaults[currentColumnId]), 0)
-
-    return Math.max(HIERARCHY_COL_MIN, hierarchyContainerWidth.value - otherColumnsTotal)
-  }
-
   return hierarchyColumnSizing.value[columnId] ?? hierarchyColumnDefaults[columnId]
 }
 
@@ -103,17 +139,15 @@ function getHierarchyColWidth(columnId: HierarchyColumnId) {
   return `${getHierarchyColSize(columnId)}px`
 }
 
-function startHierarchyResize(columnId: HierarchyColumnId, event: MouseEvent) {
-  event.preventDefault()
-  event.stopPropagation()
-
+function handleHierarchyColumnResize(columnId: HierarchyColumnId, event: MouseEvent) {
   const startX = event.clientX
   const startWidth = getHierarchyColSize(columnId)
 
   const onMove = (moveEvent: MouseEvent) => {
+    const nextWidth = Math.max(HIERARCHY_COL_MIN, startWidth + (moveEvent.clientX - startX))
     hierarchyColumnSizing.value = {
       ...hierarchyColumnSizing.value,
-      [columnId]: Math.max(HIERARCHY_COL_MIN, startWidth + (moveEvent.clientX - startX))
+      [columnId]: nextWidth
     }
   }
 
@@ -149,6 +183,15 @@ watch(hierarchyTableContainerRef, async (element) => {
 onUnmounted(() => {
   hierarchyWidthObserver?.disconnect()
 })
+
+function handleHierarchyPopoverOpenChange(item: RoadmapDemand, field: Extract<HierarchyEditableField, 'products' | 'customers'>, open: boolean) {
+  if (open) {
+    activateHierarchyCell(item, field)
+    return
+  }
+
+  deactivateHierarchyCell(item.id, field)
+}
 
 const allRoadmapItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Roadmap'))
 const allEpicItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Epic'))
@@ -251,6 +294,47 @@ const statusFilterOptions = computed(() =>
   Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
 )
 
+const statusSelectOptions = computed(() =>
+  Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+)
+
+const classificationSelectOptions = computed(() =>
+  Object.entries(classificationLabels).map(([value, label]) => ({ value, label }))
+)
+
+const hierarchyInlineDirtyIds = computed(() =>
+  hierarchyDemands.value
+    .filter(item => isHierarchyInlineDirty(item))
+    .map(item => item.id)
+)
+
+const hierarchyPendingEditCount = computed(() => hierarchyInlineDirtyIds.value.length)
+const hierarchyPendingEditLabel = computed(() => {
+  const count = hierarchyPendingEditCount.value
+  return `Salvar ${count.toLocaleString('pt-BR')} ${count === 1 ? 'edição' : 'edições'}`
+})
+const hierarchyStatusModalItem = computed(() =>
+  hierarchyStatusModalItemId.value
+    ? hierarchyDemands.value.find(item => item.id === hierarchyStatusModalItemId.value) ?? null
+    : null
+)
+const hierarchyStatusModalDraft = computed(() =>
+  hierarchyStatusModalItem.value ? getHierarchyInlineDraft(hierarchyStatusModalItem.value) : null
+)
+const hierarchyStatusModalRequiresDeliveryDate = computed(() => hierarchyStatusModalDraft.value?.status === 'Done')
+const hierarchyStatusModalRequiresBlockedReason = computed(() => hierarchyStatusModalDraft.value?.status === 'Blocked')
+const hierarchyStatusModalRequiresDeprioritization = computed(() => hierarchyStatusModalDraft.value?.status === 'Deprioritized')
+const hierarchyStatusReplacementDemandOptions = computed(() => {
+  const currentItemId = hierarchyStatusModalItem.value?.id
+
+  return dependencyOptions.value
+    .filter(option => option.demandId !== currentItemId)
+    .map(option => ({
+      value: option.demandId,
+      label: `${option.projectName} · ${option.title}`
+    }))
+})
+
 const productFilterOptions = computed(() => {
   const productsMap = new Map<string, string>()
 
@@ -294,6 +378,16 @@ const hierarchyProductsFilterLabel = computed(() => {
     return productFilterOptions.value.find(option => option.value === hierarchyProductsFilter.value[0])?.label ?? '1 produto'
 
   return `${hierarchyProductsFilter.value.length} produtos`
+})
+
+const hierarchyProblemFilterLabel = computed(() => {
+  if (!hierarchyProblemFilter.value.length)
+    return 'Todos os problemas'
+
+  if (hierarchyProblemFilter.value.length === 1)
+    return hierarchyProblemOptions.find(option => option.value === hierarchyProblemFilter.value[0])?.label ?? '1 problema'
+
+  return `${hierarchyProblemFilter.value.length} problemas`
 })
 
 const statusLabels: Record<DemandStatus, string> = {
@@ -357,6 +451,49 @@ const createMenuItems = computed(() => [[
     label: 'Nova demanda',
     icon: 'i-lucide-list-todo',
     onSelect: () => openCreateModal('Demand')
+  }
+]])
+
+const hierarchyDisplayMenuItems = computed(() => [[
+  {
+    label: areAllRoadmapsCollapsed.value ? 'Expandir roadmaps' : 'Recolher roadmaps',
+    icon: 'i-lucide-chevrons-up-down',
+    disabled: !hasCollapsibleRoadmaps.value,
+    onSelect: () => {
+      if (areAllRoadmapsCollapsed.value)
+        expandAllRoadmaps()
+      else
+        collapseAllRoadmaps()
+    }
+  },
+  {
+    label: areAllEpicsCollapsed.value ? 'Expandir épicos' : 'Recolher épicos',
+    icon: 'i-lucide-chevrons-up-down',
+    disabled: !hasCollapsibleEpics.value,
+    onSelect: () => {
+      if (areAllEpicsCollapsed.value)
+        expandAllEpics()
+      else
+        collapseAllEpics()
+    }
+  },
+  {
+    label: 'Recolher tudo',
+    icon: 'i-lucide-fold-vertical',
+    disabled: !hasCollapsibleRoadmaps.value && !hasCollapsibleEpics.value,
+    onSelect: () => {
+      collapseAllRoadmaps()
+      collapseAllEpics()
+    }
+  },
+  {
+    label: 'Expandir tudo',
+    icon: 'i-lucide-unfold-vertical',
+    disabled: !collapsedRoadmapIds.value.length && !collapsedEpicIds.value.length,
+    onSelect: () => {
+      expandAllRoadmaps()
+      expandAllEpics()
+    }
   }
 ]])
 
@@ -479,8 +616,38 @@ function getProductNames(item: Pick<RoadmapDemand, 'products'>) {
   return getProductEntries(item).map(product => product.label)
 }
 
+function getEditableProductOptions(item: Pick<RoadmapDemand, 'projectId' | 'projectIds'>) {
+  const optionsMap = new Map<string, string>()
+
+  for (const projectId of getItemProjectIds(item)) {
+    const project = projects.value.find(currentProject => currentProject.id === projectId)
+    for (const product of project?.products ?? []) {
+      if (!product.id || !product.name)
+        continue
+
+      if (!optionsMap.has(product.id))
+        optionsMap.set(product.id, product.name)
+    }
+  }
+
+  return Array.from(optionsMap.entries()).map(([value, label]) => ({ value, label }))
+}
+
 function normalizeCustomers(customers?: string[]) {
   return (customers ?? []).map(customer => customer.trim()).filter(Boolean)
+}
+
+function formatCustomersInput(customers?: string[]) {
+  return normalizeCustomers(customers).join(', ')
+}
+
+function parseCustomersInput(value: string) {
+  return Array.from(new Set(
+    value
+      .split(/[\n,;]+/)
+      .map(customer => customer.trim())
+      .filter(Boolean)
+  ))
 }
 
 const INLINE_LIST_AVG_CHAR_PX = 6.4
@@ -495,6 +662,31 @@ function getDisplayedCustomers(item: RoadmapDemand) {
     return normalizeCustomers(epicById.value.get(item.epicId)?.customers)
 
   return normalizeCustomers(item.customers)
+}
+
+function getDemandProblemKeys(item: RoadmapDemand) {
+  if (item.itemType !== 'Demand')
+    return []
+
+  const keys: string[] = []
+  const targetEpic = getKpiTargetEpic(item)
+
+  if (item.status !== 'Done' && item.isOverdue)
+    keys.push('overdueOpen')
+
+  if (item.status === 'Done' && item.isDeliveredLate)
+    keys.push('deliveredLate')
+
+  if (!targetEpic || targetEpic.hasNoKpi || targetEpic.kpiLinks.length === 0)
+    keys.push('noKpi')
+
+  if (!getDisplayIssueLinks(item).length)
+    keys.push('noJira')
+
+  if (item.hours == null)
+    keys.push('noHours')
+
+  return keys
 }
 
 function getCustomersLine(customers: string[]) {
@@ -820,6 +1012,15 @@ function matchesHierarchyFilters(
   if (hierarchyProductsFilter.value.length && !hierarchyProductsFilter.value.some(productId => options?.products?.includes(productId)))
     return false
 
+  if (hierarchyProblemFilter.value.length) {
+    if (item.itemType !== 'Demand')
+      return false
+
+    const problemKeys = getDemandProblemKeys(item)
+    if (!hierarchyProblemFilter.value.every(problem => problemKeys.includes(problem)))
+      return false
+  }
+
   if (!matchesTextFilter([options?.customerText], customerQuery))
     return false
 
@@ -925,7 +1126,8 @@ const displayRoadmapGroups = computed<DisplayRoadmapGroup[]>(() => {
       const roadmapProjectMatch = hasProjectIntersection(roadmap)
       const hasActiveProductFilter = hierarchyProductsFilter.value.length > 0
       const hasActiveCustomerFilter = !!normalizeSearchText(hierarchyCustomersFilter.value)
-      const requiresChildMatch = hasActiveProductFilter || hasActiveCustomerFilter
+      const hasActiveProblemFilter = hierarchyProblemFilter.value.length > 0
+      const requiresChildMatch = hasActiveProductFilter || hasActiveCustomerFilter || hasActiveProblemFilter
       const roadmapMatches = matchesHierarchyFilters(roadmap, {
         products: getRoadmapGroupProductEntries(roadmap, sourceEpics).map(product => product.value),
         customerText: getCustomersLine(getRoadmapGroupCustomerNames(sourceEpics)),
@@ -1164,6 +1366,19 @@ function clearHierarchyProductsFilter() {
   hierarchyProductsFilter.value = []
 }
 
+function toggleHierarchyProblemFilter(problem: string) {
+  if (hierarchyProblemFilter.value.includes(problem)) {
+    hierarchyProblemFilter.value = hierarchyProblemFilter.value.filter(value => value !== problem)
+    return
+  }
+
+  hierarchyProblemFilter.value = [...hierarchyProblemFilter.value, problem]
+}
+
+function clearHierarchyProblemFilter() {
+  hierarchyProblemFilter.value = []
+}
+
 function toggleHierarchyClassificationFilter(classification: string) {
   if (hierarchyClassificationFilter.value.includes(classification)) {
     hierarchyClassificationFilter.value = hierarchyClassificationFilter.value.filter(value => value !== classification)
@@ -1194,6 +1409,460 @@ function toggleHierarchyItemSelection(itemId: string, selected: boolean) {
 
 function clearHierarchySelection() {
   selectedHierarchyItemIds.value = []
+}
+
+function cloneHierarchyInlineDraft(draft: HierarchyInlineDraft): HierarchyInlineDraft {
+  return {
+    ...draft,
+    productIds: [...draft.productIds],
+    customers: [...draft.customers]
+  }
+}
+
+function requiresHierarchyStatusDetails(status: DemandStatus) {
+  return status === 'Done' || status === 'Blocked' || status === 'Deprioritized'
+}
+
+function createHierarchyInlineDraft(item: RoadmapDemand): HierarchyInlineDraft {
+  return {
+    status: item.status,
+    dueDate: item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? ''),
+    hoursInput: item.itemType === 'Demand' && item.hours != null ? String(item.hours) : '',
+    classification: item.classification,
+    productIds: getProductEntries(item).map(product => product.value),
+    customers: getDisplayedCustomers(item),
+    observation: item.observation ?? '',
+    blockedReason: item.blockedReason ?? '',
+    deliveryDate: item.deliveryDate ?? '',
+    deprioritizationReason: item.deprioritizationReason ?? undefined,
+    replacementDemandId: item.replacementDemandId ?? undefined
+  }
+}
+
+function getHierarchyInlineDraft(item: RoadmapDemand) {
+  return hierarchyInlineDrafts.value[item.id] ?? createHierarchyInlineDraft(item)
+}
+
+function updateHierarchyInlineDraft(item: RoadmapDemand, patch: Partial<HierarchyInlineDraft>) {
+  hierarchyInlineDrafts.value = {
+    ...hierarchyInlineDrafts.value,
+    [item.id]: {
+      ...getHierarchyInlineDraft(item),
+      ...patch
+    }
+  }
+}
+
+function clearHierarchyInlineDraft(itemId: string) {
+  const { [itemId]: _removed, ...rest } = hierarchyInlineDrafts.value
+  hierarchyInlineDrafts.value = rest
+}
+
+function clearAllHierarchyInlineDrafts() {
+  hierarchyInlineDrafts.value = {}
+}
+
+function closeHierarchyStatusModal(options?: { restoreSnapshot?: boolean }) {
+  const restoreSnapshot = options?.restoreSnapshot ?? false
+  const item = hierarchyStatusModalItem.value
+  const snapshot = hierarchyStatusModalSnapshot.value
+
+  if (restoreSnapshot && item && snapshot) {
+    hierarchyInlineDrafts.value = {
+      ...hierarchyInlineDrafts.value,
+      [item.id]: cloneHierarchyInlineDraft(snapshot)
+    }
+  }
+
+  hierarchyStatusModalOpen.value = false
+  hierarchyStatusModalItemId.value = null
+  hierarchyStatusModalSnapshot.value = null
+}
+
+function openHierarchyStatusModal(item: RoadmapDemand, status: Extract<DemandStatus, 'Done' | 'Blocked' | 'Deprioritized'>) {
+  const draft = getHierarchyInlineDraft(item)
+
+  hierarchyStatusModalSnapshot.value = cloneHierarchyInlineDraft(draft)
+  hierarchyStatusModalItemId.value = item.id
+  hierarchyStatusModalOpen.value = true
+
+  updateHierarchyInlineDraft(item, {
+    status,
+    deliveryDate: status === 'Done' ? (draft.deliveryDate || item.deliveryDate || '') : draft.deliveryDate,
+    blockedReason: status === 'Blocked' ? draft.blockedReason : '',
+    deprioritizationReason: status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
+    replacementDemandId: status === 'Deprioritized' ? draft.replacementDemandId : undefined,
+    observation: status === 'Deprioritized' ? draft.observation : draft.observation
+  })
+}
+
+function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStatus) {
+  const currentDraft = getHierarchyInlineDraft(item)
+
+  if (nextStatus === currentDraft.status && !requiresHierarchyStatusDetails(nextStatus)) {
+    deactivateHierarchyCell(item.id, 'status')
+    return
+  }
+
+  if (requiresHierarchyStatusDetails(nextStatus)) {
+    openHierarchyStatusModal(item, nextStatus)
+    deactivateHierarchyCell(item.id, 'status')
+    return
+  }
+
+  updateHierarchyInlineDraft(item, {
+    status: nextStatus,
+    deliveryDate: '',
+    blockedReason: '',
+    deprioritizationReason: undefined,
+    replacementDemandId: undefined
+  })
+  deactivateHierarchyCell(item.id, 'status')
+}
+
+function confirmHierarchyStatusModal() {
+  const item = hierarchyStatusModalItem.value
+  const draft = hierarchyStatusModalDraft.value
+
+  if (!item || !draft)
+    return
+
+  if (draft.status === 'Done' && !draft.deliveryDate) {
+    toast.add({ title: 'Informe a data de entrega', color: 'warning' })
+    return
+  }
+
+  if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
+    toast.add({ title: 'Informe o motivo do impedimento', color: 'warning' })
+    return
+  }
+
+  if (draft.status === 'Deprioritized') {
+    if (!draft.deprioritizationReason) {
+      toast.add({ title: 'Selecione o motivo da despriorização', color: 'warning' })
+      return
+    }
+
+    if (!draft.observation.trim()) {
+      toast.add({ title: 'Informe a observação da despriorização', color: 'warning' })
+      return
+    }
+  }
+
+  closeHierarchyStatusModal()
+}
+
+function activateHierarchyCell(item: RoadmapDemand, field: HierarchyEditableField) {
+  if (field === 'hours' && item.itemType !== 'Demand')
+    return
+
+  if (field === 'dueDate' && item.itemType === 'Roadmap')
+    return
+
+  if (field === 'classification' && item.itemType !== 'Epic')
+    return
+
+  if (field === 'products' && item.itemType !== 'Demand')
+    return
+
+  if (field === 'customers' && item.itemType !== 'Epic')
+    return
+
+  if (field === 'customers') {
+    hierarchyCustomerInputs.value = {
+      ...hierarchyCustomerInputs.value,
+      [item.id]: ''
+    }
+  }
+
+  activeHierarchyCell.value = { itemId: item.id, field }
+}
+
+function deactivateHierarchyCell(itemId?: string, field?: HierarchyEditableField) {
+  if (!activeHierarchyCell.value)
+    return
+
+  if (itemId && activeHierarchyCell.value.itemId !== itemId)
+    return
+
+  if (field && activeHierarchyCell.value.field !== field)
+    return
+
+  if (activeHierarchyCell.value.field === 'customers') {
+    const customerItemId = activeHierarchyCell.value.itemId
+    const { [customerItemId]: _removed, ...rest } = hierarchyCustomerInputs.value
+    hierarchyCustomerInputs.value = rest
+  }
+
+  activeHierarchyCell.value = null
+}
+
+function isHierarchyCellEditing(item: RoadmapDemand, field: HierarchyEditableField) {
+  return activeHierarchyCell.value?.itemId === item.id && activeHierarchyCell.value?.field === field
+}
+
+function getHierarchyEditableCellButtonClass(item: RoadmapDemand) {
+  return isHierarchyInlineDirty(item)
+    ? 'border-primary/40 ring-1 ring-primary/10 hover:border-primary/60 hover:bg-primary/5'
+    : 'border-transparent text-highlighted hover:border-primary/30 hover:bg-elevated'
+}
+
+function getHierarchyReadonlyCellClass(hasValue = true) {
+  return hasValue
+    ? 'text-muted opacity-60'
+    : 'text-muted/70 opacity-55'
+}
+
+function getHierarchyDraftDisplayItem(item: RoadmapDemand): RoadmapDemand {
+  const draft = hierarchyInlineDrafts.value[item.id]
+  if (!draft)
+    return item
+
+  const isDoneStatus = draft.status === 'Done'
+
+  return {
+    ...item,
+    status: draft.status,
+    classification: draft.classification,
+    customers: draft.customers,
+    promisedDate: isDoneStatus ? item.promisedDate : draft.dueDate,
+    deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+  }
+}
+
+function getHierarchyDraftProductEntries(item: RoadmapDemand) {
+  const draft = getHierarchyInlineDraft(item)
+  const allowedOptions = getEditableProductOptions(item)
+  const allowedNameById = new Map(allowedOptions.map(option => [option.value, option.label] as const))
+  const currentNameById = new Map(getProductEntries(item).map(product => [product.value, product.label] as const))
+
+  return draft.productIds
+    .map((productId) => {
+      const label = allowedNameById.get(productId) ?? currentNameById.get(productId)
+      return label ? { value: productId, label } : null
+    })
+    .filter((product): product is { value: string, label: string } => !!product)
+}
+
+function getHierarchyDraftCustomerDisplay(item: RoadmapDemand) {
+  return getAdaptiveInlineListDisplay(getHierarchyInlineDraft(item).customers, getHierarchyColSize('customers'))
+}
+
+function toggleHierarchyDraftProduct(item: RoadmapDemand, productId: string, checked: boolean) {
+  const allowedProductIds = new Set(getEditableProductOptions(item).map(product => product.value))
+  const currentSelection = new Set(getHierarchyInlineDraft(item).productIds.filter(currentProductId => allowedProductIds.has(currentProductId)))
+
+  if (checked)
+    currentSelection.add(productId)
+  else
+    currentSelection.delete(productId)
+
+  updateHierarchyInlineDraft(item, { productIds: Array.from(currentSelection) })
+}
+
+function addHierarchyCustomer(item: RoadmapDemand, customer: string) {
+  const normalized = customer.trim()
+  if (!normalized)
+    return
+
+  const nextCustomers = Array.from(new Set([...getHierarchyInlineDraft(item).customers, normalized]))
+  updateHierarchyInlineDraft(item, { customers: nextCustomers })
+  hierarchyCustomerInputs.value = {
+    ...hierarchyCustomerInputs.value,
+    [item.id]: ''
+  }
+}
+
+function removeHierarchyCustomer(item: RoadmapDemand, customer: string) {
+  updateHierarchyInlineDraft(item, {
+    customers: getHierarchyInlineDraft(item).customers.filter(currentCustomer => currentCustomer !== customer)
+  })
+}
+
+function getFilteredHierarchyCustomerSuggestions(item: RoadmapDemand) {
+  const query = hierarchyCustomerInputs.value[item.id]?.trim().toLowerCase() ?? ''
+  if (!query)
+    return []
+
+  const selected = new Set(getHierarchyInlineDraft(item).customers.map(customer => customer.toLowerCase()))
+
+  return customerSuggestions.value
+    .filter(customer => !selected.has(customer.toLowerCase()))
+    .filter(customer => customer.toLowerCase().includes(query))
+    .slice(0, 6)
+}
+
+function isHierarchyInlineSaving(itemId: string) {
+  return hierarchyInlineSavingIds.value.includes(itemId)
+}
+
+function parseHierarchyInlineHours(item: RoadmapDemand) {
+  if (item.itemType !== 'Demand')
+    return item.hours
+
+  const normalized = getHierarchyInlineDraft(item).hoursInput.trim().replace(',', '.')
+  if (!normalized)
+    return undefined
+
+  const parsed = Number(normalized)
+  if (!Number.isFinite(parsed) || parsed < 0)
+    return Number.NaN
+
+  return Number(parsed.toFixed(2))
+}
+
+function isHierarchyInlineDirty(item: RoadmapDemand) {
+  const draft = hierarchyInlineDrafts.value[item.id]
+  if (!draft)
+    return false
+
+  const originalDueDate = item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? '')
+  const hours = parseHierarchyInlineHours(item)
+
+  if (Number.isNaN(hours))
+    return true
+
+  return draft.status !== item.status
+    || draft.dueDate !== originalDueDate
+    || (draft.status === 'Done' && draft.deliveryDate !== (item.deliveryDate ?? ''))
+    || (draft.status === 'Blocked' && draft.blockedReason.trim() !== (item.blockedReason ?? '').trim())
+    || (draft.status === 'Deprioritized' && draft.observation.trim() !== (item.observation ?? '').trim())
+    || (draft.status === 'Deprioritized' && draft.deprioritizationReason !== item.deprioritizationReason)
+    || (draft.status === 'Deprioritized' && draft.replacementDemandId !== item.replacementDemandId)
+    || (item.itemType === 'Epic' && draft.classification !== item.classification)
+    || (item.itemType === 'Demand' && draft.productIds.slice().sort().join('|') !== getProductEntries(item).map(product => product.value).sort().join('|'))
+    || draft.customers.slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|') !== getDisplayedCustomers(item).slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|')
+    || (item.itemType === 'Demand' && hours !== item.hours)
+}
+
+function discardAllHierarchyInlineEdits() {
+  if (isSavingAllHierarchyEdits.value || hierarchyInlineSavingIds.value.length)
+    return
+
+  const discardedChanges = hierarchyPendingEditCount.value
+  deactivateHierarchyCell()
+  clearAllHierarchyInlineDrafts()
+
+  if (discardedChanges > 0) {
+    toast.add({
+      title: 'Edição cancelada',
+      description: `${discardedChanges.toLocaleString('pt-BR')} alteração(ões) descartada(s).`,
+      color: 'warning'
+    })
+  }
+}
+
+async function saveHierarchyInline(
+  item: RoadmapDemand,
+  options?: { reloadAfterSave?: boolean, showSuccessToast?: boolean }
+) {
+  if (!isHierarchyInlineDirty(item) || isHierarchyInlineSaving(item.id))
+    return true
+
+  const reloadAfterSave = options?.reloadAfterSave ?? true
+  const showSuccessToast = options?.showSuccessToast ?? true
+
+  const draft = getHierarchyInlineDraft(item)
+  const hours = parseHierarchyInlineHours(item)
+
+  if (Number.isNaN(hours)) {
+    toast.add({
+      title: 'Horas inválidas',
+      description: 'Informe um valor numérico maior ou igual a zero.',
+      color: 'warning'
+    })
+    return false
+  }
+
+  if (draft.status === 'Done' && !draft.deliveryDate) {
+    toast.add({
+      title: 'Informe a data de entrega',
+      color: 'warning'
+    })
+    return false
+  }
+
+  if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
+    toast.add({
+      title: 'Informe o motivo do impedimento',
+      color: 'warning'
+    })
+    return false
+  }
+
+  if (draft.status === 'Deprioritized' && (!draft.deprioritizationReason || !draft.observation.trim())) {
+    toast.add({
+      title: 'Preencha os campos da despriorização',
+      description: 'Informe o motivo e a observação para concluir a alteração.',
+      color: 'warning'
+    })
+    return false
+  }
+
+  const isDoneStatus = draft.status === 'Done'
+
+  try {
+    hierarchyInlineSavingIds.value = [...hierarchyInlineSavingIds.value, item.id]
+
+    await roadmapStore.updateDemand(item.id, buildDemandFormData(item, {
+      status: draft.status,
+      classification: item.itemType === 'Epic' ? draft.classification : item.classification,
+      productIds: item.itemType === 'Demand' ? draft.productIds : item.products.map(product => product.productId),
+      customers: item.itemType === 'Epic' ? draft.customers : (item.customers ?? []),
+      observation: draft.observation,
+      blockedReason: draft.status === 'Blocked' ? draft.blockedReason : '',
+      deprioritizationReason: draft.status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
+      replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
+      hours: item.itemType === 'Demand' ? hours : item.hours,
+      promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
+      deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+    }))
+
+    clearHierarchyInlineDraft(item.id)
+    if (reloadAfterSave)
+      await loadPageData()
+
+    if (showSuccessToast)
+      toast.add({ title: 'Item atualizado', color: 'success' })
+
+    return true
+  }
+  catch {
+    // handled by useApi
+    return false
+  }
+  finally {
+    hierarchyInlineSavingIds.value = hierarchyInlineSavingIds.value.filter(currentId => currentId !== item.id)
+  }
+}
+
+async function saveAllHierarchyInlineEdits() {
+  if (!hierarchyPendingEditCount.value || isSavingAllHierarchyEdits.value)
+    return
+
+  const dirtyIds = new Set(hierarchyInlineDirtyIds.value)
+  const itemsToSave = hierarchyDemands.value.filter(item => dirtyIds.has(item.id))
+
+  try {
+    isSavingAllHierarchyEdits.value = true
+
+    for (const item of itemsToSave) {
+      const saved = await saveHierarchyInline(item, { reloadAfterSave: false, showSuccessToast: false })
+      if (!saved)
+        return
+    }
+
+    await loadPageData()
+    deactivateHierarchyCell()
+    toast.add({
+      title: 'Edições salvas',
+      description: `${itemsToSave.length.toLocaleString('pt-BR')} item(ns) atualizado(s).`,
+      color: 'success'
+    })
+  }
+  finally {
+    isSavingAllHierarchyEdits.value = false
+  }
 }
 
 function openCreateModal(
@@ -1588,46 +2257,41 @@ void initializeHierarchyPage()
 
           <div class="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between xl:gap-3">
             <div class="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:whitespace-nowrap lg:pb-0.5">
-              <UButton
-                size="xs"
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-chevrons-up-down"
-                :disabled="!hasCollapsibleRoadmaps"
-                @click="areAllRoadmapsCollapsed ? expandAllRoadmaps() : collapseAllRoadmaps()"
-              >
-                {{ areAllRoadmapsCollapsed ? 'Expandir roadmaps' : 'Recolher roadmaps' }}
-              </UButton>
-              <UButton
-                size="xs"
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-chevrons-up-down"
-                :disabled="!hasCollapsibleEpics"
-                @click="areAllEpicsCollapsed ? expandAllEpics() : collapseAllEpics()"
-              >
-                {{ areAllEpicsCollapsed ? 'Expandir épicos' : 'Recolher épicos' }}
-              </UButton>
-              <UButton
-                size="xs"
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-fold-vertical"
-                :disabled="!hasCollapsibleRoadmaps && !hasCollapsibleEpics"
-                @click="collapseAllRoadmaps(); collapseAllEpics()"
-              >
-                Recolher tudo
-              </UButton>
-              <UButton
-                size="xs"
-                color="neutral"
-                variant="outline"
-                icon="i-lucide-unfold-vertical"
-                :disabled="(!collapsedRoadmapIds.length && !collapsedEpicIds.length)"
-                @click="expandAllRoadmaps(); expandAllEpics()"
-              >
-                Expandir tudo
-              </UButton>
+              <UDropdownMenu :items="hierarchyDisplayMenuItems">
+                <UButton
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-panel-top-open"
+                >
+                  Exibição
+                </UButton>
+              </UDropdownMenu>
+              <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                <UButton
+                  size="xs"
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-triangle-alert"
+                >
+                  {{ hierarchyProblemFilterLabel }}
+                </UButton>
+
+                <template #content>
+                  <div class="min-w-64 space-y-1 p-1">
+                    <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProblemFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyProblemFilter">
+                      <UIcon v-if="hierarchyProblemFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                      <span v-else class="inline-block h-4 w-4 shrink-0" />
+                      Todos os problemas
+                    </button>
+                    <button v-for="problem in hierarchyProblemOptions" :key="problem.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProblemFilter.includes(problem.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyProblemFilter(problem.value)">
+                      <UIcon v-if="hierarchyProblemFilter.includes(problem.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                      <span v-else class="inline-block h-4 w-4 shrink-0" />
+                      {{ problem.label }}
+                    </button>
+                  </div>
+                </template>
+              </UPopover>
               <UButton
                 v-if="selectedHierarchyItemCount"
                 size="xs"
@@ -1844,17 +2508,29 @@ void initializeHierarchyPage()
                   </td>
 
                   <td class="border-b border-default px-2.5 py-1.5 align-top">
-                    <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[group.roadmap.status]">
-                      {{ statusLabels[group.roadmap.status] }}
-                    </span>
+                    <USelect
+                      v-if="isHierarchyCellEditing(group.roadmap, 'status')"
+                      :model-value="getHierarchyInlineDraft(group.roadmap).status"
+                      :items="statusSelectOptions"
+                      value-key="value"
+                      option-attribute="label"
+                      size="xs"
+                      class="w-full"
+                      :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits"
+                      @blur="deactivateHierarchyCell(group.roadmap.id, 'status')"
+                      @update:model-value="(value) => value && handleHierarchyStatusChange(group.roadmap, value as DemandStatus)"
+                    />
+                    <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(group.roadmap).status], getHierarchyEditableCellButtonClass(group.roadmap)]" :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(group.roadmap, 'status')">
+                      {{ statusLabels[getHierarchyInlineDraft(group.roadmap).status] }}
+                    </button>
                   </td>
 
                   <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                    <span v-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).allVisible && getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                    <span v-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).allVisible && getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
                       {{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}
                     </span>
                     <UPopover v-else-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                      <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                      <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
                         <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}</span>
                         <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).hiddenCount }}</span>
                       </button>
@@ -1871,30 +2547,30 @@ void initializeHierarchyPage()
                   </td>
 
                   <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                    <span v-if="getDisplayedHours(group.roadmap) !== null">{{ getDisplayedHours(group.roadmap) }}h</span>
-                    <span v-else class="text-xs text-muted">—</span>
+                    <span v-if="getDisplayedHours(group.roadmap) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(group.roadmap) }}h</span>
+                    <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
                   <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                    <span class="text-xs text-muted">—</span>
+                    <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                    <span class="text-xs text-muted">—</span>
+                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                    <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
                   <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                    <div v-if="getDueDateLabel(group.roadmap) || getDueQuarterLabel(group.roadmap) || isDelayed(group.roadmap)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(group.roadmap)">
+                    <div v-if="getDueDateLabel(group.roadmap) || getDueQuarterLabel(group.roadmap) || isDelayed(group.roadmap)" class="flex min-w-0 items-center gap-1" :class="getHierarchyReadonlyCellClass()" :title="getDueTooltip(group.roadmap)">
                       <span v-if="getDueDateLabel(group.roadmap)" :class="getDueDateClass(group.roadmap)">{{ getDueDateLabel(group.roadmap) }}</span>
                       <span v-if="getDueQuarterLabel(group.roadmap)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
                         {{ getDueQuarterLabel(group.roadmap) }}
                       </span>
                     </div>
-                    <span v-else class="text-xs text-muted">—</span>
+                    <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
                   <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
-                    <span class="text-xs text-muted">—</span>
+                    <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
@@ -1988,17 +2664,29 @@ void initializeHierarchyPage()
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[epicEntry.epic.status]">
-                        {{ statusLabels[epicEntry.epic.status] }}
-                      </span>
+                      <USelect
+                        v-if="isHierarchyCellEditing(epicEntry.epic, 'status')"
+                        :model-value="getHierarchyInlineDraft(epicEntry.epic).status"
+                        :items="statusSelectOptions"
+                        value-key="value"
+                        option-attribute="label"
+                        size="xs"
+                        class="w-full"
+                        :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits"
+                        @blur="deactivateHierarchyCell(epicEntry.epic.id, 'status')"
+                        @update:model-value="(value) => value && handleHierarchyStatusChange(epicEntry.epic, value as DemandStatus)"
+                      />
+                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(epicEntry.epic).status], getHierarchyEditableCellButtonClass(epicEntry.epic)]" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'status')">
+                        {{ statusLabels[getHierarchyInlineDraft(epicEntry.epic).status] }}
+                      </button>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                      <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                      <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
                         {{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}
                       </span>
                       <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
                           <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}</span>
                           <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).hiddenCount }}</span>
                         </button>
@@ -2014,47 +2702,100 @@ void initializeHierarchyPage()
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                      <span v-if="getDisplayedHours(epicEntry.epic) !== null">{{ getDisplayedHours(epicEntry.epic) }}h</span>
-                      <span v-else class="text-xs text-muted">—</span>
+                      <span v-if="getDisplayedHours(epicEntry.epic) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(epicEntry.epic) }}h</span>
+                      <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[epicEntry.epic.classification]" :title="classificationLabels[epicEntry.epic.classification]">
-                        {{ getClassificationDisplayLabel(epicEntry.epic.classification) }}
-                      </span>
+                      <USelect
+                        v-if="isHierarchyCellEditing(epicEntry.epic, 'classification')"
+                        :model-value="getHierarchyInlineDraft(epicEntry.epic).classification"
+                        :items="classificationSelectOptions"
+                        value-key="value"
+                        option-attribute="label"
+                        size="xs"
+                        class="w-full"
+                        :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits"
+                        @blur="deactivateHierarchyCell(epicEntry.epic.id, 'classification')"
+                        @update:model-value="(value) => value && updateHierarchyInlineDraft(epicEntry.epic, { classification: value as RoadmapDemand['classification'] })"
+                      />
+                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[classificationBadgeClass[getHierarchyDraftDisplayItem(epicEntry.epic).classification], getHierarchyEditableCellButtonClass(epicEntry.epic)]" :title="classificationLabels[getHierarchyDraftDisplayItem(epicEntry.epic).classification]" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'classification')">
+                        {{ getClassificationDisplayLabel(getHierarchyDraftDisplayItem(epicEntry.epic).classification) }}
+                      </button>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                      <span v-if="getCustomerCellDisplay(epicEntry.epic).allVisible && getCustomerCellDisplay(epicEntry.epic).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(epicEntry.epic).fullLabel">
-                        {{ getCustomerCellDisplay(epicEntry.epic).previewLabel }}
-                      </span>
-                      <UPopover v-else-if="getCustomerCellDisplay(epicEntry.epic).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(epicEntry.epic).fullLabel">
-                          <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(epicEntry.epic).previewLabel }}</span>
-                          <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(epicEntry.epic).hiddenCount }}</span>
+                      <UPopover
+                        :open="isHierarchyCellEditing(epicEntry.epic, 'customers')"
+                        :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
+                        @update:open="(open) => handleHierarchyPopoverOpenChange(epicEntry.epic, 'customers', open)"
+                      >
+                        <button v-if="getHierarchyDraftCustomerDisplay(epicEntry.epic).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :title="getHierarchyDraftCustomerDisplay(epicEntry.epic).fullLabel" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'customers')">
+                          <span class="max-w-[140px] truncate">{{ getHierarchyDraftCustomerDisplay(epicEntry.epic).previewLabel }}</span>
+                          <span v-if="!getHierarchyDraftCustomerDisplay(epicEntry.epic).allVisible" class="shrink-0 text-muted">+{{ getHierarchyDraftCustomerDisplay(epicEntry.epic).hiddenCount }}</span>
                         </button>
+                        <button v-else type="button" class="text-xs transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'customers')">—</button>
+
                         <template #content>
-                          <div class="flex min-w-44 flex-col gap-1 p-1">
-                            <span v-for="customer in getCustomerCellDisplay(epicEntry.epic).items" :key="`${epicEntry.epic.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
-                              {{ customer }}
-                            </span>
+                          <div class="w-[22rem] max-w-[min(22rem,calc(100vw-2rem))] space-y-2 p-3">
+                            <div class="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                              <span v-for="customer in getHierarchyInlineDraft(epicEntry.epic).customers" :key="`${epicEntry.epic.id}-${customer}`" class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                                {{ customer }}
+                                <button type="button" class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-primary/15" @click="removeHierarchyCustomer(epicEntry.epic, customer)">
+                                  <UIcon name="i-lucide-x" class="h-3 w-3" />
+                                </button>
+                              </span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                              <UInput
+                                :model-value="hierarchyCustomerInputs[epicEntry.epic.id] ?? ''"
+                                size="sm"
+                                autofocus
+                                class="flex-1"
+                                placeholder="Digite um novo cliente"
+                                @update:model-value="(value) => hierarchyCustomerInputs = { ...hierarchyCustomerInputs, [epicEntry.epic.id]: String(value ?? '') }"
+                                @keydown.enter.prevent="addHierarchyCustomer(epicEntry.epic, hierarchyCustomerInputs[epicEntry.epic.id] ?? '')"
+                                @keydown.esc.prevent="deactivateHierarchyCell(epicEntry.epic.id, 'customers')"
+                              />
+                              <UButton size="sm" color="primary" variant="soft" :disabled="!(hierarchyCustomerInputs[epicEntry.epic.id] ?? '').trim()" @click="addHierarchyCustomer(epicEntry.epic, hierarchyCustomerInputs[epicEntry.epic.id] ?? '')">
+                                Adicionar
+                              </UButton>
+                            </div>
+                            <div v-if="getFilteredHierarchyCustomerSuggestions(epicEntry.epic).length" class="max-h-32 overflow-y-auto rounded border border-default bg-elevated/40">
+                              <button v-for="customer in getFilteredHierarchyCustomerSuggestions(epicEntry.epic)" :key="customer" type="button" class="flex w-full px-2 py-1.5 text-left text-[11px] text-highlighted hover:bg-elevated" @click="addHierarchyCustomer(epicEntry.epic, customer)">
+                                {{ customer }}
+                              </button>
+                            </div>
                           </div>
                         </template>
                       </UPopover>
-                      <span v-else class="text-xs text-muted">—</span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                      <div v-if="getDueDateLabel(epicEntry.epic) || getDueQuarterLabel(epicEntry.epic) || isDelayed(epicEntry.epic)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(epicEntry.epic)">
-                        <span v-if="getDueDateLabel(epicEntry.epic)" :class="getDueDateClass(epicEntry.epic)">{{ getDueDateLabel(epicEntry.epic) }}</span>
-                        <span v-if="getDueQuarterLabel(epicEntry.epic)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
-                          {{ getDueQuarterLabel(epicEntry.epic) }}
-                        </span>
+                      <div v-if="isHierarchyCellEditing(epicEntry.epic, 'dueDate')">
+                        <UInput
+                          :model-value="getHierarchyInlineDraft(epicEntry.epic).dueDate"
+                          type="date"
+                          size="xs"
+                          autofocus
+                          class="w-full"
+                          :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits"
+                          @blur="deactivateHierarchyCell(epicEntry.epic.id, 'dueDate')"
+                          @keydown.esc.prevent="deactivateHierarchyCell(epicEntry.epic.id, 'dueDate')"
+                          @keydown.enter.prevent="deactivateHierarchyCell(epicEntry.epic.id, 'dueDate')"
+                          @update:model-value="(value) => updateHierarchyInlineDraft(epicEntry.epic, { dueDate: String(value ?? '') })"
+                        />
                       </div>
+                      <button v-else-if="getDueDateLabel(getHierarchyDraftDisplayItem(epicEntry.epic)) || getDueQuarterLabel(getHierarchyDraftDisplayItem(epicEntry.epic)) || isDelayed(getHierarchyDraftDisplayItem(epicEntry.epic))" type="button" class="flex min-w-0 items-center gap-1 rounded-md border px-1 py-0.5 text-left transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :title="getDueTooltip(getHierarchyDraftDisplayItem(epicEntry.epic))" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'dueDate')">
+                        <span v-if="getDueDateLabel(getHierarchyDraftDisplayItem(epicEntry.epic))" :class="getDueDateClass(getHierarchyDraftDisplayItem(epicEntry.epic))">{{ getDueDateLabel(getHierarchyDraftDisplayItem(epicEntry.epic)) }}</span>
+                        <span v-if="getDueQuarterLabel(getHierarchyDraftDisplayItem(epicEntry.epic))" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                          {{ getDueQuarterLabel(getHierarchyDraftDisplayItem(epicEntry.epic)) }}
+                        </span>
+                      </button>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
                     <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
-                      <div class="flex min-w-0 flex-col items-start gap-1">
+                      <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
                         <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
                           {{ getKpiSummary(epicEntry.epic).label }}
                         </button>
@@ -2135,69 +2876,115 @@ void initializeHierarchyPage()
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[demand.status]">
-                        {{ statusLabels[demand.status] }}
-                      </span>
+                      <USelect
+                        v-if="isHierarchyCellEditing(demand, 'status')"
+                        :model-value="getHierarchyInlineDraft(demand).status"
+                        :items="statusSelectOptions"
+                        value-key="value"
+                        option-attribute="label"
+                        size="xs"
+                        class="w-full"
+                        :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                        @blur="deactivateHierarchyCell(demand.id, 'status')"
+                        @update:model-value="(value) => value && handleHierarchyStatusChange(demand, value as DemandStatus)"
+                      />
+                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(demand).status], getHierarchyEditableCellButtonClass(demand)]" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'status')">
+                        {{ statusLabels[getHierarchyInlineDraft(demand).status] }}
+                      </button>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                      <span v-if="getProductCellDisplay(getProductNames(demand)).allVisible && getProductCellDisplay(getProductNames(demand)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
-                        {{ getProductCellDisplay(getProductNames(demand)).previewLabel }}
-                      </span>
-                      <UPopover v-else-if="getProductCellDisplay(getProductNames(demand)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
-                          <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getProductNames(demand)).previewLabel }}</span>
-                          <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getProductNames(demand)).hiddenCount }}</span>
+                      <UPopover
+                        :open="isHierarchyCellEditing(demand, 'products')"
+                        :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
+                        @update:open="(open) => handleHierarchyPopoverOpenChange(demand, 'products', open)"
+                      >
+                        <button v-if="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).fullLabel" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'products')">
+                          <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).previewLabel }}</span>
+                          <span v-if="!getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).allVisible" class="shrink-0 text-muted">+{{ getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).hiddenCount }}</span>
                         </button>
+                        <button v-else type="button" class="text-xs transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'products')">—</button>
+
                         <template #content>
-                          <div class="flex min-w-44 flex-col gap-1 p-1">
-                            <span v-for="product in getProductCellDisplay(getProductNames(demand)).items" :key="`${demand.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
-                              {{ product }}
-                            </span>
+                          <div class="w-[18rem] max-w-[min(18rem,calc(100vw-2rem))] space-y-2 p-3">
+                            <label v-for="product in getEditableProductOptions(demand)" :key="product.value" class="flex items-center gap-2 text-[11px] text-highlighted">
+                              <input autofocus type="checkbox" class="h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary" :checked="getHierarchyInlineDraft(demand).productIds.includes(product.value)" @change="toggleHierarchyDraftProduct(demand, product.value, ($event.target as HTMLInputElement).checked)">
+                              <span class="truncate">{{ product.label }}</span>
+                            </label>
                           </div>
                         </template>
                       </UPopover>
-                      <span v-else class="text-xs text-muted">—</span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                      <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
+                      <div v-if="isHierarchyCellEditing(demand, 'hours')">
+                        <UInput
+                          :model-value="getHierarchyInlineDraft(demand).hoursInput"
+                          type="text"
+                          inputmode="decimal"
+                          size="xs"
+                          autofocus
+                          class="w-full"
+                          :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                          @blur="deactivateHierarchyCell(demand.id, 'hours')"
+                          @keydown.esc.prevent="deactivateHierarchyCell(demand.id, 'hours')"
+                          @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'hours')"
+                          @update:model-value="(value) => updateHierarchyInlineDraft(demand, { hoursInput: String(value ?? '') })"
+                        />
+                      </div>
+                      <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="rounded-md border px-1 py-0.5 transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
+                        {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : `${getDisplayedHours(demand)}h` }}
+                      </button>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]" :title="classificationLabels[getDisplayedClassification(demand)]">
+                      <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="[classificationBadgeClass[getDisplayedClassification(demand)], getHierarchyReadonlyCellClass()]" :title="classificationLabels[getDisplayedClassification(demand)]">
                         {{ getClassificationDisplayLabel(getDisplayedClassification(demand)) }}
                       </span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                      <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(demand).fullLabel">
+                      <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                         {{ getCustomerCellDisplay(demand).previewLabel }}
                       </span>
                       <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(demand).fullLabel">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                           <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
                           <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
                         </button>
                         <template #content>
-                          <div class="flex min-w-44 flex-col gap-1 p-1">
+                          <div class="flex max-w-xs flex-wrap gap-1.5 p-2">
                             <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
                               {{ customer }}
                             </span>
                           </div>
                         </template>
                       </UPopover>
-                      <span v-else class="text-xs text-muted">—</span>
+                      <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                      <div v-if="getDueDateLabel(demand) || getDueQuarterLabel(demand) || isDelayed(demand)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(demand)">
-                        <span v-if="getDueDateLabel(demand)" :class="getDueDateClass(demand)">{{ getDueDateLabel(demand) }}</span>
-                        <span v-if="getDueQuarterLabel(demand)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
-                          {{ getDueQuarterLabel(demand) }}
-                        </span>
+                      <div v-if="isHierarchyCellEditing(demand, 'dueDate')">
+                        <UInput
+                          :model-value="getHierarchyInlineDraft(demand).dueDate"
+                          type="date"
+                          size="xs"
+                          autofocus
+                          class="w-full"
+                          :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                          @blur="deactivateHierarchyCell(demand.id, 'dueDate')"
+                          @keydown.esc.prevent="deactivateHierarchyCell(demand.id, 'dueDate')"
+                          @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'dueDate')"
+                          @update:model-value="(value) => updateHierarchyInlineDraft(demand, { dueDate: String(value ?? '') })"
+                        />
                       </div>
+                      <button v-else-if="getDueDateLabel(getHierarchyDraftDisplayItem(demand)) || getDueQuarterLabel(getHierarchyDraftDisplayItem(demand)) || isDelayed(getHierarchyDraftDisplayItem(demand))" type="button" class="flex min-w-0 items-center gap-1 rounded-md border px-1 py-0.5 text-left transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="getDueTooltip(getHierarchyDraftDisplayItem(demand))" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'dueDate')">
+                        <span v-if="getDueDateLabel(getHierarchyDraftDisplayItem(demand))" :class="getDueDateClass(getHierarchyDraftDisplayItem(demand))">{{ getDueDateLabel(getHierarchyDraftDisplayItem(demand)) }}</span>
+                        <span v-if="getDueQuarterLabel(getHierarchyDraftDisplayItem(demand))" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                          {{ getDueQuarterLabel(getHierarchyDraftDisplayItem(demand)) }}
+                        </span>
+                      </button>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
@@ -2278,16 +3065,28 @@ void initializeHierarchyPage()
                   </div>
                 </td>
                     <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[epic.status]">
-                    {{ statusLabels[epic.status] }}
-                  </span>
+                      <USelect
+                        v-if="isHierarchyCellEditing(epic, 'status')"
+                        :model-value="getHierarchyInlineDraft(epic).status"
+                        :items="statusSelectOptions"
+                        value-key="value"
+                        option-attribute="label"
+                        size="xs"
+                        class="w-full"
+                        :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits"
+                        @blur="deactivateHierarchyCell(epic.id, 'status')"
+                        @update:model-value="(value) => value && handleHierarchyStatusChange(epic, value as DemandStatus)"
+                      />
+                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(epic).status], getHierarchyEditableCellButtonClass(epic)]" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'status')">
+                        {{ statusLabels[getHierarchyInlineDraft(epic).status] }}
+                      </button>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                  <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
+                  <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
                     {{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}
                   </span>
                   <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
                       <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}</span>
                       <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epic)).hiddenCount }}</span>
                     </button>
@@ -2302,44 +3101,97 @@ void initializeHierarchyPage()
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                  <span v-if="getDisplayedHours(epic) !== null">{{ getDisplayedHours(epic) }}h</span>
-                  <span v-else class="text-xs text-muted">—</span>
+                  <span v-if="getDisplayedHours(epic) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(epic) }}h</span>
+                  <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[epic.classification]" :title="classificationLabels[epic.classification]">
-                    {{ getClassificationDisplayLabel(epic.classification) }}
-                  </span>
+                  <USelect
+                    v-if="isHierarchyCellEditing(epic, 'classification')"
+                    :model-value="getHierarchyInlineDraft(epic).classification"
+                    :items="classificationSelectOptions"
+                    value-key="value"
+                    option-attribute="label"
+                    size="xs"
+                    class="w-full"
+                    :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits"
+                    @blur="deactivateHierarchyCell(epic.id, 'classification')"
+                    @update:model-value="(value) => value && updateHierarchyInlineDraft(epic, { classification: value as RoadmapDemand['classification'] })"
+                  />
+                  <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[classificationBadgeClass[getHierarchyDraftDisplayItem(epic).classification], getHierarchyEditableCellButtonClass(epic)]" :title="classificationLabels[getHierarchyDraftDisplayItem(epic).classification]" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'classification')">
+                    {{ getClassificationDisplayLabel(getHierarchyDraftDisplayItem(epic).classification) }}
+                  </button>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                  <span v-if="getCustomerCellDisplay(epic).allVisible && getCustomerCellDisplay(epic).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(epic).fullLabel">
-                    {{ getCustomerCellDisplay(epic).previewLabel }}
-                  </span>
-                  <UPopover v-else-if="getCustomerCellDisplay(epic).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(epic).fullLabel">
-                      <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(epic).previewLabel }}</span>
-                      <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(epic).hiddenCount }}</span>
+                  <UPopover
+                    :open="isHierarchyCellEditing(epic, 'customers')"
+                    :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
+                    @update:open="(open) => handleHierarchyPopoverOpenChange(epic, 'customers', open)"
+                  >
+                    <button v-if="getHierarchyDraftCustomerDisplay(epic).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epic)" :title="getHierarchyDraftCustomerDisplay(epic).fullLabel" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'customers')">
+                      <span class="max-w-[140px] truncate">{{ getHierarchyDraftCustomerDisplay(epic).previewLabel }}</span>
+                      <span v-if="!getHierarchyDraftCustomerDisplay(epic).allVisible" class="shrink-0 text-muted">+{{ getHierarchyDraftCustomerDisplay(epic).hiddenCount }}</span>
                     </button>
+                    <button v-else type="button" class="text-xs transition-colors" :class="getHierarchyEditableCellButtonClass(epic)" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'customers')">—</button>
+
                     <template #content>
-                      <div class="flex min-w-44 flex-col gap-1 p-1">
-                        <span v-for="customer in getCustomerCellDisplay(epic).items" :key="`${epic.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
-                          {{ customer }}
-                        </span>
+                      <div class="w-[22rem] max-w-[min(22rem,calc(100vw-2rem))] space-y-2 p-3">
+                        <div class="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                          <span v-for="customer in getHierarchyInlineDraft(epic).customers" :key="`${epic.id}-${customer}`" class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] text-primary">
+                            {{ customer }}
+                            <button type="button" class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-primary/15" @click="removeHierarchyCustomer(epic, customer)">
+                              <UIcon name="i-lucide-x" class="h-3 w-3" />
+                            </button>
+                          </span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <UInput
+                            :model-value="hierarchyCustomerInputs[epic.id] ?? ''"
+                            size="sm"
+                            autofocus
+                            class="flex-1"
+                            placeholder="Digite um novo cliente"
+                            @update:model-value="(value) => hierarchyCustomerInputs = { ...hierarchyCustomerInputs, [epic.id]: String(value ?? '') }"
+                            @keydown.enter.prevent="addHierarchyCustomer(epic, hierarchyCustomerInputs[epic.id] ?? '')"
+                            @keydown.esc.prevent="deactivateHierarchyCell(epic.id, 'customers')"
+                          />
+                          <UButton size="sm" color="primary" variant="soft" :disabled="!(hierarchyCustomerInputs[epic.id] ?? '').trim()" @click="addHierarchyCustomer(epic, hierarchyCustomerInputs[epic.id] ?? '')">
+                            Adicionar
+                          </UButton>
+                        </div>
+                        <div v-if="getFilteredHierarchyCustomerSuggestions(epic).length" class="max-h-32 overflow-y-auto rounded border border-default bg-elevated/40">
+                          <button v-for="customer in getFilteredHierarchyCustomerSuggestions(epic)" :key="customer" type="button" class="flex w-full px-2 py-1.5 text-left text-[11px] text-highlighted hover:bg-elevated" @click="addHierarchyCustomer(epic, customer)">
+                            {{ customer }}
+                          </button>
+                        </div>
                       </div>
                     </template>
                   </UPopover>
-                  <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                  <div v-if="getDueDateLabel(epic) || getDueQuarterLabel(epic) || isDelayed(epic)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(epic)">
-                    <span v-if="getDueDateLabel(epic)" :class="getDueDateClass(epic)">{{ getDueDateLabel(epic) }}</span>
-                    <span v-if="getDueQuarterLabel(epic)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
-                      {{ getDueQuarterLabel(epic) }}
-                    </span>
+                  <div v-if="isHierarchyCellEditing(epic, 'dueDate')">
+                    <UInput
+                      :model-value="getHierarchyInlineDraft(epic).dueDate"
+                      type="date"
+                      size="xs"
+                      autofocus
+                      class="w-full"
+                      :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits"
+                      @blur="deactivateHierarchyCell(epic.id, 'dueDate')"
+                      @keydown.esc.prevent="deactivateHierarchyCell(epic.id, 'dueDate')"
+                      @keydown.enter.prevent="deactivateHierarchyCell(epic.id, 'dueDate')"
+                      @update:model-value="(value) => updateHierarchyInlineDraft(epic, { dueDate: String(value ?? '') })"
+                    />
                   </div>
+                  <button v-else-if="getDueDateLabel(getHierarchyDraftDisplayItem(epic)) || getDueQuarterLabel(getHierarchyDraftDisplayItem(epic)) || isDelayed(getHierarchyDraftDisplayItem(epic))" type="button" class="flex min-w-0 items-center gap-1 rounded-md border px-1 py-0.5 text-left transition-colors" :class="getHierarchyEditableCellButtonClass(epic)" :title="getDueTooltip(getHierarchyDraftDisplayItem(epic))" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'dueDate')">
+                    <span v-if="getDueDateLabel(getHierarchyDraftDisplayItem(epic))" :class="getDueDateClass(getHierarchyDraftDisplayItem(epic))">{{ getDueDateLabel(getHierarchyDraftDisplayItem(epic)) }}</span>
+                    <span v-if="getDueQuarterLabel(getHierarchyDraftDisplayItem(epic))" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                      {{ getDueQuarterLabel(getHierarchyDraftDisplayItem(epic)) }}
+                    </span>
+                  </button>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
-                  <div class="flex min-w-0 flex-col items-start gap-1">
+                  <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
                     <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
                       {{ getKpiSummary(epic).label }}
                     </button>
@@ -2425,64 +3277,110 @@ void initializeHierarchyPage()
                   </div>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="statusTone[demand.status]">
-                    {{ statusLabels[demand.status] }}
-                  </span>
+                  <USelect
+                    v-if="isHierarchyCellEditing(demand, 'status')"
+                    :model-value="getHierarchyInlineDraft(demand).status"
+                    :items="statusSelectOptions"
+                    value-key="value"
+                    option-attribute="label"
+                    size="xs"
+                    class="w-full"
+                    :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                    @blur="deactivateHierarchyCell(demand.id, 'status')"
+                    @update:model-value="(value) => value && handleHierarchyStatusChange(demand, value as DemandStatus)"
+                  />
+                  <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(demand).status], getHierarchyEditableCellButtonClass(demand)]" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'status')">
+                    {{ statusLabels[getHierarchyInlineDraft(demand).status] }}
+                  </button>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                  <span v-if="getProductCellDisplay(getProductNames(demand)).allVisible && getProductCellDisplay(getProductNames(demand)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
-                    {{ getProductCellDisplay(getProductNames(demand)).previewLabel }}
-                  </span>
-                  <UPopover v-else-if="getProductCellDisplay(getProductNames(demand)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getProductCellDisplay(getProductNames(demand)).fullLabel">
-                      <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getProductNames(demand)).previewLabel }}</span>
-                      <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getProductNames(demand)).hiddenCount }}</span>
+                  <UPopover
+                    :open="isHierarchyCellEditing(demand, 'products')"
+                    :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
+                    @update:open="(open) => handleHierarchyPopoverOpenChange(demand, 'products', open)"
+                  >
+                    <button v-if="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).fullLabel" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'products')">
+                      <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).previewLabel }}</span>
+                      <span v-if="!getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).allVisible" class="shrink-0 text-muted">+{{ getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).hiddenCount }}</span>
                     </button>
+                    <button v-else type="button" class="text-xs transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'products')">—</button>
+
                     <template #content>
-                      <div class="flex min-w-44 flex-col gap-1 p-1">
-                        <span v-for="product in getProductCellDisplay(getProductNames(demand)).items" :key="`${demand.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
-                          {{ product }}
-                        </span>
+                      <div class="w-[18rem] max-w-[min(18rem,calc(100vw-2rem))] space-y-2 p-3">
+                        <label v-for="product in getEditableProductOptions(demand)" :key="product.value" class="flex items-center gap-2 text-[11px] text-highlighted">
+                          <input autofocus type="checkbox" class="h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary" :checked="getHierarchyInlineDraft(demand).productIds.includes(product.value)" @change="toggleHierarchyDraftProduct(demand, product.value, ($event.target as HTMLInputElement).checked)">
+                          <span class="truncate">{{ product.label }}</span>
+                        </label>
                       </div>
                     </template>
                   </UPopover>
-                  <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                  <span v-if="getDisplayedHours(demand) !== null">{{ getDisplayedHours(demand) }}h</span>
+                  <div v-if="isHierarchyCellEditing(demand, 'hours')">
+                    <UInput
+                      :model-value="getHierarchyInlineDraft(demand).hoursInput"
+                      type="text"
+                      inputmode="decimal"
+                      size="xs"
+                      autofocus
+                      class="w-full"
+                      :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                      @blur="deactivateHierarchyCell(demand.id, 'hours')"
+                      @keydown.esc.prevent="deactivateHierarchyCell(demand.id, 'hours')"
+                      @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'hours')"
+                      @update:model-value="(value) => updateHierarchyInlineDraft(demand, { hoursInput: String(value ?? '') })"
+                    />
+                  </div>
+                  <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="rounded-md border px-1 py-0.5 transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
+                    {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : `${getDisplayedHours(demand)}h` }}
+                  </button>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
-                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="classificationBadgeClass[getDisplayedClassification(demand)]" :title="classificationLabels[getDisplayedClassification(demand)]">
+                  <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="[classificationBadgeClass[getDisplayedClassification(demand)], getHierarchyReadonlyCellClass()]" :title="classificationLabels[getDisplayedClassification(demand)]">
                     {{ getClassificationDisplayLabel(getDisplayedClassification(demand)) }}
                   </span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                  <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getCustomerCellDisplay(demand).fullLabel">
+                  <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                     {{ getCustomerCellDisplay(demand).previewLabel }}
                   </span>
                   <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :title="getCustomerCellDisplay(demand).fullLabel">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                       <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
                       <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
                     </button>
                     <template #content>
-                      <div class="flex min-w-44 flex-col gap-1 p-1">
+                      <div class="flex max-w-xs flex-wrap gap-1.5 p-2">
                         <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
                           {{ customer }}
                         </span>
                       </div>
                     </template>
                   </UPopover>
-                  <span v-else class="text-xs text-muted">—</span>
+                  <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
-                  <div v-if="getDueDateLabel(demand) || getDueQuarterLabel(demand) || isDelayed(demand)" class="flex min-w-0 items-center gap-1" :title="getDueTooltip(demand)">
-                    <span v-if="getDueDateLabel(demand)" :class="getDueDateClass(demand)">{{ getDueDateLabel(demand) }}</span>
-                    <span v-if="getDueQuarterLabel(demand)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
-                      {{ getDueQuarterLabel(demand) }}
-                    </span>
+                  <div v-if="isHierarchyCellEditing(demand, 'dueDate')">
+                    <UInput
+                      :model-value="getHierarchyInlineDraft(demand).dueDate"
+                      type="date"
+                      size="xs"
+                      autofocus
+                      class="w-full"
+                      :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                      @blur="deactivateHierarchyCell(demand.id, 'dueDate')"
+                      @keydown.esc.prevent="deactivateHierarchyCell(demand.id, 'dueDate')"
+                      @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'dueDate')"
+                      @update:model-value="(value) => updateHierarchyInlineDraft(demand, { dueDate: String(value ?? '') })"
+                    />
                   </div>
+                  <button v-else-if="getDueDateLabel(getHierarchyDraftDisplayItem(demand)) || getDueQuarterLabel(getHierarchyDraftDisplayItem(demand)) || isDelayed(getHierarchyDraftDisplayItem(demand))" type="button" class="flex min-w-0 items-center gap-1 rounded-md border px-1 py-0.5 text-left transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="getDueTooltip(getHierarchyDraftDisplayItem(demand))" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'dueDate')">
+                    <span v-if="getDueDateLabel(getHierarchyDraftDisplayItem(demand))" :class="getDueDateClass(getHierarchyDraftDisplayItem(demand))">{{ getDueDateLabel(getHierarchyDraftDisplayItem(demand)) }}</span>
+                    <span v-if="getDueQuarterLabel(getHierarchyDraftDisplayItem(demand))" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
+                      {{ getDueQuarterLabel(getHierarchyDraftDisplayItem(demand)) }}
+                    </span>
+                  </button>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
@@ -2502,6 +3400,37 @@ void initializeHierarchyPage()
         </div>
       </div>
     </template>
+
+    <div v-if="hierarchyPendingEditCount" class="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+      <div class="pointer-events-auto flex w-full max-w-fit items-center gap-3 rounded-2xl border border-primary/20 bg-default/95 px-4 py-3 shadow-2xl backdrop-blur supports-[backdrop-filter]:bg-default/85">
+        <div class="min-w-0">
+          <p class="text-sm font-semibold text-highlighted">Edições pendentes</p>
+          <p class="text-xs text-muted">{{ hierarchyPendingEditCount.toLocaleString('pt-BR') }} alteração(ões) aguardando confirmação.</p>
+        </div>
+        <UButton
+          size="sm"
+          color="neutral"
+          variant="outline"
+          icon="i-lucide-rotate-ccw"
+          :disabled="isSavingAllHierarchyEdits || !!hierarchyInlineSavingIds.length"
+          @click="discardAllHierarchyInlineEdits"
+        >
+          Descartar
+        </UButton>
+        <UButton
+          size="sm"
+          color="primary"
+          variant="solid"
+          icon="i-lucide-check-check"
+          class="font-semibold shadow-sm"
+          :loading="isSavingAllHierarchyEdits"
+          :disabled="isSavingAllHierarchyEdits"
+          @click="saveAllHierarchyInlineEdits"
+        >
+          {{ hierarchyPendingEditLabel }}
+        </UButton>
+      </div>
+    </div>
 
     <BulkEditRoadmapItemsModal
       v-model:open="bulkEditModalOpen"
@@ -2535,6 +3464,79 @@ void initializeHierarchyPage()
       @trade-off-deleted="handleTradeOffDeleted"
       @submit="handleSubmit"
     />
+
+    <UModal v-model:open="hierarchyStatusModalOpen" :title="hierarchyStatusModalDraft ? `Completar status: ${statusLabels[hierarchyStatusModalDraft.status]}` : 'Completar status'" :ui="{ content: 'sm:max-w-2xl' }" @update:open="(open) => { if (!open) closeHierarchyStatusModal({ restoreSnapshot: true }) }">
+      <template #body>
+        <div v-if="hierarchyStatusModalDraft" class="space-y-4">
+          <p class="text-sm text-muted">Alguns status exigem dados adicionais antes de salvar a grade.</p>
+
+          <UFormField v-if="hierarchyStatusModalRequiresDeliveryDate" label="Data de entrega" required>
+            <UInput
+              :model-value="hierarchyStatusModalDraft.deliveryDate"
+              type="date"
+              autofocus
+              class="w-full"
+              @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { deliveryDate: String(value ?? '') })"
+            />
+          </UFormField>
+
+          <UFormField v-if="hierarchyStatusModalRequiresBlockedReason" label="Motivo do impedimento" required>
+            <UTextarea
+              :model-value="hierarchyStatusModalDraft.blockedReason"
+              :rows="5"
+              autofocus
+              class="w-full"
+              @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { blockedReason: String(value ?? '') })"
+            />
+          </UFormField>
+
+          <template v-if="hierarchyStatusModalRequiresDeprioritization">
+            <UFormField label="Motivo da despriorização" required>
+              <USelect
+                :model-value="hierarchyStatusModalDraft.deprioritizationReason"
+                :items="deprioritizationReasonOptions"
+                value-key="value"
+                option-attribute="label"
+                class="w-full"
+                @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { deprioritizationReason: value as DeprioritizationReason | undefined })"
+              />
+            </UFormField>
+
+            <UFormField label="Demanda priorizada no lugar" hint="Opcional">
+              <USelect
+                :model-value="hierarchyStatusModalDraft.replacementDemandId"
+                :items="hierarchyStatusReplacementDemandOptions"
+                value-key="value"
+                option-attribute="label"
+                placeholder="Selecione uma demanda"
+                class="w-full"
+                @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { replacementDemandId: value ? String(value) : undefined })"
+              />
+            </UFormField>
+
+            <UFormField label="Observação" required>
+              <UTextarea
+                :model-value="hierarchyStatusModalDraft.observation"
+                :rows="5"
+                class="w-full"
+                @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { observation: String(value ?? '') })"
+              />
+            </UFormField>
+          </template>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton color="neutral" variant="outline" @click="closeHierarchyStatusModal({ restoreSnapshot: true })">
+            Cancelar
+          </UButton>
+          <UButton color="primary" @click="confirmHierarchyStatusModal">
+            Confirmar
+          </UButton>
+        </div>
+      </template>
+    </UModal>
 
     <UModal
       v-model:open="confirmDeleteOpen"

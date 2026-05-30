@@ -2790,12 +2790,6 @@ const STATUS_SELECT_OPTIONS = [
   { label: 'Despriorizado', value: 'Deprioritized' },
   { label: 'Impedido',      value: 'Blocked' },
 ]
-const TYPE_SELECT_OPTIONS = [
-  { label: 'Planejado',     value: 'Planned' },
-  { label: 'Transbordo',    value: 'Spillover' },
-  { label: 'Não Planejado', value: 'Unplanned' },
-  { label: 'Adicional',     value: 'Additional' },
-]
 const classificationBadgeClass: Record<DemandClassification, string> = {
   TechnicalDebtSecurity: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700',
   Strategic: 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800',
@@ -3434,6 +3428,8 @@ watch(
 const UButtonComp = resolveComponent('UButton')
 const UIconComp   = resolveComponent('UIcon')
 const UPopoverComp = resolveComponent('UPopover')
+const UInputComp = resolveComponent('UInput')
+const USelectComp = resolveComponent('USelect')
 
 function renderDependencyBadge(dependency: DemandDependency) {
   return h('button', {
@@ -3776,15 +3772,19 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableColumnFilter: false,
     size: 60,
     meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('hours', 60) }), th: () => ({ width: listColWidth('hours', 60) }) } },
-    cell: ({ row }) => isCollapsedRepresentative(row.original)
-      ? h('span', { class: 'text-xs text-muted' }, '—')
-      : isDemandEstimated(row.original)
+    cell: ({ row }) => {
+      const demand = row.original
+      if (isCollapsedRepresentative(demand))
+        return h('span', { class: 'text-xs text-muted' }, '—')
+
+      return isDemandEstimated(demand)
         ? h('span', {
           class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold text-highlighted'
-        }, `${row.original.hours}h`)
+        }, `${demand.hours}h`)
         : h('span', {
           class: 'inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-        }, '0h'),
+        }, '0h')
+    },
   },
   {
     id: '_actions',
@@ -3854,7 +3854,14 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       }
 
       actionSlots.push(
-        h(UButtonComp, { size: 'xs', variant: 'ghost', color: 'neutral', class: 'h-6 w-6 p-0', onClick: () => openEditModal(demand) }, {
+        h(UButtonComp, {
+          size: 'xs',
+          variant: 'ghost',
+          color: 'neutral',
+          class: 'h-6 w-6 p-0',
+          title: 'Editar demanda',
+          onClick: () => openEditModal(demand)
+        }, {
           default: () => h(UIconComp, { name: 'i-lucide-pencil', class: 'h-4 w-4' })
         })
       )
@@ -4402,7 +4409,7 @@ watch(activeDemandKpiId, async (value) => {
                   :title="getDemandNotesTooltip(row.original) || getDisplayedDemandStatus(row.original).label"
                 >
                   <template v-if="!isCollapsedRepresentative(row.original)">
-                  <div class="flex items-center gap-1.5">
+                    <div class="flex items-center gap-1.5">
                     <span
                       class="inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium"
                       :class="getStatusBadgeClass(row.original.status)"
@@ -4421,7 +4428,7 @@ watch(activeDemandKpiId, async (value) => {
                     >
                       <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
                     </span>
-                  </div>
+                    </div>
                   </template>
                   <span v-else class="text-xs text-muted">—</span>
                 </div>
@@ -4429,7 +4436,7 @@ watch(activeDemandKpiId, async (value) => {
               <template #conclusion-cell="{ row }">
                 <div class="flex flex-col gap-1">
                   <template v-if="!isCollapsedRepresentative(row.original)">
-                  <div
+                    <div
                     v-if="getDisplayedConclusionDate(row.original)"
                     class="flex items-center gap-1 text-[11px]"
                     :class="row.original.status === 'Done' && row.original.deliveryDate ? 'text-green-600 dark:text-green-400' : 'text-muted'"
