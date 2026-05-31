@@ -85,6 +85,9 @@ export const useRoadmapStore = defineStore('roadmap', () => {
   }
 
   function removeDemandState(id: string) {
+    // If the deleted demand is a spillover, clear successorDemandId on the original
+    const original = demands.value.find(d => d.successorDemandId === id)
+    if (original) original.successorDemandId = undefined
     demands.value = demands.value.filter(demand => demand.id !== id)
     removeDependencyOption(id)
   }
@@ -323,6 +326,21 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     removeDemandState(id)
   }
 
+  async function createSpillover(demandId: string, targetYear: number, targetNumber: number): Promise<RoadmapDemand> {
+    const res = await api.post<ApiResponse<RoadmapDemand>>(
+      `/api/roadmap/demands/${demandId}/spillover`,
+      { originalDemandId: demandId, targetQuarterYear: targetYear, targetQuarterNumber: targetNumber }
+    )
+
+    if (res.data) {
+      applyUpdatedDemandState(res.data)
+      const original = demands.value.find(d => d.id === demandId)
+      if (original) original.successorDemandId = res.data.id
+    }
+
+    return res.data
+  }
+
   async function reorderDemand(id: string, status: DemandStatus, orderedDemandIds: string[]) {
     await api.put<ApiResponse<null>>(
       '/api/roadmap/demands/reorder',
@@ -387,6 +405,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     createDemand,
     updateDemand,
     deleteDemand,
+    createSpillover,
     reorderDemand,
     patchDemandStatus,
     selectProject,

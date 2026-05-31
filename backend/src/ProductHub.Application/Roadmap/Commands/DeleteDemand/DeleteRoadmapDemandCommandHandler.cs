@@ -28,6 +28,10 @@ public sealed class DeleteRoadmapDemandCommandHandler(
             ]);
         }
 
+        // If this demand is a spillover, clear the SuccessorDemandId on the original
+        var original = await demandRepository.GetOriginalBySuccessorIdAsync(request.Id, cancellationToken);
+        original?.ClearSuccessor();
+
         demandRepository.Remove(demand);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }

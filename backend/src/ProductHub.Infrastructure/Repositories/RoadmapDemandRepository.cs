@@ -171,4 +171,10 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
                 cancellationToken);
         }
     }
+
+    public async Task<RoadmapDemand?> GetOriginalBySuccessorIdAsync(
+        Guid successorId,
+        CancellationToken cancellationToken = default) =>
+        await context.RoadmapDemands
+            .FirstOrDefaultAsync(d => d.SuccessorDemandId == successorId, cancellationToken);
 }

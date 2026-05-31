@@ -1,6 +1,7 @@
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using ProductHub.Application.Roadmap.Commands.CreateDemand;
+using ProductHub.Application.Roadmap.Commands.CreateSpillover;
 using ProductHub.Application.Roadmap.Commands.DeleteDemand;
 using ProductHub.Application.Roadmap.Commands.DeleteDemandTradeOff;
 using ProductHub.Application.Roadmap.Commands.ReorderDemand;
@@ -104,6 +105,16 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     {
         await sender.Send(new DeleteDemandTradeOffCommand(id), cancellationToken);
         return Ok(ApiResponse.Ok(CorrelationId));
+    }
+
+    [HttpPost("demands/{id:guid}/spillover")]
+    public async Task<IActionResult> CreateSpillover(
+        Guid id,
+        [FromBody] CreateSpilloverCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(command with { OriginalDemandId = id }, cancellationToken);
+        return StatusCode(201, ApiResponse<RoadmapDemandDto>.Ok(result, CorrelationId));
     }
 
     [HttpPut("demands/reorder")]

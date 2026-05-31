@@ -156,7 +156,8 @@ internal static class RoadmapDemandDtoMapper
             demandMeasurementDtos,
             demand.CreatedAt,
             demand.UpdatedAt,
-            demand.ExcludeFromCapacity);
+            demand.ExcludeFromCapacity,
+            demand.SuccessorDemandId);
     }
 
     private static string FormatQuarterLabel(int quarterYear, int quarterNumber)

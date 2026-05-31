@@ -81,7 +81,8 @@ public sealed record RoadmapDemandDto(
     IReadOnlyList<KpiMeasurementDto> KpiMeasurements,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    bool ExcludeFromCapacity = false);
+    bool ExcludeFromCapacity = false,
+    Guid? SuccessorDemandId = null);
 
 public sealed record RoadmapCapacityDto(
     Guid? Id,

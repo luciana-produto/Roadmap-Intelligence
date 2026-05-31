@@ -64,6 +64,7 @@ BEGIN
         HasNoKpi BIT NOT NULL CONSTRAINT DF_RoadmapDemands_HasNoKpi DEFAULT (0),
         NoKpiClassification NVARCHAR(50) NULL,
         ExcludeFromCapacity BIT NOT NULL CONSTRAINT DF_RoadmapDemands_ExcludeFromCapacity DEFAULT (0),
+        SuccessorDemandId UNIQUEIDENTIFIER NULL,
         CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_RoadmapDemands_CreatedAt DEFAULT (SYSUTCDATETIME()),
         UpdatedAt DATETIME2 NULL,
         Version INT NOT NULL CONSTRAINT DF_RoadmapDemands_Version DEFAULT (0),
@@ -73,7 +74,9 @@ BEGIN
         CONSTRAINT FK_RoadmapDemands_RoadmapDemands_ParentDemandId
             FOREIGN KEY (ParentDemandId) REFERENCES dbo.RoadmapDemands (Id),
         CONSTRAINT FK_RoadmapDemands_RoadmapDemands_ReplacementDemandId
-            FOREIGN KEY (ReplacementDemandId) REFERENCES dbo.RoadmapDemands (Id)
+            FOREIGN KEY (ReplacementDemandId) REFERENCES dbo.RoadmapDemands (Id),
+        CONSTRAINT FK_RoadmapDemands_RoadmapDemands_SuccessorDemandId
+            FOREIGN KEY (SuccessorDemandId) REFERENCES dbo.RoadmapDemands (Id)
     );
 END;
 

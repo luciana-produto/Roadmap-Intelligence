@@ -35,6 +35,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public bool HasNoKpi { get; private set; }
     public NoKpiClassification? NoKpiClassification { get; private set; }
     public bool ExcludeFromCapacity { get; private set; }
+    public Guid? SuccessorDemandId { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -203,6 +204,12 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
 
     public void SetSortOrder(int sortOrder) =>
         SortOrder = sortOrder;
+
+    public void SetSuccessor(Guid successorId) =>
+        SuccessorDemandId = successorId;
+
+    public void ClearSuccessor() =>
+        SuccessorDemandId = null;
 
     public void SetStatus(DemandStatus status)
     {

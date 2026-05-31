@@ -2435,10 +2435,19 @@ function syncListSectionDividers() {
         }
 
         if (column.id === '_actions') {
-          const cell = createGridCell('px-2 py-1 text-right align-top')
+          const cell = createGridCell('relative overflow-visible !px-0 py-0.5 align-top')
           if (headerMeta) {
+            // Wrapper with group class for hover-based overlay (same pattern as demand rows)
+            const wrapper = document.createElement('div')
+            wrapper.className = 'group relative flex items-center justify-center py-0.5'
+
+            const dots = document.createElement('span')
+            dots.className = 'pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0'
+            dots.textContent = '···'
+            wrapper.appendChild(dots)
+
             const actions = document.createElement('div')
-            actions.className = 'ml-auto flex items-center justify-end gap-1'
+            actions.className = 'pointer-events-none absolute right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 py-0.5 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
 
             const createButton = document.createElement('button')
             createButton.type = 'button'
@@ -2547,7 +2556,8 @@ function syncListSectionDividers() {
             deleteButton.appendChild(deleteSvg)
             actions.appendChild(deleteButton)
 
-            cell.appendChild(actions)
+            wrapper.appendChild(actions)
+            cell.appendChild(wrapper)
           }
           grid.appendChild(cell)
           continue
@@ -2731,6 +2741,39 @@ async function toggleExcludeFromCapacity(demand: RoadmapDemand) {
     excludeFromCapacity: !demand.excludeFromCapacity
   }))
 }
+
+// --- Criar Transbordo modal ---
+const spilloverModalOpen = ref(false)
+const spilloverModalDemand = ref<RoadmapDemand | null>(null)
+const spilloverTargetYear = ref<number | null>(null)
+const spilloverTargetNumber = ref<number | null>(null)
+const isCreatingSpillover = ref(false)
+
+function openSpilloverModal(demand: RoadmapDemand) {
+  spilloverModalDemand.value = demand
+  spilloverTargetYear.value = demand.quarterYear
+  spilloverTargetNumber.value = demand.quarterNumber === 4 ? 1 : demand.quarterNumber + 1
+  if (demand.quarterNumber === 4) spilloverTargetYear.value = demand.quarterYear + 1
+  spilloverModalOpen.value = true
+}
+
+async function confirmCreateSpillover() {
+  if (!spilloverModalDemand.value || !spilloverTargetYear.value || !spilloverTargetNumber.value) return
+  isCreatingSpillover.value = true
+  try {
+    await roadmapStore.createSpillover(
+      spilloverModalDemand.value.id,
+      spilloverTargetYear.value,
+      spilloverTargetNumber.value
+    )
+    spilloverModalOpen.value = false
+  }
+  finally {
+    isCreatingSpillover.value = false
+    spilloverModalDemand.value = null
+  }
+}
+// --- fim Criar Transbordo ---
 
 function normalizeCustomerName(value?: string) {
   return value?.trim().toLowerCase() ?? ''
@@ -3153,8 +3196,9 @@ const visibleEpicHeaderByDemandId = computed(() => {
     return result
   }
 
-  // Track which epicIds have already got a header so we never render duplicates.
-  const seenEpicIds = new Set<string>()
+  // Track the last quarter in which each epic header was shown.
+  // When the quarter changes, the same epic must get a new header.
+  const lastEpicQuarter = new Map<string, string>()
 
   for (let index = 0; index < visibleListRows.value.length; index++) {
     const demand = visibleListRows.value[index]!
@@ -3170,17 +3214,18 @@ const visibleEpicHeaderByDemandId = computed(() => {
       continue
     }
 
-    // Epic demands: only show header on the very first occurrence of this epicId.
-    const showHeader = !seenEpicIds.has(epicId)
-    seenEpicIds.add(epicId)
+    // Epic demands: show header at the first occurrence per quarter.
+    const quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
+    const showHeader = lastEpicQuarter.get(epicId) !== quarterKey
+    lastEpicQuarter.set(epicId, quarterKey)
 
     if (!showHeader) {
       result[demand.id] = { showHeader: false, count: 0, collapsed: false }
       continue
     }
 
-    // Count = all visible demands that belong to this epic.
-    const count = getVisibleEpicDemands(epicId).length
+    // Count = visible demands of this epic in this quarter.
+    const count = getVisibleEpicDemands(epicId).filter(d => d.quarterYear === demand.quarterYear && d.quarterNumber === demand.quarterNumber).length
 
     result[demand.id] = {
       showHeader: true,
@@ -3360,7 +3405,7 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'text' },
   { id: 'conclusion',     label: 'Conclusão',     defaultWidth: 118, disableFilter: true },
-  { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
+  { id: '_actions',       label: '',              defaultWidth: 40, disableFilter: true, disableSorting: true, alignRight: true },
 ]
 
 listColumnOrder.value = LIST_COL_DEFS.map(column => column.id)
@@ -4700,6 +4745,15 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               }, displayItem.title),
           ...d.dependsOn.map(dep => renderDependencyIcon(dep, 'dependsOn', d)),
           ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
+          ...(d.successorDemandId
+            ? [h('span', {
+                class: 'inline-flex shrink-0 items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0 text-[8px] font-medium text-amber-600 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300',
+                title: 'Possui transbordo'
+              }, [
+                h(UIconComp, { name: 'i-lucide-forward', class: 'h-2.5 w-2.5' }),
+                (() => { const s = demandItems.value.find(x => x.id === d.successorDemandId); return s ? `→ ${s.quarterLabel}` : '→' })()
+              ])]
+            : []),
           ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
             !issueLinks.length ? h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' }) : null
           ].filter(Boolean))
@@ -4904,12 +4958,12 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     header: '',
     enableSorting: false,
     enableColumnFilter: false,
-    size: 112,
-    meta: { class: { td: 'text-right overflow-visible' }, style: { td: () => ({ width: listColWidth('_actions', 112) }), th: () => ({ width: listColWidth('_actions', 112) }) } },
+    size: 40,
+    meta: { class: { td: 'overflow-visible relative !px-0' }, style: { td: () => ({ width: listColWidth('_actions', 40) }), th: () => ({ width: listColWidth('_actions', 40) }) } },
     cell: ({ row }) => {
       const demand = row.original
       if (isCollapsedRepresentative(demand)) {
-        return h('div', { class: 'flex items-center justify-end gap-1' }, [
+        return h('div', { class: 'flex items-center justify-center py-0.5' }, [
           h(UButtonComp, {
             size: 'xs',
             variant: 'ghost',
@@ -4925,6 +4979,29 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const actionSlots = []
       const kpiSummary = getDemandKpiSummary(demand)
 
+      // 1st: Transbordo / Repriorizar
+      if (demand.itemType === 'Demand' && !demand.successorDemandId) {
+        const spilloverTitle = demand.status === 'Deprioritized'
+          ? 'Repriorizar em outro quarter'
+          : 'Criar Transbordo'
+        actionSlots.push(
+          h(UButtonComp, {
+            size: 'xs',
+            variant: 'ghost',
+            color: 'neutral',
+            class: 'h-6 w-6 p-0',
+            title: spilloverTitle,
+            onClick: () => openSpilloverModal(demand)
+          }, {
+            default: () => h(UIconComp, { name: 'i-lucide-forward', class: 'h-4 w-4' })
+          })
+        )
+      }
+      else {
+        actionSlots.push(h('span', { class: 'h-6 w-6' }))
+      }
+
+      // 2nd: Agendar (backlog only)
       if (isBacklogDemand(demand)) {
         actionSlots.push(
           h(UPopoverComp, {}, {
@@ -4949,6 +5026,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         actionSlots.push(h('span', { class: 'h-6 w-6' }))
       }
 
+      // 3rd: KPI
       if (kpiSummary.actionLabel !== 'Associe a demanda a um épico') {
         actionSlots.push(
           h(UButtonComp, {
@@ -4966,6 +5044,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         actionSlots.push(h('span', { class: 'h-6 w-6' }))
       }
 
+      // 4th: Editar / 5th: Excluir
       actionSlots.push(
         h(UButtonComp, {
           size: 'xs',
@@ -4980,10 +5059,21 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       )
 
       actionSlots.push(
-        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'h-6 w-6 p-0', onClick: () => promptDelete(demand.id) })
+        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'h-6 w-6 p-0', title: 'Excluir demanda', onClick: () => promptDelete(demand.id) })
       )
 
-      return h('div', { class: 'ml-auto grid w-[104px] grid-cols-4 justify-items-end gap-0.5' }, actionSlots)
+      return h('div', {
+        class: 'group relative flex items-center justify-center py-0.5'
+      }, [
+        // Dots indicator — visible when not hovering
+        h('span', {
+          class: 'pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0'
+        }, '···'),
+        // Action panel — absolutely positioned, floats left on hover
+        h('div', {
+          class: 'pointer-events-none absolute right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 py-0.5 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
+        }, actionSlots)
+      ])
     },
   },
 ]
@@ -6012,6 +6102,64 @@ watch(activeDemandKpiId, async (value) => {
             icon="i-lucide-trash-2"
             label="Remover"
             @click="confirmDelete"
+          />
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="spilloverModalOpen"
+      :title="spilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo'"
+      :ui="{ content: 'sm:max-w-md' }"
+    >
+      <template #body>
+        <div class="space-y-4">
+          <p class="text-sm text-muted">
+            <template v-if="spilloverModalDemand?.status === 'Deprioritized'">
+              A demanda <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será repriorizada
+              com uma cópia do tipo <em>Spillover</em> no quarter de destino. O registro original permanece preservado.
+            </template>
+            <template v-else>
+              O histórico da demanda <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será preservado
+              no quarter atual e uma cópia do tipo <em>Spillover</em> será criada no quarter de destino.
+            </template>
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <UFormField label="Ano">
+              <UInput
+                v-model="spilloverTargetYear"
+                type="number"
+                :min="2020"
+                :max="2040"
+                placeholder="Ano"
+              />
+            </UFormField>
+            <UFormField label="Quarter">
+              <USelect
+                v-model="spilloverTargetNumber"
+                :items="[{ label: 'Q1', value: 1 }, { label: 'Q2', value: 2 }, { label: 'Q3', value: 3 }, { label: 'Q4', value: 4 }]"
+                value-key="value"
+                label-key="label"
+              />
+            </UFormField>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton
+            variant="outline"
+            color="neutral"
+            label="Cancelar"
+            :disabled="isCreatingSpillover"
+            @click="spilloverModalOpen = false"
+          />
+          <UButton
+            color="primary"
+            icon="i-lucide-forward"
+            :label="spilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar' : 'Criar Transbordo'"
+            :loading="isCreatingSpillover"
+            @click="confirmCreateSpillover"
           />
         </div>
       </template>

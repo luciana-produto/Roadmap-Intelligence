@@ -134,6 +134,7 @@ export interface RoadmapDemand {
   hasNoKpi: boolean
   noKpiClassification?: NoKpiClassification
   excludeFromCapacity?: boolean
+  successorDemandId?: string
   tradeOffHistory: DemandTradeOffHistory[]
   kpiLinks: DemandKpiLink[]
   kpiMeasurements: KpiMeasurement[]

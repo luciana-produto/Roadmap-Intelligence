@@ -196,7 +196,7 @@ function handleHierarchyPopoverOpenChange(item: RoadmapDemand, field: Extract<Hi
 
 const allRoadmapItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Roadmap'))
 const allEpicItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Epic'))
-const allDemandItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Demand'))
+const allDemandItems = computed(() => hierarchyDemands.value.filter(item => item.itemType === 'Demand' && !item.successorDemandId))
 const selectedProjectIdSet = computed(() => new Set(selectedProjectIds.value))
 const currentPrimaryProjectId = computed(() => selectedProjectIds.value[0] ?? null)
 
@@ -2867,6 +2867,10 @@ void initializeHierarchyPage()
                           <div class="flex flex-wrap items-center gap-1">
                             <span v-if="isOutsideSelectedProject(demand)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-warning">
                               Outro projeto
+                            </span>
+                            <span v-if="demand.type === 'Spillover'" class="inline-flex items-center gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-1 py-0 text-[8px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                              <UIcon name="i-lucide-forward" class="h-2.5 w-2.5" />
+                              Transbordo
                             </span>
                           </div>
                           <div class="mt-0.5 flex items-start gap-1">
