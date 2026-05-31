@@ -94,7 +94,8 @@ function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemand
     deprioritizationReason: isDeprioritized ? payload.deprioritizationReason || undefined : undefined,
     problemClarity: payload.itemType === 'Epic' ? payload.problemClarity ?? undefined : undefined,
     hasNoKpi: payload.hasNoKpi ?? false,
-    noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined
+    noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined,
+    excludeFromCapacity: payload.excludeFromCapacity ?? false
   }
 }
 

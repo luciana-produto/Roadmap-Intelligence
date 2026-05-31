@@ -80,7 +80,8 @@ public sealed record RoadmapDemandDto(
     IReadOnlyList<DemandKpiLinkDto> KpiLinks,
     IReadOnlyList<KpiMeasurementDto> KpiMeasurements,
     DateTime CreatedAt,
-    DateTime? UpdatedAt);
+    DateTime? UpdatedAt,
+    bool ExcludeFromCapacity = false);
 
 public sealed record RoadmapCapacityDto(
     Guid? Id,

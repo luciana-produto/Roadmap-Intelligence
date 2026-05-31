@@ -31,4 +31,5 @@ public sealed record UpdateRoadmapDemandCommand(
     DateOnly? DeliveryDate = null,
     int? ProblemClarity = null,
     bool HasNoKpi = false,
-    string? NoKpiClassification = null) : IRequest<RoadmapDemandDto>;
+    string? NoKpiClassification = null,
+    bool ExcludeFromCapacity = false) : IRequest<RoadmapDemandDto>;

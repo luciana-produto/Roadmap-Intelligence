@@ -63,6 +63,7 @@ BEGIN
         ProblemClarity INT NULL,
         HasNoKpi BIT NOT NULL CONSTRAINT DF_RoadmapDemands_HasNoKpi DEFAULT (0),
         NoKpiClassification NVARCHAR(50) NULL,
+        ExcludeFromCapacity BIT NOT NULL CONSTRAINT DF_RoadmapDemands_ExcludeFromCapacity DEFAULT (0),
         CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_RoadmapDemands_CreatedAt DEFAULT (SYSUTCDATETIME()),
         UpdatedAt DATETIME2 NULL,
         Version INT NOT NULL CONSTRAINT DF_RoadmapDemands_Version DEFAULT (0),

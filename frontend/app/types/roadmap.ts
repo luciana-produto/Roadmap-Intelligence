@@ -133,6 +133,7 @@ export interface RoadmapDemand {
   problemClarity?: number
   hasNoKpi: boolean
   noKpiClassification?: NoKpiClassification
+  excludeFromCapacity?: boolean
   tradeOffHistory: DemandTradeOffHistory[]
   kpiLinks: DemandKpiLink[]
   kpiMeasurements: KpiMeasurement[]
@@ -185,6 +186,7 @@ export interface DemandFormData {
   problemClarity?: number
   hasNoKpi?: boolean
   noKpiClassification?: NoKpiClassification
+  excludeFromCapacity?: boolean
 }
 
 export interface CustomerRename {

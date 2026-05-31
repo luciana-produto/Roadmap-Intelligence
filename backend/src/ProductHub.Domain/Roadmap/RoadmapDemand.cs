@@ -34,6 +34,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public int? ProblemClarity { get; private set; }
     public bool HasNoKpi { get; private set; }
     public NoKpiClassification? NoKpiClassification { get; private set; }
+    public bool ExcludeFromCapacity { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -70,7 +71,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DateOnly? deliveryDate = null,
         int? problemClarity = null,
         bool hasNoKpi = false,
-        NoKpiClassification? noKpiClassification = null)
+        NoKpiClassification? noKpiClassification = null,
+        bool excludeFromCapacity = false)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -109,7 +111,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             DeliveryDate = deliveryDate,
             ProblemClarity = problemClarity,
             HasNoKpi = hasNoKpi,
-            NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification)
+            NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification),
+            ExcludeFromCapacity = itemType == RoadmapItemType.Demand && excludeFromCapacity
         };
         demand._products = NormalizeProductIds(itemType, productIds)
             .Distinct()
@@ -147,7 +150,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         DateOnly? deliveryDate = null,
         int? problemClarity = null,
         bool hasNoKpi = false,
-        NoKpiClassification? noKpiClassification = null)
+        NoKpiClassification? noKpiClassification = null,
+        bool excludeFromCapacity = false)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -186,6 +190,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;
         NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
+        ExcludeFromCapacity = itemType == RoadmapItemType.Demand && excludeFromCapacity;
     }
 
     public void ReplaceProducts(IEnumerable<Guid>? productIds)

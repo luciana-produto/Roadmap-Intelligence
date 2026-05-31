@@ -5,7 +5,7 @@ import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
 import type { ApiResponse } from '~/types/api'
-import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType, BulkEditRoadmapItemsData, CustomerRename } from '~/types/roadmap'
+import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType, BulkEditRoadmapItemsData, CustomerRename, DeprioritizationReason } from '~/types/roadmap'
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
@@ -81,6 +81,15 @@ const planningQuarterOptions = computed(() =>
   quarterOptions.value.filter(option => ![BACKLOG_QUARTER.value, PRIORITIZED_BACKLOG_QUARTER.value].includes(option.value))
 )
 const bulkMoveQuarterOptions = computed(() => quarterOptions.value)
+
+const deprioritizationReasonOptions = [
+  { value: 'Strategic', label: 'Estratégico' },
+  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
+  { value: 'LowImpact', label: 'Baixo impacto' },
+  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
+  { value: 'ContextChange', label: 'Mudança de contexto' },
+  { value: 'Customizacao', label: 'Customização' }
+] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
 
 const filterQuarters = ref<string[]>([])
 
@@ -226,13 +235,9 @@ function getDemandKpiSummary(demand: RoadmapDemand) {
 }
 
 function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
-  return [
-    demand.roadmapId ?? 'none',
-    demand.epicId ?? 'none',
-    demand.quarterYear,
-    demand.quarterNumber,
-    getDemandGroupKey(demand)
-  ].join(':')
+  // Group by epicId only — demands from the same epic must share a single grouper
+  // regardless of which quarter they belong to.
+  return demand.epicId ?? `no-epic:${demand.roadmapId ?? 'none'}:${demand.quarterYear}:${demand.quarterNumber}:${getDemandGroupKey(demand)}`
 }
 
 function getDisplayIssueLinks(demand: Pick<RoadmapDemand, 'issueLinks' | 'jiraIssue'>) {
@@ -526,6 +531,21 @@ function createSvgIcon(paths: string[], className = 'h-3 w-3 shrink-0') {
   return svg
 }
 
+function createFilledSvgIcon(paths: string[], className = 'h-3 w-3 shrink-0') {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('fill', 'currentColor')
+  svg.setAttribute('class', className)
+
+  paths.forEach((pathValue) => {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+    path.setAttribute('d', pathValue)
+    svg.appendChild(path)
+  })
+
+  return svg
+}
+
 function createEpicDependencyBadge(demand: RoadmapDemand, dependency: DemandDependency, relation: 'dependsOn' | 'dependedOnBy') {
   const inconsistent = relation === 'dependsOn' && isDependencyInconsistent(demand, dependency)
   const button = document.createElement('button')
@@ -566,16 +586,17 @@ function appendEpicDependencyRow(container: HTMLElement, demand: RoadmapDemand, 
     return
 
   const row = document.createElement('div')
-  row.className = 'mt-1 flex flex-wrap gap-1'
+  // Single compact line — avoids increasing row height
+  row.className = 'mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden'
 
-  dependencies.slice(0, 2).forEach((dependency) => {
-    row.appendChild(createEpicDependencyBadge(demand, dependency, relation))
-  })
+  const badge = createEpicDependencyBadge(demand, dependencies[0]!, relation)
+  badge.className = badge.className.replace('max-w-[14rem]', 'max-w-[10rem]')
+  row.appendChild(badge)
 
-  if (dependencies.length > 2) {
+  if (dependencies.length > 1) {
     const more = document.createElement('span')
-    more.className = 'text-[11px] text-muted'
-    more.textContent = `+${dependencies.length - 2}`
+    more.className = 'shrink-0 text-[10px] text-muted'
+    more.textContent = `+${dependencies.length - 1}`
     row.appendChild(more)
   }
 
@@ -619,6 +640,19 @@ function withListGroupSorting(compareWithinGroup: (left: RoadmapDemand, right: R
     const groupComparison = compareListDemandGroups(rowA.original, rowB.original)
     if (groupComparison !== 0)
       return groupComparison
+
+    // When grouped by epic, sort by the epic's best (minimum) sortOrder first so
+    // all demands of the same epic stay contiguous regardless of their individual
+    // sortOrder values relative to demands from other epics.
+    if (groupDemandsByEpic.value) {
+      const epicA = rowA.original.epicId
+      const epicB = rowB.original.epicId
+      if (epicA && epicB && epicA !== epicB) {
+        const minA = epicMinSortOrderById.value[epicA] ?? rowA.original.sortOrder
+        const minB = epicMinSortOrderById.value[epicB] ?? rowB.original.sortOrder
+        if (minA !== minB) return minA - minB
+      }
+    }
 
     return compareWithinGroup(rowA.original, rowB.original)
   }
@@ -679,11 +713,11 @@ const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
   if (!activeCapacityScope.value) return null
 
   const committedHours = capacityScopedDemands.value
-    .filter(demand => demand.type !== 'Additional')
+    .filter(demand => demand.type !== 'Additional' && !demand.excludeFromCapacity)
     .reduce((total, demand) => total + (demand.hours ?? 0), 0)
 
   const additionalHours = capacityScopedDemands.value
-    .filter(demand => demand.type === 'Additional')
+    .filter(demand => demand.type === 'Additional' && !demand.excludeFromCapacity)
     .reduce((total, demand) => total + (demand.hours ?? 0), 0)
 
   const nonEstimatedDemandCount = capacityScopedDemands.value
@@ -1672,7 +1706,7 @@ function syncListSectionDividers() {
       grid.className = 'grid items-start bg-default'
       grid.style.gridTemplateColumns = getListGridTemplateColumns()
 
-      const createGridCell = (className = 'px-4 py-2.5 align-top') => {
+      const createGridCell = (className = 'px-3 py-0.5 align-top') => {
         const cell = document.createElement('div')
         cell.className = className
         return cell
@@ -1680,7 +1714,7 @@ function syncListSectionDividers() {
 
       for (const column of listOrderedCols.value) {
         if (column.id === 'priority') {
-          const cell = createGridCell('px-2 py-2.5 align-top')
+          const cell = createGridCell('px-2 py-1 align-top')
 
           if (headerMeta) {
             const handleWrap = document.createElement('div')
@@ -1730,18 +1764,18 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'quarterLabel') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('px-3 py-1 align-top')
 
           if (anchorDemand) {
             const quarterNode = document.createElement('span')
 
             quarterNode.className = isSpecialBacklogQuarter(anchorDemand.quarterYear, anchorDemand.quarterNumber)
-              ? 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
-              : 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted'
+              ? 'text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
+              : 'text-[10px] font-mono text-highlighted'
             quarterNode.textContent = planningQuarterDisplayLabel(anchorDemand)
 
             const typeNode = document.createElement('span')
-            typeNode.className = 'text-[11px] text-muted'
+            typeNode.className = `whitespace-nowrap text-[10px] font-medium ${typeColors[anchorDemand.type]}`
             typeNode.textContent = typeLabels[anchorDemand.type]
 
             const wrap = document.createElement('div')
@@ -1755,14 +1789,16 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'title') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('px-3 py-1 align-top')
           const titleWrap = document.createElement('div')
           titleWrap.className = 'flex min-w-0 items-start gap-1.5'
 
+          let toggleButton: HTMLButtonElement | null = null
+
           if (config.epicId) {
-            const toggleButton = document.createElement('button')
+            toggleButton = document.createElement('button')
             toggleButton.type = 'button'
-            toggleButton.className = 'mt-0.5 inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-default bg-default text-muted transition-colors hover:text-highlighted'
+            toggleButton.className = 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-default bg-default text-muted transition-colors hover:text-highlighted'
             toggleButton.addEventListener('click', (event) => {
               event.preventDefault()
               event.stopPropagation()
@@ -1772,74 +1808,146 @@ function syncListSectionDividers() {
             const toggleIcon = document.createElement('span')
             toggleIcon.textContent = config.collapsed ? '▸' : '▾'
             toggleButton.appendChild(toggleIcon)
-            titleWrap.appendChild(toggleButton)
           }
-
-          const epicIcon = document.createElement('span')
-          epicIcon.className = 'mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-amber-500'
-          epicIcon.textContent = '★'
 
           const scopeWrap = document.createElement('div')
           scopeWrap.className = 'min-w-0 flex-1'
 
           const metaRow = document.createElement('div')
-          metaRow.className = 'flex flex-wrap items-center gap-1.5'
+          metaRow.className = 'flex min-w-0 items-center gap-1.5'
+          const displayEpic = headerMeta ? getPlanningDraftDisplayItem(headerMeta.epic) : null
+
+          // Toggle button goes first in the roadmap meta row so ▶ aligns with ★ below
+          if (toggleButton)
+            metaRow.appendChild(toggleButton)
+
+          const roadmapTitleLabel = headerMeta?.epic.roadmapTitle ?? config.roadmapTitle
+          if (roadmapTitleLabel) {
+            const roadmapLabel = document.createElement('div')
+            roadmapLabel.className = 'min-w-0 flex-1 truncate text-[10px] text-muted'
+            roadmapLabel.textContent = roadmapTitleLabel
+            metaRow.appendChild(roadmapLabel)
+          }
 
           const countNode = document.createElement('span')
-          countNode.className = 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
-          countNode.textContent = `${config.count} dem.`
+          countNode.className = 'inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
+          countNode.textContent = String(config.count)
           metaRow.appendChild(countNode)
 
-          if (headerMeta) {
+          if (displayEpic) {
             const classificationBadge = document.createElement('span')
-            classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
-            classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
+            classificationBadge.className = `inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[displayEpic.classification]}`
+            classificationBadge.textContent = classificationLabels[displayEpic.classification]
             metaRow.appendChild(classificationBadge)
           }
 
           const titleBlock = document.createElement('div')
           titleBlock.className = 'mt-0.5 min-w-0'
 
-          const roadmapTitleLabel = headerMeta?.epic.roadmapTitle ?? config.roadmapTitle
-          if (roadmapTitleLabel) {
-            const roadmapLabel = document.createElement('div')
-            roadmapLabel.className = 'truncate text-[10px] text-muted'
-            roadmapLabel.textContent = roadmapTitleLabel
-            titleBlock.appendChild(roadmapLabel)
-          }
-
           const epicTitleRow = document.createElement('div')
           epicTitleRow.className = 'flex min-w-0 items-center gap-1.5'
 
-          const epicTitle = document.createElement('div')
-          epicTitle.className = headerMeta.epic.status === 'Deprioritized'
-            ? 'truncate text-[12px] font-medium line-through text-muted'
-            : 'truncate text-[12px] font-medium text-highlighted'
-          epicTitle.textContent = headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
-          if (headerMeta?.epic.description?.trim())
-            epicTitle.title = headerMeta.epic.description.trim()
-          epicTitleRow.appendChild(epicTitle)
+          const epicIcon = document.createElement('span')
+          epicIcon.className = 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-amber-500'
+          epicIcon.textContent = '★'
+          epicTitleRow.appendChild(epicIcon)
+
+          if (headerMeta && isPlanningCellEditing(headerMeta.epic, 'title')) {
+            const epicTitleInput = document.createElement('input')
+            epicTitleInput.type = 'text'
+            epicTitleInput.value = getPlanningInlineDraft(headerMeta.epic).title
+            epicTitleInput.className = 'min-w-0 w-full flex-1 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+            epicTitleInput.disabled = isPlanningInlineSaving(headerMeta.epic.id) || isSavingAllPlanningInlineEdits.value
+            epicTitleInput.addEventListener('click', event => event.stopPropagation())
+            epicTitleInput.addEventListener('input', (event) => {
+              updatePlanningInlineDraft(headerMeta.epic, { title: (event.target as HTMLInputElement).value })
+            })
+            epicTitleInput.addEventListener('keydown', (event) => {
+              if (event.key === 'Escape' || event.key === 'Enter') {
+                event.preventDefault()
+                deactivatePlanningCell(headerMeta.epic.id, 'title')
+                schedulePlanningGroupedHeaderSync()
+              }
+            })
+            epicTitleRow.appendChild(epicTitleInput)
+            requestAnimationFrame(() => {
+              epicTitleInput.focus()
+              epicTitleInput.select()
+            })
+          }
+          else {
+            const epicTitle = document.createElement('button')
+            epicTitle.type = 'button'
+            epicTitle.className = `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${displayEpic?.status === 'Deprioritized' ? 'line-through text-muted' : 'text-highlighted'} ${headerMeta ? getPlanningEditableCellButtonClass(headerMeta.epic) : ''}`
+                  epicTitle.textContent = displayEpic?.title ?? headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
+            epicTitle.disabled = !headerMeta || isPlanningInlineSaving(headerMeta.epic.id) || isSavingAllPlanningInlineEdits.value
+            if (headerMeta?.epic.description?.trim())
+              epicTitle.title = headerMeta.epic.description.trim()
+            epicTitle.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              if (!headerMeta)
+                return
+
+              activatePlanningCell(headerMeta.epic, 'title')
+              schedulePlanningGroupedHeaderSync()
+            })
+            epicTitleRow.appendChild(epicTitle)
+          }
 
           const issueTrigger = createIssueTriggerElement(headerMeta?.issueLinks ?? [])
-          if (issueTrigger)
+          if (issueTrigger) {
             epicTitleRow.appendChild(issueTrigger)
+          }
+          else {
+            // No Jira issue linked — show a subtle indicator
+            const noJira = document.createElement('span')
+            noJira.className = 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400'
+            noJira.title = 'Sem issue Jira associada'
+            noJira.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3"><path d="m10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="2" y1="2" x2="22" y2="22"/></svg>'
+            epicTitleRow.appendChild(noJira)
+          }
 
           titleBlock.appendChild(epicTitleRow)
 
           if (headerMeta) {
-            appendEpicDependencyRow(titleBlock, headerMeta.epic, headerMeta.epic.dependsOn, 'dependsOn')
-            appendEpicDependencyRow(titleBlock, headerMeta.epic, headerMeta.epic.dependedOnBy, 'dependedOnBy')
+            // Dependency icons inline: add after issue trigger
+            const createDepIcon = (dep: DemandDependency, relation: 'dependsOn' | 'dependedOnBy') => {
+              const inconsistent = relation === 'dependsOn' && isDependencyInconsistent(headerMeta.epic, dep)
+              const btn = document.createElement('button')
+              btn.type = 'button'
+              btn.className = inconsistent
+                ? 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-200 bg-red-50 text-red-600 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400'
+                : 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-200 bg-red-50 text-red-600 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400'
+              btn.title = relation === 'dependsOn'
+                ? `${getDependencyTooltip('É bloqueado por', dep)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${headerMeta.epic.quarterLabel}, ou sem priorização.` : ''}`
+                : formatDependencySummaryLine(dep)
+              const iconSvg = relation === 'dependsOn'
+                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-2.5 w-2.5"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
+                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-2.5 w-2.5"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>'
+              btn.innerHTML = iconSvg
+              btn.addEventListener('click', async (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                await openDependencyDemand(dep)
+              })
+              return btn
+            }
+            for (const dep of headerMeta.epic.dependsOn)
+              epicTitleRow.appendChild(createDepIcon(dep, 'dependsOn'))
+            for (const dep of headerMeta.epic.dependedOnBy)
+              epicTitleRow.appendChild(createDepIcon(dep, 'dependedOnBy'))
           }
 
           scopeWrap.append(metaRow, titleBlock)
-          titleWrap.append(epicIcon, scopeWrap)
+          titleWrap.append(scopeWrap)
           cell.appendChild(titleWrap)
           grid.appendChild(cell)
           continue
         }
 
         if (column.id === 'kpis') {
-          const cell = createGridCell('pl-3 pr-2 py-2.5 align-top')
+          const cell = createGridCell('pl-2 pr-2 py-1 align-top')
 
           if (headerMeta) {
             const container = document.createElement('div')
@@ -1872,42 +1980,77 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'products') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
-          if (headerMeta?.products.length) {
-            const productsWrap = document.createElement('div')
-            productsWrap.className = 'flex flex-wrap gap-1'
+          const cell = createGridCell('px-3 py-0.5 align-top')
+          if (headerMeta) {
+            const products = headerMeta.products
+            const colWidth = getBaseListColPixelWidth('products', 124)
+            const display = getAdaptiveInlineListDisplay(products, colWidth)
 
-            headerMeta.products.slice(0, 2).forEach((product) => {
-              const badge = document.createElement('span')
-              badge.className = 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted'
-              badge.textContent = product
-              productsWrap.appendChild(badge)
-            })
-
-            if (headerMeta.products.length > 2) {
-              const more = document.createElement('span')
-              more.className = 'text-[11px] text-muted'
-              more.textContent = `+${headerMeta.products.length - 2}`
-              productsWrap.appendChild(more)
+            if (!display.items.length) {
+              const empty = document.createElement('span')
+              empty.className = 'text-xs text-muted'
+              empty.textContent = '—'
+              cell.appendChild(empty)
             }
+            else if (display.allVisible) {
+              const span = document.createElement('span')
+              span.className = 'block max-w-full truncate text-[11px] text-highlighted'
+              span.title = display.fullLabel
+              span.textContent = display.previewLabel
+              cell.appendChild(span)
+            }
+            else {
+              // Overflow: show preview + +N badge with details dropdown on hover/click
+              const wrapper = document.createElement('div')
+              wrapper.className = 'relative inline-flex items-center gap-1'
 
-            cell.appendChild(productsWrap)
-          }
-          else {
-            const empty = document.createElement('span')
-            empty.className = 'text-xs text-muted'
-            empty.textContent = '—'
-            cell.appendChild(empty)
+              const preview = document.createElement('span')
+              preview.className = 'max-w-[120px] truncate text-[11px] text-highlighted'
+              preview.textContent = display.previewLabel
+
+              const more = document.createElement('button')
+              more.type = 'button'
+              more.className = 'shrink-0 rounded border border-default bg-elevated px-1 py-0 text-[9px] text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
+              more.textContent = `+${display.hiddenCount}`
+              more.title = display.fullLabel
+
+              const panel = document.createElement('div')
+              panel.className = 'absolute left-0 top-full z-20 mt-1 hidden min-w-[10rem] flex-col gap-1 rounded-lg border border-default bg-default p-2 shadow-lg'
+              products.forEach((product) => {
+                const item = document.createElement('span')
+                item.className = 'text-[11px] text-highlighted'
+                item.textContent = product
+                panel.appendChild(item)
+              })
+
+              more.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                panel.classList.toggle('hidden')
+                panel.classList.toggle('flex')
+              })
+
+              document.addEventListener('click', () => {
+                panel.classList.add('hidden')
+                panel.classList.remove('flex')
+              }, { once: true })
+
+              wrapper.appendChild(preview)
+              wrapper.appendChild(more)
+              wrapper.appendChild(panel)
+              cell.appendChild(wrapper)
+            }
           }
           grid.appendChild(cell)
           continue
         }
 
         if (column.id === 'hours') {
-          const cell = createGridCell('px-4 py-2.5 text-right align-top')
+          const cell = createGridCell('px-3 py-1 text-right align-top')
           if (headerMeta) {
-            const text = document.createElement('div')
-            text.className = 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold text-highlighted'
+            // Epic hours: plain text (read-only sum, no border)
+            const text = document.createElement('span')
+            text.className = 'text-[10px] font-semibold text-muted'
             text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
             cell.appendChild(text)
           }
@@ -1916,27 +2059,64 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'status') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('px-3 py-1 align-top')
           if (headerMeta) {
+            const epic = headerMeta.epic
+            const draftEpic = getPlanningDraftDisplayItem(epic)
             const container = document.createElement('div')
             container.className = 'flex flex-col gap-1'
-            container.title = getDemandNotesTooltip(headerMeta.epic) || statusLabels[headerMeta.epic.status]
+            container.title = getDemandNotesTooltip(draftEpic) || statusLabels[draftEpic.status]
 
             const statusRow = document.createElement('div')
             statusRow.className = 'flex items-center gap-1.5'
 
-            const badge = document.createElement('span')
-            badge.className = `inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${getStatusBadgeClass(headerMeta.epic.status)}`
-            badge.textContent = statusLabels[headerMeta.epic.status]
-            statusRow.appendChild(badge)
+            if (isPlanningCellEditing(epic, 'status')) {
+              const select = document.createElement('select')
+              select.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+              select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
 
-            if (headerMeta.epic.status === 'Blocked') {
+              STATUS_SELECT_OPTIONS.forEach((option) => {
+                const optionNode = document.createElement('option')
+                optionNode.value = option.value
+                optionNode.textContent = option.label
+                optionNode.selected = option.value === getPlanningInlineDraft(epic).status
+                select.appendChild(optionNode)
+              })
+
+              select.addEventListener('click', event => event.stopPropagation())
+              select.addEventListener('blur', () => {
+                deactivatePlanningCell(epic.id, 'status')
+                schedulePlanningGroupedHeaderSync()
+              })
+              select.addEventListener('change', (event) => {
+                handlePlanningStatusChange(epic, (event.target as HTMLSelectElement).value as DemandStatus)
+                schedulePlanningGroupedHeaderSync()
+              })
+              statusRow.appendChild(select)
+              requestAnimationFrame(() => select.focus())
+            }
+            else {
+              const badge = document.createElement('button')
+              badge.type = 'button'
+              badge.className = `inline-flex items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${getStatusBadgeClass(draftEpic.status)} ${getPlanningEditableCellButtonClass(epic)}`
+              badge.textContent = statusLabels[draftEpic.status]
+              badge.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              badge.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                activatePlanningCell(epic, 'status')
+                schedulePlanningGroupedHeaderSync()
+              })
+              statusRow.appendChild(badge)
+            }
+
+            if (draftEpic.status === 'Blocked') {
               const blockedBadge = document.createElement('span')
               blockedBadge.className = 'inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
               blockedBadge.appendChild(createSvgIcon(['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01'], 'h-3 w-3'))
               statusRow.appendChild(blockedBadge)
             }
-            else if (getDemandNotesTooltip(headerMeta.epic)) {
+            else if (getDemandNotesTooltip(draftEpic)) {
               const noteBadge = document.createElement('span')
               noteBadge.className = 'inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
               noteBadge.appendChild(createSvgIcon(['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'], 'h-3 w-3'))
@@ -1952,23 +2132,70 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'conclusion') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('px-3 py-1 align-top')
           if (headerMeta) {
+            const epic = headerMeta.epic
+            const displayEpic = getPlanningDraftDisplayItem(epic)
             const container = document.createElement('div')
             container.className = 'flex flex-col gap-1'
 
-            const promisedDate = getDisplayedConclusionDate(headerMeta.epic)
-            if (promisedDate) {
-              const promisedRow = document.createElement('div')
-              promisedRow.className = `flex items-center gap-1 text-[11px] ${headerMeta.epic.status === 'Done' && headerMeta.epic.deliveryDate ? 'text-green-600 dark:text-green-400' : 'text-muted'}`
-              promisedRow.appendChild(createSvgIcon(['M8 2v4', 'M16 2v4', 'M3 10h18', 'M8 14h.01', 'M12 14h.01', 'M16 14h.01', 'M8 18h.01', 'M12 18h.01', 'M16 18h.01', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2'], 'h-3 w-3'))
-              const promisedText = document.createElement('span')
-              promisedText.textContent = formatDemandDate(promisedDate)
-              promisedRow.appendChild(promisedText)
-              container.appendChild(promisedRow)
+            if (isPlanningCellEditing(epic, 'dueDate')) {
+              const input = document.createElement('input')
+              input.type = 'date'
+              input.value = getPlanningInlineDraft(epic).dueDate
+              input.className = 'w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+              input.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              input.addEventListener('click', event => event.stopPropagation())
+              input.addEventListener('blur', () => {
+                deactivatePlanningCell(epic.id, 'dueDate')
+                schedulePlanningGroupedHeaderSync()
+              })
+              input.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' || event.key === 'Enter') {
+                  event.preventDefault()
+                  deactivatePlanningCell(epic.id, 'dueDate')
+                  schedulePlanningGroupedHeaderSync()
+                }
+              })
+              input.addEventListener('input', (event) => {
+                updatePlanningInlineDraft(epic, { dueDate: (event.target as HTMLInputElement).value })
+              })
+              container.appendChild(input)
+              requestAnimationFrame(() => input.focus())
+            }
+            else {
+              const dueButton = document.createElement('button')
+              dueButton.type = 'button'
+              dueButton.className = `flex w-fit items-center gap-1 rounded-md border px-1 py-0.5 text-[11px] transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+              dueButton.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              dueButton.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                activatePlanningCell(epic, 'dueDate')
+                schedulePlanningGroupedHeaderSync()
+              })
+
+              const displayedConclusion = getDisplayedConclusionDate(displayEpic)
+              if (displayedConclusion) {
+                dueButton.appendChild(createSvgIcon(['M8 2v4', 'M16 2v4', 'M3 10h18', 'M8 14h.01', 'M12 14h.01', 'M16 14h.01', 'M8 18h.01', 'M12 18h.01', 'M16 18h.01', 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2'], 'h-3 w-3'))
+                const dueText = document.createElement('span')
+                dueText.className = displayEpic.status === 'Done' && displayEpic.deliveryDate
+                  ? 'text-green-600 dark:text-green-400'
+                  : 'text-muted'
+                dueText.textContent = formatDemandDate(displayedConclusion)
+                dueButton.appendChild(dueText)
+              }
+              else {
+                const empty = document.createElement('span')
+                empty.className = 'text-xs text-muted'
+                empty.textContent = '—'
+                dueButton.appendChild(empty)
+              }
+
+              container.appendChild(dueButton)
             }
 
-            if (showDemandDelayMarker(headerMeta.epic)) {
+            if (showDemandDelayMarker(displayEpic)) {
               const delayRow = document.createElement('div')
               delayRow.className = 'flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400'
               delayRow.appendChild(createSvgIcon(['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01'], 'h-3 w-3'))
@@ -1978,13 +2205,6 @@ function syncListSectionDividers() {
               container.appendChild(delayRow)
             }
 
-            if (!container.childElementCount) {
-              const empty = document.createElement('span')
-              empty.className = 'text-xs text-muted'
-              empty.textContent = '—'
-              container.appendChild(empty)
-            }
-
             cell.appendChild(container)
           }
           grid.appendChild(cell)
@@ -1992,50 +2212,244 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'customers') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
-          if (headerMeta?.customers.length) {
-            const customerTrigger = createCustomerTriggerElement(headerMeta.customers, getBaseListColPixelWidth('customers', 110))
-            if (customerTrigger)
-              cell.appendChild(customerTrigger)
-          }
-          else {
-            const empty = document.createElement('span')
-            empty.className = 'text-xs text-muted'
-            empty.textContent = '—'
-            cell.appendChild(empty)
+          const cell = createGridCell('px-3 py-1 align-top')
+          if (headerMeta) {
+            const epic = headerMeta.epic
+            const customerDisplay = getPlanningDraftCustomerDisplay(epic)
+
+            if (isPlanningCellEditing(epic, 'customers')) {
+              const wrapper = document.createElement('div')
+              wrapper.className = 'relative inline-flex max-w-full'
+
+              const trigger = document.createElement('button')
+              trigger.type = 'button'
+              trigger.className = `inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+              trigger.title = customerDisplay.fullLabel || 'Clientes do épico'
+
+              const label = document.createElement('span')
+              label.className = 'max-w-[140px] truncate'
+              label.textContent = customerDisplay.items.length ? customerDisplay.previewLabel : '—'
+              trigger.appendChild(label)
+
+              if (customerDisplay.items.length && !customerDisplay.allVisible) {
+                const more = document.createElement('span')
+                more.className = 'shrink-0 text-muted'
+                more.textContent = `+${customerDisplay.hiddenCount}`
+                trigger.appendChild(more)
+              }
+
+              wrapper.appendChild(trigger)
+
+              const editor = document.createElement('div')
+              const editorWidth = getPlanningCustomerEditorPixelWidth()
+              editor.className = 'absolute left-0 top-full z-30 mt-2 space-y-2 rounded-lg border border-default bg-default p-3 shadow-xl'
+              editor.style.width = `${editorWidth}px`
+              editor.style.maxWidth = `min(${editorWidth}px, calc(100vw - 2rem))`
+              editor.addEventListener('click', event => event.stopPropagation())
+
+              const selectedList = document.createElement('div')
+              selectedList.className = 'flex max-h-24 flex-wrap gap-1 overflow-y-auto'
+
+              getPlanningInlineDraft(epic).customers.forEach((customer) => {
+                const row = document.createElement('span')
+                row.className = 'inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] text-primary'
+
+                const labelText = document.createElement('span')
+                labelText.textContent = customer
+                row.appendChild(labelText)
+
+                const removeButton = document.createElement('button')
+                removeButton.type = 'button'
+                removeButton.className = 'inline-flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-primary/15'
+                removeButton.appendChild(createSvgIcon(['M18 6 6 18', 'M6 6l12 12'], 'h-3 w-3'))
+                removeButton.addEventListener('click', (event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  removePlanningCustomer(epic, customer)
+                  schedulePlanningGroupedHeaderSync()
+                })
+                row.appendChild(removeButton)
+
+                selectedList.appendChild(row)
+              })
+
+              if (!selectedList.childElementCount) {
+                const empty = document.createElement('div')
+                empty.className = 'text-xs text-muted'
+                empty.textContent = 'Nenhum cliente associado.'
+                selectedList.appendChild(empty)
+              }
+
+              editor.appendChild(selectedList)
+
+              const inputRow = document.createElement('div')
+              inputRow.className = 'flex items-center gap-2'
+
+              const input = document.createElement('input')
+              input.type = 'text'
+              input.value = planningCustomerInputs.value[epic.id] ?? ''
+              input.placeholder = 'Digite um novo cliente'
+              input.className = 'min-w-0 flex-1 rounded-md border border-default bg-default px-2 py-1.5 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+              input.addEventListener('click', event => event.stopPropagation())
+              input.addEventListener('input', (event) => {
+                planningCustomerInputs.value = {
+                  ...planningCustomerInputs.value,
+                  [epic.id]: (event.target as HTMLInputElement).value
+                }
+                schedulePlanningGroupedHeaderSync()
+              })
+              input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  addPlanningCustomer(epic, planningCustomerInputs.value[epic.id] ?? '')
+                  schedulePlanningGroupedHeaderSync()
+                }
+                else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  deactivatePlanningCell(epic.id, 'customers')
+                  schedulePlanningGroupedHeaderSync()
+                }
+              })
+              inputRow.appendChild(input)
+
+              const addButton = document.createElement('button')
+              addButton.type = 'button'
+              addButton.className = 'inline-flex items-center rounded-md border border-primary/20 bg-primary/10 px-2 py-1.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50'
+              addButton.textContent = 'Adicionar'
+              addButton.disabled = !(planningCustomerInputs.value[epic.id] ?? '').trim()
+              addButton.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                addPlanningCustomer(epic, planningCustomerInputs.value[epic.id] ?? '')
+                schedulePlanningGroupedHeaderSync()
+              })
+              inputRow.appendChild(addButton)
+              editor.appendChild(inputRow)
+
+              const suggestions = getFilteredPlanningCustomerSuggestions(epic)
+              if (suggestions.length) {
+                const suggestionsWrap = document.createElement('div')
+                suggestionsWrap.className = 'max-h-32 overflow-y-auto rounded border border-default bg-elevated/40'
+
+                suggestions.forEach((customer) => {
+                  const option = document.createElement('button')
+                  option.type = 'button'
+                  option.className = 'flex w-full px-2 py-1.5 text-left text-[11px] text-highlighted hover:bg-elevated'
+                  option.textContent = customer
+                  option.addEventListener('click', (event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    addPlanningCustomer(epic, customer)
+                    schedulePlanningGroupedHeaderSync()
+                  })
+                  suggestionsWrap.appendChild(option)
+                })
+
+                editor.appendChild(suggestionsWrap)
+              }
+
+              wrapper.appendChild(editor)
+              cell.appendChild(wrapper)
+
+              requestAnimationFrame(() => input.focus())
+            }
+            else {
+              const trigger = document.createElement('button')
+              trigger.type = 'button'
+              trigger.className = `inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+              trigger.title = customerDisplay.fullLabel || 'Clientes do épico'
+              trigger.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              trigger.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                activatePlanningCell(epic, 'customers')
+                schedulePlanningGroupedHeaderSync()
+              })
+
+              const label = document.createElement('span')
+              label.className = 'max-w-[140px] truncate'
+              label.textContent = customerDisplay.items.length ? customerDisplay.previewLabel : '—'
+              trigger.appendChild(label)
+
+              if (customerDisplay.items.length && !customerDisplay.allVisible) {
+                const more = document.createElement('span')
+                more.className = 'shrink-0 text-muted'
+                more.textContent = `+${customerDisplay.hiddenCount}`
+                trigger.appendChild(more)
+              }
+
+              cell.appendChild(trigger)
+            }
           }
           grid.appendChild(cell)
           continue
         }
 
         if (column.id === 'classification') {
-          const cell = createGridCell('px-4 py-2.5 align-top')
+          const cell = createGridCell('px-3 py-1 align-top')
           if (headerMeta) {
-            const classificationBadge = document.createElement('span')
-            classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[headerMeta.epic.classification]}`
-            classificationBadge.textContent = classificationLabels[headerMeta.epic.classification]
-            cell.appendChild(classificationBadge)
+            const epic = headerMeta.epic
+            const draftEpic = getPlanningDraftDisplayItem(epic)
+
+            if (isPlanningCellEditing(epic, 'classification')) {
+              const select = document.createElement('select')
+              select.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+              select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+
+              ;(Object.entries(classificationLabels) as Array<[DemandClassification, string]>).forEach(([value, label]) => {
+                const optionNode = document.createElement('option')
+                optionNode.value = value
+                optionNode.textContent = label
+                optionNode.selected = value === getPlanningInlineDraft(epic).classification
+                select.appendChild(optionNode)
+              })
+
+              select.addEventListener('click', event => event.stopPropagation())
+              select.addEventListener('blur', () => {
+                deactivatePlanningCell(epic.id, 'classification')
+                schedulePlanningGroupedHeaderSync()
+              })
+              select.addEventListener('change', (event) => {
+                updatePlanningInlineDraft(epic, { classification: (event.target as HTMLSelectElement).value as DemandClassification })
+              })
+              cell.appendChild(select)
+              requestAnimationFrame(() => select.focus())
+            }
+            else {
+              const classificationBadge = document.createElement('button')
+              classificationBadge.type = 'button'
+              classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${classificationBadgeClass[draftEpic.classification]} ${getPlanningEditableCellButtonClass(epic)}`
+              classificationBadge.textContent = classificationLabels[draftEpic.classification]
+              classificationBadge.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              classificationBadge.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                activatePlanningCell(epic, 'classification')
+                schedulePlanningGroupedHeaderSync()
+              })
+              cell.appendChild(classificationBadge)
+            }
           }
           grid.appendChild(cell)
           continue
         }
 
         if (column.id === '_actions') {
-          const cell = createGridCell('px-2 py-2.5 text-right align-top')
+          const cell = createGridCell('px-2 py-1 text-right align-top')
           if (headerMeta) {
             const actions = document.createElement('div')
             actions.className = 'ml-auto flex items-center justify-end gap-1'
 
             const createButton = document.createElement('button')
             createButton.type = 'button'
-            createButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md border border-primary/30 bg-primary/10 text-sm font-semibold leading-none text-primary transition-colors hover:border-primary/50 hover:bg-primary/15'
-            createButton.title = 'Nova demanda neste épico'
-            createButton.textContent = '+'
+            createButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-primary transition-colors hover:text-primary/80'
+            createButton.title = 'Nova demanda'
             createButton.addEventListener('click', (event) => {
               event.preventDefault()
               event.stopPropagation()
               openCreateModal('Demand', headerMeta.epic.id, { projectId: headerMeta.epic.projectId })
             })
+            createButton.appendChild(createSvgIcon(['M12 5v14', 'M5 12h14'], 'h-3.5 w-3.5'))
             actions.appendChild(createButton)
 
             const kpiButton = document.createElement('button')
@@ -2306,8 +2720,16 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     problemClarity: demand.itemType === 'Epic' ? demand.problemClarity ?? undefined : undefined,
     hasNoKpi: demand.hasNoKpi,
     noKpiClassification: demand.noKpiClassification ?? undefined,
+    excludeFromCapacity: demand.excludeFromCapacity,
     ...overrides
   }
+}
+
+async function toggleExcludeFromCapacity(demand: RoadmapDemand) {
+  if (isPlanningInlineSaving(demand.id) || isSavingAllPlanningInlineEdits.value) return
+  await roadmapStore.updateDemand(demand.id, buildDemandFormData(demand, {
+    excludeFromCapacity: !demand.excludeFromCapacity
+  }))
 }
 
 function normalizeCustomerName(value?: string) {
@@ -2575,6 +2997,12 @@ const statusDotClass: Record<DemandStatus, string> = {
 const typeLabels: Record<DemandType, string> = {
   Planned: 'Planejado', Spillover: 'Transbordo', Unplanned: 'Não Planejado', Additional: 'Adicional'
 }
+const typeColors: Record<DemandType, string> = {
+  Planned: 'text-emerald-600 dark:text-emerald-400',
+  Spillover: 'text-rose-600 dark:text-rose-400',
+  Unplanned: 'text-rose-600 dark:text-rose-400',
+  Additional: 'text-violet-600 dark:text-violet-400'
+}
 const classificationLabels: Record<DemandClassification, string> = {
   TechnicalDebtSecurity: 'Débito Técnico', Strategic: 'Estratégico', Evolution: 'Evolução',
   ImprovementGap: 'Melhoria/Gap', Mandatory: 'Mandatório', Homologation: 'Homologação', Customizacao: 'Customização'
@@ -2610,7 +3038,49 @@ const visibleEpicIds = computed(() => {
   ))
 })
 
-const tableDemands = computed(() => quarterFilteredDemands.value)
+const tableDemands = computed(() => {
+  if (!groupDemandsByEpic.value)
+    return quarterFilteredDemands.value
+
+  // Pre-group demands by epic so that even with no active sort column all demands
+  // of the same epic are contiguous. Groups are ordered by the minimum sortOrder
+  // of their member demands (same logic used by withListGroupSorting).
+  const epicMinOrder: Record<string, number> = {}
+  for (const demand of quarterFilteredDemands.value) {
+    if (!demand.epicId) continue
+    const current = epicMinOrder[demand.epicId]
+    if (current === undefined || demand.sortOrder < current)
+      epicMinOrder[demand.epicId] = demand.sortOrder
+  }
+
+  return [...quarterFilteredDemands.value].sort((left, right) => {
+    const groupComparison = compareListDemandGroups(left, right)
+    if (groupComparison !== 0) return groupComparison
+
+    const epicA = left.epicId
+    const epicB = right.epicId
+    if (epicA && epicB && epicA !== epicB) {
+      const minA = epicMinOrder[epicA] ?? left.sortOrder
+      const minB = epicMinOrder[epicB] ?? right.sortOrder
+      if (minA !== minB) return minA - minB
+    }
+
+    return left.sortOrder - right.sortOrder
+  })
+})
+
+// When grouping by epic, the minimum sortOrder of each epic's demands determines
+// the position of the whole epic group in the list.
+const epicMinSortOrderById = computed(() => {
+  const result: Record<string, number> = {}
+  for (const demand of quarterFilteredDemands.value) {
+    if (!demand.epicId) continue
+    const current = result[demand.epicId]
+    if (current === undefined || demand.sortOrder < current)
+      result[demand.epicId] = demand.sortOrder
+  }
+  return result
+})
 
 function isCollapsedRepresentative(demand: RoadmapDemand) {
   return groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
@@ -2683,19 +3153,34 @@ const visibleEpicHeaderByDemandId = computed(() => {
     return result
   }
 
+  // Track which epicIds have already got a header so we never render duplicates.
+  const seenEpicIds = new Set<string>()
+
   for (let index = 0; index < visibleListRows.value.length; index++) {
     const demand = visibleListRows.value[index]!
-    const previous = index > 0 ? visibleListRows.value[index - 1]! : null
-    const groupKey = getEpicDisplayGroupKey(demand)
-    const previousGroupKey = previous ? getEpicDisplayGroupKey(previous) : null
-    const showHeader = groupKey !== previousGroupKey
+    const epicId = demand.epicId
+
+    // No-epic demands: show a header each time the group key changes (original logic).
+    if (!epicId) {
+      const previous = index > 0 ? visibleListRows.value[index - 1]! : null
+      const groupKey = getEpicDisplayGroupKey(demand)
+      const previousGroupKey = previous ? getEpicDisplayGroupKey(previous) : null
+      const showHeader = groupKey !== previousGroupKey
+      result[demand.id] = { showHeader, count: showHeader ? 1 : 0, collapsed: false }
+      continue
+    }
+
+    // Epic demands: only show header on the very first occurrence of this epicId.
+    const showHeader = !seenEpicIds.has(epicId)
+    seenEpicIds.add(epicId)
 
     if (!showHeader) {
       result[demand.id] = { showHeader: false, count: 0, collapsed: false }
       continue
     }
 
-    const count = getVisibleEpicDemandCluster(demand).length
+    // Count = all visible demands that belong to this epic.
+    const count = getVisibleEpicDemands(epicId).length
 
     result[demand.id] = {
       showHeader: true,
@@ -2703,19 +3188,21 @@ const visibleEpicHeaderByDemandId = computed(() => {
       epicId: demand.epicId,
       roadmapTitle: demand.roadmapTitle,
       epicTitle: demand.epicTitle,
-      collapsed: !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+      collapsed: collapsedEpicIds.value.includes(epicId)
     }
   }
 
   return result
 })
 
+
 const listHasActiveFilters = computed(() => listColumnFilters.value.length > 0)
 const shouldConstrainListHeight = computed(() => visibleListDemandCount.value > 20)
+const planningGroupedRenderNonce = ref(0)
 const listTableKey = computed(() =>
   tableDemands.value
     .map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`)
-    .join('|') + `::${groupDemandsByEpic.value ? 'grouped' : 'flat'}::${collapsedEpicIds.value.join('|')}`
+    .join('|') + `::${groupDemandsByEpic.value ? 'grouped' : 'flat'}::${collapsedEpicIds.value.join('|')}::${planningGroupedRenderNonce.value}`
 )
 const priorityRankByDemandId = computed(() => {
   const result: Record<string, number> = {}
@@ -2733,6 +3220,35 @@ const priorityRankByDemandId = computed(() => {
 const selectedDemandIds = ref<string[]>([])
 const selectedEpicIds = ref<string[]>([])
 const isBulkPlanning = ref(false)
+const isSavingAllPlanningInlineEdits = ref(false)
+type PlanningInlineDraft = {
+  title: string
+  status: DemandStatus
+  classification: DemandClassification
+  quarterValue: string
+  type: DemandType
+  dueDate: string
+  hoursInput: string
+  productIds: string[]
+  customers: string[]
+  observation: string
+  blockedReason: string
+  deliveryDate: string
+  deprioritizationReason?: DeprioritizationReason
+  replacementDemandId?: string
+}
+type PlanningEditableField = 'title' | 'status' | 'classification' | 'quarterType' | 'products' | 'hours' | 'customers' | 'dueDate'
+type PlanningActiveCell = {
+  itemId: string
+  field: PlanningEditableField
+}
+const planningInlineDrafts = ref<Record<string, PlanningInlineDraft>>({})
+const planningInlineSavingIds = ref<string[]>([])
+const activePlanningCell = ref<PlanningActiveCell | null>(null)
+const planningCustomerInputs = ref<Record<string, string>>({})
+const planningStatusModalOpen = ref(false)
+const planningStatusModalItemId = ref<string | null>(null)
+const planningStatusModalSnapshot = ref<PlanningInlineDraft | null>(null)
 const visibleListDemandIds = computed(() => visibleListRows.value.map(demand => demand.id))
 const selectedDemands = computed(() => {
   const selectedIds = new Set(selectedDemandIds.value)
@@ -2767,6 +3283,40 @@ const selectedPlanningItems = computed(() => {
   return Array.from(selectedById.values())
 })
 const selectedPlanningItemCount = computed(() => selectedPlanningItems.value.length)
+const planningInlineEditableItems = computed(() =>
+  [...epicItems.value, ...demandItems.value]
+)
+const planningInlineDirtyIds = computed(() =>
+  planningInlineEditableItems.value
+    .filter(item => isPlanningInlineDirty(item))
+    .map(item => item.id)
+)
+const planningPendingEditCount = computed(() => planningInlineDirtyIds.value.length)
+const planningPendingEditLabel = computed(() => {
+  const count = planningPendingEditCount.value
+  return `Salvar ${count.toLocaleString('pt-BR')} ${count === 1 ? 'edição' : 'edições'}`
+})
+const planningStatusModalItem = computed(() =>
+  planningStatusModalItemId.value
+    ? planningInlineEditableItems.value.find(item => item.id === planningStatusModalItemId.value) ?? null
+    : null
+)
+const planningStatusModalDraft = computed(() =>
+  planningStatusModalItem.value ? getPlanningInlineDraft(planningStatusModalItem.value) : null
+)
+const planningStatusModalRequiresDeliveryDate = computed(() => planningStatusModalDraft.value?.status === 'Done')
+const planningStatusModalRequiresBlockedReason = computed(() => planningStatusModalDraft.value?.status === 'Blocked')
+const planningStatusModalRequiresDeprioritization = computed(() => planningStatusModalDraft.value?.status === 'Deprioritized')
+const planningStatusReplacementDemandOptions = computed(() => {
+  const currentItemId = planningStatusModalItem.value?.id
+
+  return dependencyOptions.value
+    .filter(option => option.demandId !== currentItemId)
+    .map(option => ({
+      value: option.demandId,
+      label: `${option.projectName} · ${option.title}`
+    }))
+})
 
 const LIST_COL_MIN = 60
 
@@ -2803,13 +3353,13 @@ const classificationBadgeClass: Record<DemandClassification, string> = {
 const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'priority',       label: 'Prioridade',   defaultWidth: 64, disableFilter: true },
   { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text' },
-  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 96, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
+  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 112, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
   { id: 'kpis',           label: 'KPI',           defaultWidth: 100, disableFilter: true },
   { id: 'products',       label: 'Produtos',      defaultWidth: 148, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
   { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
-  { id: 'conclusion',     label: 'Conclusão',     defaultWidth: 118, disableFilter: true },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'text' },
+  { id: 'conclusion',     label: 'Conclusão',     defaultWidth: 118, disableFilter: true },
   { id: '_actions',       label: '',              defaultWidth: 112, disableFilter: true, disableSorting: true, alignRight: true },
 ]
 
@@ -2948,6 +3498,551 @@ function clearSelectedDemands() {
   queueMicrotask(() => {
     syncListSectionDividers()
   })
+}
+
+function getPlanningItemProjectIds(item: Pick<RoadmapDemand, 'projectId' | 'projectIds'>) {
+  return Array.from(new Set([...(item.projectIds ?? []), ...(item.projectId ? [item.projectId] : [])]))
+}
+
+function getPlanningProductEntries(item: Pick<RoadmapDemand, 'products'>) {
+  const productsMap = new Map<string, string>()
+
+  for (const product of item.products ?? []) {
+    if (!product.productId || !product.name)
+      continue
+
+    if (!productsMap.has(product.productId))
+      productsMap.set(product.productId, product.name)
+  }
+
+  return Array.from(productsMap.entries()).map(([value, label]) => ({ value, label }))
+}
+
+function getPlanningEditableProductOptions(item: Pick<RoadmapDemand, 'projectId' | 'projectIds'>) {
+  const optionsMap = new Map<string, string>()
+
+  for (const projectId of getPlanningItemProjectIds(item)) {
+    const project = projects.value.find(currentProject => currentProject.id === projectId)
+    for (const product of project?.products ?? []) {
+      if (!product.id || !product.name)
+        continue
+
+      if (!optionsMap.has(product.id))
+        optionsMap.set(product.id, product.name)
+    }
+  }
+
+  return Array.from(optionsMap.entries()).map(([value, label]) => ({ value, label }))
+}
+
+function requiresPlanningStatusDetails(status: DemandStatus) {
+  return status === 'Done' || status === 'Blocked' || status === 'Deprioritized'
+}
+
+function clonePlanningInlineDraft(draft: PlanningInlineDraft): PlanningInlineDraft {
+  return {
+    ...draft,
+    productIds: [...draft.productIds],
+    customers: [...draft.customers]
+  }
+}
+
+function createPlanningInlineDraft(item: RoadmapDemand): PlanningInlineDraft {
+  return {
+    title: item.title,
+    status: item.status,
+    classification: item.classification,
+    quarterValue: buildQuarterValue(item.quarterYear, item.quarterNumber),
+    type: item.type,
+    dueDate: item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? ''),
+    hoursInput: item.hours != null ? String(item.hours) : '',
+    productIds: getPlanningProductEntries(item).map(product => product.value),
+    customers: normalizeCustomerList(item.customers),
+    observation: item.observation ?? '',
+    blockedReason: item.blockedReason ?? '',
+    deliveryDate: item.deliveryDate ?? '',
+    deprioritizationReason: item.deprioritizationReason ?? undefined,
+    replacementDemandId: item.replacementDemandId ?? undefined
+  }
+}
+
+function getPlanningInlineDraft(item: RoadmapDemand) {
+  return planningInlineDrafts.value[item.id] ?? createPlanningInlineDraft(item)
+}
+
+function updatePlanningInlineDraft(item: RoadmapDemand, patch: Partial<PlanningInlineDraft>) {
+  planningInlineDrafts.value = {
+    ...planningInlineDrafts.value,
+    [item.id]: {
+      ...getPlanningInlineDraft(item),
+      ...patch
+    }
+  }
+}
+
+function clearPlanningInlineDraft(itemId: string) {
+  const { [itemId]: _removed, ...rest } = planningInlineDrafts.value
+  planningInlineDrafts.value = rest
+
+  if (viewMode.value === 'list' && groupDemandsByEpic.value)
+    schedulePlanningGroupedHeaderSync()
+}
+
+function clearAllPlanningInlineDrafts() {
+  planningInlineDrafts.value = {}
+
+  if (viewMode.value === 'list' && groupDemandsByEpic.value)
+    schedulePlanningGroupedHeaderSync()
+}
+
+function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField) {
+  const epicEditableFields: PlanningEditableField[] = ['title', 'status', 'classification', 'products', 'customers', 'dueDate']
+
+  if (field === 'customers' && item.itemType === 'Epic') {
+    planningCustomerInputs.value = {
+      ...planningCustomerInputs.value,
+      [item.id]: ''
+    }
+
+    activePlanningCell.value = { itemId: item.id, field }
+    return
+  }
+
+  if (item.itemType === 'Epic') {
+    if (!epicEditableFields.includes(field))
+      return
+
+    activePlanningCell.value = { itemId: item.id, field }
+    return
+  }
+
+  if (item.itemType !== 'Demand')
+    return
+
+  if (field === 'customers') {
+    planningCustomerInputs.value = {
+      ...planningCustomerInputs.value,
+      [item.id]: ''
+    }
+  }
+
+  activePlanningCell.value = { itemId: item.id, field }
+}
+
+function deactivatePlanningCell(itemId?: string, field?: PlanningEditableField) {
+  if (!activePlanningCell.value)
+    return
+
+  if (itemId && activePlanningCell.value.itemId !== itemId)
+    return
+
+  if (field && activePlanningCell.value.field !== field)
+    return
+
+  if (activePlanningCell.value.field === 'customers') {
+    const customerItemId = activePlanningCell.value.itemId
+    const { [customerItemId]: _removed, ...rest } = planningCustomerInputs.value
+    planningCustomerInputs.value = rest
+  }
+
+  activePlanningCell.value = null
+}
+
+function handlePlanningPopoverOpenChange(item: RoadmapDemand, field: Extract<PlanningEditableField, 'products' | 'customers'>, open: boolean) {
+  if (open) {
+    activatePlanningCell(item, field)
+    return
+  }
+
+  deactivatePlanningCell(item.id, field)
+}
+
+function isPlanningCellEditing(item: RoadmapDemand, field: PlanningEditableField) {
+  return activePlanningCell.value?.itemId === item.id && activePlanningCell.value?.field === field
+}
+
+function parsePlanningInlineHours(item: RoadmapDemand) {
+  const normalized = getPlanningInlineDraft(item).hoursInput.trim().replace(',', '.')
+  if (!normalized)
+    return undefined
+
+  const parsed = Number(normalized)
+  if (!Number.isFinite(parsed) || parsed < 0)
+    return Number.NaN
+
+  return Number(parsed.toFixed(2))
+}
+
+function isPlanningInlineSaving(itemId: string) {
+  return planningInlineSavingIds.value.includes(itemId)
+}
+
+function getPlanningDraftDisplayItem(item: RoadmapDemand): RoadmapDemand {
+  const draft = planningInlineDrafts.value[item.id]
+  if (!draft)
+    return item
+
+  const isDoneStatus = draft.status === 'Done'
+
+  return {
+    ...item,
+    title: draft.title,
+    classification: draft.classification,
+    type: draft.type,
+    customers: draft.customers,
+    quarterYear: parseQuarterValue(draft.quarterValue).quarterYear,
+    quarterNumber: parseQuarterValue(draft.quarterValue).quarterNumber,
+    quarterLabel: quarterShortLabel(draft.quarterValue),
+    status: draft.status,
+    promisedDate: isDoneStatus ? item.promisedDate : draft.dueDate,
+    deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+  }
+}
+
+function getPlanningDraftProductEntries(item: RoadmapDemand) {
+  const draft = getPlanningInlineDraft(item)
+  const allowedOptions = getPlanningEditableProductOptions(item)
+  const allowedNameById = new Map(allowedOptions.map(option => [option.value, option.label] as const))
+  const currentNameById = new Map(getPlanningProductEntries(item).map(product => [product.value, product.label] as const))
+
+  return draft.productIds
+    .map((productId) => {
+      const label = allowedNameById.get(productId) ?? currentNameById.get(productId)
+      return label ? { value: productId, label } : null
+    })
+    .filter((product): product is { value: string, label: string } => !!product)
+}
+
+function getPlanningDraftProductDisplay(item: RoadmapDemand) {
+  return getAdaptiveInlineListDisplay(
+    getPlanningDraftProductEntries(item).map(product => product.label),
+    getBaseListColPixelWidth('products', 124),
+    ' · '
+  )
+}
+
+function getPlanningDraftCustomerDisplay(item: RoadmapDemand) {
+  return getAdaptiveInlineListDisplay(getPlanningInlineDraft(item).customers, getBaseListColPixelWidth('customers', 110))
+}
+
+function getPlanningCustomerCellDisplay(item: RoadmapDemand) {
+  return getAdaptiveInlineListDisplay(
+    getEffectiveDemandCustomers(item),
+    getBaseListColPixelWidth('customers', 110)
+  )
+}
+
+function addPlanningCustomer(item: RoadmapDemand, customer: string) {
+  const normalized = customer.trim()
+  if (!normalized)
+    return
+
+  const nextCustomers = Array.from(new Set([...getPlanningInlineDraft(item).customers, normalized]))
+  updatePlanningInlineDraft(item, { customers: nextCustomers })
+  planningCustomerInputs.value = {
+    ...planningCustomerInputs.value,
+    [item.id]: ''
+  }
+}
+
+function removePlanningCustomer(item: RoadmapDemand, customer: string) {
+  updatePlanningInlineDraft(item, {
+    customers: getPlanningInlineDraft(item).customers.filter(currentCustomer => currentCustomer !== customer)
+  })
+}
+
+function getFilteredPlanningCustomerSuggestions(item: RoadmapDemand) {
+  const query = planningCustomerInputs.value[item.id]?.trim().toLowerCase() ?? ''
+  if (!query)
+    return []
+
+  const selected = new Set(getPlanningInlineDraft(item).customers.map(customer => customer.toLowerCase()))
+
+  return customerSuggestions.value
+    .filter(customer => !selected.has(customer.toLowerCase()))
+    .filter(customer => customer.toLowerCase().includes(query))
+    .slice(0, 6)
+}
+
+function schedulePlanningGroupedHeaderSync() {
+  requestAnimationFrame(() => syncListSectionDividers())
+}
+
+function togglePlanningDraftProduct(item: RoadmapDemand, productId: string, checked: boolean) {
+  const allowedProductIds = new Set(getPlanningEditableProductOptions(item).map(product => product.value))
+  const currentSelection = new Set(getPlanningInlineDraft(item).productIds.filter(currentProductId => allowedProductIds.has(currentProductId)))
+
+  if (checked)
+    currentSelection.add(productId)
+  else
+    currentSelection.delete(productId)
+
+  updatePlanningInlineDraft(item, { productIds: Array.from(currentSelection) })
+}
+
+function getPlanningEditableCellButtonClass(item: RoadmapDemand) {
+  return isPlanningInlineDirty(item)
+    ? 'border-primary/40 ring-1 ring-primary/10 hover:border-primary/60 hover:bg-primary/5'
+    : 'border-transparent text-highlighted hover:border-primary/30 hover:bg-elevated'
+}
+
+function isPlanningInlineDirty(item: RoadmapDemand) {
+  const draft = planningInlineDrafts.value[item.id]
+  if (!draft)
+    return false
+
+  const originalDueDate = item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? '')
+  const hours = parsePlanningInlineHours(item)
+
+  if (Number.isNaN(hours))
+    return true
+
+  return draft.status !== item.status
+    || draft.title.trim() !== item.title.trim()
+    || draft.classification !== item.classification
+    || draft.quarterValue !== buildQuarterValue(item.quarterYear, item.quarterNumber)
+    || draft.type !== item.type
+    || draft.dueDate !== originalDueDate
+    || (draft.status === 'Done' && draft.deliveryDate !== (item.deliveryDate ?? ''))
+    || (draft.status === 'Blocked' && draft.blockedReason.trim() !== (item.blockedReason ?? '').trim())
+    || (draft.status === 'Deprioritized' && draft.observation.trim() !== (item.observation ?? '').trim())
+    || (draft.status === 'Deprioritized' && draft.deprioritizationReason !== item.deprioritizationReason)
+    || (draft.status === 'Deprioritized' && draft.replacementDemandId !== item.replacementDemandId)
+    || draft.productIds.slice().sort().join('|') !== getPlanningProductEntries(item).map(product => product.value).sort().join('|')
+    || draft.customers.slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|') !== normalizeCustomerList(item.customers).slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|')
+    || hours !== item.hours
+}
+
+function closePlanningStatusModal(options?: { restoreSnapshot?: boolean }) {
+  const restoreSnapshot = options?.restoreSnapshot ?? false
+  const item = planningStatusModalItem.value
+  const snapshot = planningStatusModalSnapshot.value
+
+  if (restoreSnapshot && item && snapshot) {
+    planningInlineDrafts.value = {
+      ...planningInlineDrafts.value,
+      [item.id]: clonePlanningInlineDraft(snapshot)
+    }
+
+    if (viewMode.value === 'list' && groupDemandsByEpic.value)
+      schedulePlanningGroupedHeaderSync()
+  }
+
+  planningStatusModalOpen.value = false
+  planningStatusModalItemId.value = null
+  planningStatusModalSnapshot.value = null
+}
+
+function openPlanningStatusModal(item: RoadmapDemand, status: Extract<DemandStatus, 'Done' | 'Blocked' | 'Deprioritized'>) {
+  const draft = getPlanningInlineDraft(item)
+
+  planningStatusModalSnapshot.value = clonePlanningInlineDraft(draft)
+  planningStatusModalItemId.value = item.id
+  planningStatusModalOpen.value = true
+
+  updatePlanningInlineDraft(item, {
+    status,
+    deliveryDate: status === 'Done' ? (draft.deliveryDate || item.deliveryDate || '') : draft.deliveryDate,
+    blockedReason: status === 'Blocked' ? draft.blockedReason : '',
+    deprioritizationReason: status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
+    replacementDemandId: status === 'Deprioritized' ? draft.replacementDemandId : undefined,
+    observation: status === 'Deprioritized' ? draft.observation : draft.observation
+  })
+}
+
+function handlePlanningStatusChange(item: RoadmapDemand, nextStatus: DemandStatus) {
+  const currentDraft = getPlanningInlineDraft(item)
+
+  if (nextStatus === currentDraft.status && !requiresPlanningStatusDetails(nextStatus)) {
+    deactivatePlanningCell(item.id, 'status')
+    return
+  }
+
+  if (requiresPlanningStatusDetails(nextStatus)) {
+    openPlanningStatusModal(item, nextStatus)
+    deactivatePlanningCell(item.id, 'status')
+    return
+  }
+
+  updatePlanningInlineDraft(item, {
+    status: nextStatus,
+    deliveryDate: '',
+    blockedReason: '',
+    deprioritizationReason: undefined,
+    replacementDemandId: undefined,
+    observation: ''
+  })
+  deactivatePlanningCell(item.id, 'status')
+}
+
+function confirmPlanningStatusModal() {
+  const item = planningStatusModalItem.value
+  const draft = planningStatusModalDraft.value
+
+  if (!item || !draft)
+    return
+
+  if (draft.status === 'Done' && !draft.deliveryDate) {
+    toast.add({ title: 'Informe a data de entrega', color: 'warning' })
+    return
+  }
+
+  if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
+    toast.add({ title: 'Informe o motivo do impedimento', color: 'warning' })
+    return
+  }
+
+  if (draft.status === 'Deprioritized') {
+    if (!draft.deprioritizationReason) {
+      toast.add({ title: 'Selecione o motivo da despriorização', color: 'warning' })
+      return
+    }
+
+    if (!draft.observation.trim()) {
+      toast.add({ title: 'Informe a observação da despriorização', color: 'warning' })
+      return
+    }
+  }
+
+  closePlanningStatusModal()
+}
+
+async function discardAllPlanningInlineEdits() {
+  if (isSavingAllPlanningInlineEdits.value || planningInlineSavingIds.value.length)
+    return
+
+  const discardedChanges = planningPendingEditCount.value
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  deactivatePlanningCell()
+  clearAllPlanningInlineDrafts()
+
+  if (viewMode.value === 'list' && groupDemandsByEpic.value) {
+    await nextTick()
+    syncListSectionDividers()
+  }
+
+  if (discardedChanges > 0) {
+    toast.add({
+      title: 'Edição cancelada',
+      description: `${discardedChanges.toLocaleString('pt-BR')} alteração(ões) descartada(s).`,
+      color: 'warning'
+    })
+  }
+}
+
+async function savePlanningInline(
+  item: RoadmapDemand,
+  options?: { reloadAfterSave?: boolean, showSuccessToast?: boolean }
+) {
+  if (!isPlanningInlineDirty(item) || isPlanningInlineSaving(item.id))
+    return true
+
+  const reloadAfterSave = options?.reloadAfterSave ?? true
+  const showSuccessToast = options?.showSuccessToast ?? true
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  const draft = getPlanningInlineDraft(item)
+  const hours = parsePlanningInlineHours(item)
+  const nextQuarter = parseQuarterValue(draft.quarterValue)
+
+  if (Number.isNaN(hours)) {
+    toast.add({
+      title: 'Horas inválidas',
+      description: 'Informe um valor numérico maior ou igual a zero.',
+      color: 'warning'
+    })
+    return false
+  }
+
+  if (draft.status === 'Done' && !draft.deliveryDate) {
+    toast.add({ title: 'Informe a data de entrega', color: 'warning' })
+    return false
+  }
+
+  if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
+    toast.add({ title: 'Informe o motivo do impedimento', color: 'warning' })
+    return false
+  }
+
+  if (draft.status === 'Deprioritized' && (!draft.deprioritizationReason || !draft.observation.trim())) {
+    toast.add({
+      title: 'Preencha os campos da despriorização',
+      description: 'Informe o motivo e a observação para concluir a alteração.',
+      color: 'warning'
+    })
+    return false
+  }
+
+  const isDoneStatus = draft.status === 'Done'
+
+  try {
+    planningInlineSavingIds.value = [...planningInlineSavingIds.value, item.id]
+
+    await roadmapStore.updateDemand(item.id, buildDemandFormData(item, {
+      title: draft.title.trim() || item.title,
+      quarterYear: nextQuarter.quarterYear,
+      quarterNumber: nextQuarter.quarterNumber,
+      status: draft.status,
+      classification: draft.classification,
+      type: draft.type,
+      productIds: draft.productIds,
+      customers: draft.customers,
+      observation: draft.status === 'Deprioritized' ? draft.observation : '',
+      blockedReason: draft.status === 'Blocked' ? draft.blockedReason : '',
+      deprioritizationReason: draft.status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
+      replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
+      hours,
+      promisedDate: isDoneStatus ? (item.promisedDate ?? '') : (isBacklogDemand(item) ? '' : draft.dueDate),
+      deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+    }))
+
+    clearPlanningInlineDraft(item.id)
+    if (reloadAfterSave)
+      await refreshListPresentation(listScrollTop, listScrollLeft)
+
+    if (showSuccessToast)
+      toast.add({ title: 'Item atualizado', color: 'success' })
+
+    return true
+  }
+  catch {
+    return false
+  }
+  finally {
+    planningInlineSavingIds.value = planningInlineSavingIds.value.filter(currentId => currentId !== item.id)
+  }
+}
+
+async function saveAllPlanningInlineEdits() {
+  if (!planningPendingEditCount.value || isSavingAllPlanningInlineEdits.value)
+    return
+
+  const dirtyIds = new Set(planningInlineDirtyIds.value)
+  const itemsToSave = planningInlineEditableItems.value.filter(item => dirtyIds.has(item.id))
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+  try {
+    isSavingAllPlanningInlineEdits.value = true
+
+    for (const item of itemsToSave) {
+      const saved = await savePlanningInline(item, { reloadAfterSave: false, showSuccessToast: false })
+      if (!saved)
+        return
+    }
+
+    await refreshListPresentation(listScrollTop, listScrollLeft)
+    deactivatePlanningCell()
+    toast.add({
+      title: 'Edições salvas',
+      description: `${itemsToSave.length.toLocaleString('pt-BR')} item(ns) atualizado(s).`,
+      color: 'success'
+    })
+  }
+  finally {
+    isSavingAllPlanningInlineEdits.value = false
+  }
 }
 
 function buildBulkEditOverrides(demand: RoadmapDemand, changes: BulkEditRoadmapItemsData): Partial<DemandFormData> {
@@ -3129,7 +4224,7 @@ function renderIssueTrigger(issueLinks: Array<{ key: string, url?: string }>) {
       rel: 'noopener noreferrer',
       class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
     }, [
-      h(UIconComp, { name: 'i-lucide-link-2', class: 'h-3 w-3' })
+      h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })
     ])
   }
 
@@ -3139,8 +4234,7 @@ function renderIssueTrigger(issueLinks: Array<{ key: string, url?: string }>) {
         type: 'button',
         class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
       }, [
-        h(UIconComp, { name: 'i-lucide-link-2', class: 'h-3 w-3' }),
-        ...(issueLinks.length > 1 ? [h('span', String(issueLinks.length))] : [])
+        h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })
       ])
     ],
     content: () => [
@@ -3169,7 +4263,7 @@ function createIssueTriggerElement(issueLinks: Array<{ key: string, url?: string
     anchor.target = '_blank'
     anchor.rel = 'noopener noreferrer'
     anchor.className = 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40'
-    anchor.appendChild(createSvgIcon(['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07L11.8 5.13', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07L12.2 18.87'], 'h-3 w-3'))
+    anchor.appendChild(createFilledSvgIcon(['M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0Z'], 'h-3 w-3'))
     return anchor
   }
 
@@ -3178,12 +4272,7 @@ function createIssueTriggerElement(issueLinks: Array<{ key: string, url?: string
 
   const summary = document.createElement('summary')
   summary.className = 'inline-flex h-5 list-none items-center gap-1 rounded-md border border-default bg-default px-1.5 text-[10px] font-medium text-primary transition-colors hover:border-primary/40 cursor-pointer'
-  summary.appendChild(createSvgIcon(['M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07L11.8 5.13', 'M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07L12.2 18.87'], 'h-3 w-3'))
-  if (issueLinks.length > 1) {
-    const count = document.createElement('span')
-    count.textContent = String(issueLinks.length)
-    summary.appendChild(count)
-  }
+  summary.appendChild(createFilledSvgIcon(['M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0Z'], 'h-3 w-3'))
   details.appendChild(summary)
 
   const panel = document.createElement('div')
@@ -3276,7 +4365,7 @@ function renderCustomerTrigger(customers: string[], columnWidth: number) {
     default: () => [
       h('button', {
         type: 'button',
-        class: 'inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted transition-colors hover:border-primary/40',
+        class: 'inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[11px] text-muted transition-colors hover:text-highlighted',
         title: display.fullLabel
       }, [
         h('span', { class: 'max-w-[140px] truncate' }, display.previewLabel),
@@ -3284,8 +4373,8 @@ function renderCustomerTrigger(customers: string[], columnWidth: number) {
       ])
     ],
     content: () => [
-      h('div', { class: 'flex min-w-44 flex-col gap-1 p-1' }, display.items.map(customer => h('span', {
-        class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted'
+      h('div', { class: 'flex min-w-44 flex-col gap-1 p-2' }, display.items.map(customer => h('span', {
+        class: 'text-xs text-highlighted'
       }, customer)))
     ]
   })
@@ -3308,7 +4397,7 @@ function createCustomerTriggerElement(customers: string[], columnWidth: number) 
   details.className = 'relative inline-flex max-w-full'
 
   const summary = document.createElement('summary')
-  summary.className = 'inline-flex max-w-full list-none items-center gap-1 rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted transition-colors hover:border-primary/40 cursor-pointer'
+  summary.className = 'inline-flex max-w-full list-none items-center gap-1 truncate bg-transparent p-0 text-[11px] text-muted transition-colors hover:text-highlighted cursor-pointer'
   summary.title = display.fullLabel
 
   const previewLabel = document.createElement('span')
@@ -3323,11 +4412,11 @@ function createCustomerTriggerElement(customers: string[], columnWidth: number) 
   details.appendChild(summary)
 
   const panel = document.createElement('div')
-  panel.className = 'absolute left-0 top-full z-20 mt-2 flex min-w-44 flex-col gap-1 rounded-lg border border-default bg-default p-1 shadow-lg'
+  panel.className = 'absolute left-0 top-full z-20 mt-2 flex min-w-44 flex-col gap-1 rounded-lg border border-default bg-default p-2 shadow-lg'
 
   display.items.forEach((customer) => {
     const item = document.createElement('span')
-    item.className = 'inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted'
+    item.className = 'text-xs text-highlighted'
     item.textContent = customer
     panel.appendChild(item)
   })
@@ -3352,6 +4441,11 @@ function startListResize(colId: string, e: MouseEvent) {
 }
 function getBaseListColPixelWidth(colId: string, fallback: number): number {
   return listColumnSizing.value[colId] ?? fallback
+}
+
+function getPlanningCustomerEditorPixelWidth(): number {
+  const columnWidth = getBaseListColPixelWidth('customers', 110)
+  return Math.max(240, Math.min(352, columnWidth + 88))
 }
 
 const listBaseWidth = computed(() => listOrderedCols.value.reduce((total, col) => {
@@ -3431,38 +4525,33 @@ const UPopoverComp = resolveComponent('UPopover')
 const UInputComp = resolveComponent('UInput')
 const USelectComp = resolveComponent('USelect')
 
-function renderDependencyBadge(dependency: DemandDependency) {
-  return h('button', {
-    type: 'button',
-    class: 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-900/50',
-    title: formatDependencySummaryLine(dependency),
-    onClick: () => openDependencyDemand(dependency)
-  }, [
-    h(UIconComp, { name: 'i-lucide-link', class: 'h-3 w-3 shrink-0' }),
-    h('span', { class: 'min-w-0 max-w-[14rem] truncate' }, formatDependencyBadgeLabel('Bloqueia', dependency))
-  ])
-}
-
-function renderDependsOnBadge(demand: RoadmapDemand, dependency: DemandDependency) {
-  const inconsistent = isDependencyInconsistent(demand, dependency)
+function renderDependencyIcon(dependency: DemandDependency, relation: 'dependsOn' | 'dependedOnBy', demand?: RoadmapDemand) {
+  const inconsistent = relation === 'dependsOn' && !!demand && isDependencyInconsistent(demand, dependency)
+  const title = relation === 'dependsOn'
+    ? `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand!.quarterLabel}, ou sem priorização.` : ''}`
+    : formatDependencySummaryLine(dependency)
 
   return h('button', {
     type: 'button',
     class: inconsistent
-      ? 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300 dark:hover:border-red-700 dark:hover:bg-red-900/50'
-      : 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-900/50',
-    title: `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`,
+      ? 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-200 bg-red-50 text-red-600 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400'
+      : 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-200 bg-red-50 text-red-600 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400',
+    title,
     onClick: () => openDependencyDemand(dependency)
   }, [
-    h(UIconComp, { name: 'i-lucide-link', class: 'h-3 w-3 shrink-0' }),
-    h('span', { class: 'min-w-0 max-w-[14rem] truncate' }, formatDependencyBadgeLabel('Bloqueado por', dependency)),
-    ...(inconsistent
-      ? [
-          h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3 w-3 shrink-0' }),
-          h('span', { class: 'shrink-0 font-semibold' }, 'Inconsistente')
-        ]
-      : [])
+    h(UIconComp, {
+      name: relation === 'dependsOn' ? 'i-lucide-lock' : 'i-lucide-lock-open',
+      class: 'h-2.5 w-2.5'
+    })
   ])
+}
+
+function renderDependencyBadge(dependency: DemandDependency) {
+  return renderDependencyIcon(dependency, 'dependedOnBy')
+}
+
+function renderDependsOnBadge(demand: RoadmapDemand, dependency: DemandDependency) {
+  return renderDependencyIcon(dependency, 'dependsOn', demand)
 }
 
 const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
@@ -3480,12 +4569,12 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (isCollapsedRepresentative(demand))
         return h('div', { class: 'text-xs text-muted' }, '—')
 
-      return h('div', { class: 'flex flex-col items-center justify-center gap-1' }, [
+      return h('div', { class: 'flex flex-col items-center justify-center gap-0.5' }, [
         h('div', { class: 'flex items-center justify-center gap-1.5' }, [
           h('span', {
-            class: 'list-priority-handle inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
+            class: 'list-priority-handle inline-flex h-5 w-5 shrink-0 items-center justify-center rounded border border-default bg-elevated text-muted transition-colors hover:border-primary/40 hover:text-highlighted cursor-grab active:cursor-grabbing',
             title: 'Arrastar para repriorizar'
-          }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-3.5 w-3.5' })]),
+          }, [h(UIconComp, { name: 'i-lucide-grip-vertical', class: 'h-3 w-3' })]),
           h('label', { class: 'flex shrink-0 items-center justify-center' }, [
             h('input', {
               type: 'checkbox',
@@ -3496,7 +4585,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             })
           ])
         ]),
-        h('span', { class: 'text-[10px] font-medium text-muted' }, String(priorityRankByDemandId.value[demand.id] ?? ''))
+        h('span', { class: 'text-[9px] font-medium text-muted' }, String(priorityRankByDemandId.value[demand.id] ?? ''))
       ])
     }
   },
@@ -3524,97 +4613,99 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     cell: ({ row }) => {
       const d = row.original
       const isDeprioritized = d.status === 'Deprioritized'
+      const displayItem = getPlanningDraftDisplayItem(d)
       const textNodes = []
       const issueLinks = getDisplayIssueLinks(d)
       if (isCollapsedRepresentative(d))
         return h('span', { class: 'hidden' })
-      if (!groupDemandsByEpic.value && (d.roadmapTitle || d.epicTitle)) {
-        const hierarchyNodes = []
-
-        if (d.roadmapTitle) {
-          hierarchyNodes.push(h('div', { class: 'mb-1 flex min-w-0 items-center gap-1.5' }, [
-            h(UIconComp, { name: 'i-lucide-map', class: 'h-3.5 w-3.5 shrink-0 text-primary' }),
-            h('span', {
-              class: 'min-w-0 flex-1 truncate text-[11px] text-muted',
-              title: d.roadmapTitle
-            }, d.roadmapTitle)
-          ]))
-        }
-
-        if (d.epicTitle) {
-          const epic = d.epicId ? itemsById.value.get(d.epicId) : null
-          const isEpicDeprioritized = epic?.itemType === 'Epic' && epic.status === 'Deprioritized'
-          hierarchyNodes.push(h('div', { class: 'mb-1 flex min-w-0 items-center gap-1.5' }, [
+      if (!groupDemandsByEpic.value && d.epicTitle) {
+        const epic = d.epicId ? itemsById.value.get(d.epicId) : null
+        const isEpicDeprioritized = epic?.itemType === 'Epic' && epic.status === 'Deprioritized'
+        const epicIssueLinks = epic?.itemType === 'Epic' ? getDisplayIssueLinks(epic) : []
+        textNodes.push(
+          h('div', { class: 'mb-0.5 flex min-w-0 items-center gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-star', class: 'h-3.5 w-3.5 shrink-0 text-amber-500' }),
             h('span', {
-              class: `min-w-0 flex-1 truncate text-[11px] ${isEpicDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`,
+              class: `min-w-0 flex-1 truncate text-[10px] ${isEpicDeprioritized ? 'line-through text-muted' : 'text-muted'}`,
               title: d.epicTitle
-            }, d.epicTitle)
-          ]))
-        }
-
-        textNodes.push(...hierarchyNodes)
+            }, d.epicTitle),
+            ...(renderIssueTrigger(epicIssueLinks)
+              ? [renderIssueTrigger(epicIssueLinks)!]
+              : [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' })])
+          ])
+        )
       }
       if (groupDemandsByEpic.value && d.epicId) {
-        const dependencyIndentClass = 'ml-5'
         const groupedContentNodes = [
           h('div', { class: 'flex items-start gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-list-todo', class: 'mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600' }),
             h('div', { class: 'min-w-0 flex-1' }, [
               h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
-                h('p', { class: `min-w-0 truncate text-[12px] font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title),
-                ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [])
+                isPlanningCellEditing(d, 'title')
+                  ? h(UInputComp, {
+                      modelValue: getPlanningInlineDraft(d).title,
+                      size: 'xs',
+                      autofocus: true,
+                      class: 'min-w-0 flex-1',
+                      disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
+                      'onUpdate:modelValue': (value?: string | number) => updatePlanningInlineDraft(d, { title: String(value ?? '') }),
+                      onBlur: () => deactivatePlanningCell(d.id, 'title'),
+                      onKeydown: (event: KeyboardEvent) => {
+                        if (event.key === 'Escape' || event.key === 'Enter')
+                          deactivatePlanningCell(d.id, 'title')
+                      }
+                    })
+                  : h('button', {
+                      type: 'button',
+                      class: `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
+                      title: d.description || undefined,
+                      disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
+                      onClick: () => activatePlanningCell(d, 'title')
+                    }, displayItem.title),
+                ...d.dependsOn.map(dep => renderDependencyIcon(dep, 'dependsOn', d)),
+                ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
+                ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
+                  h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' })
+                ])
               ])
             ])
           ])
         ]
 
-        if (d.dependsOn.length) {
-          groupedContentNodes.push(
-            h('div', { class: `mt-1 flex flex-wrap gap-1 ${dependencyIndentClass}` }, [
-              ...d.dependsOn.slice(0, 2).map(dependency => renderDependsOnBadge(d, dependency)),
-              ...(d.dependsOn.length > 2
-                ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
-                : [])
-            ])
-          )
-        }
-
-        if (d.dependedOnBy.length) {
-          groupedContentNodes.push(
-            h('div', { class: `mt-1 flex flex-wrap gap-1 ${dependencyIndentClass}` }, [
-              ...d.dependedOnBy.slice(0, 2).map(dependency => renderDependencyBadge(dependency)),
-              ...(d.dependedOnBy.length > 2
-                ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
-                : [])
-            ])
-          )
-        }
-
-        textNodes.push(h('div', { class: 'pl-8' }, groupedContentNodes))
+        textNodes.push(h('div', { class: 'pl-5' }, groupedContentNodes))
       }
       else {
         textNodes.push(h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
-          h('p', { class: `min-w-0 flex-1 truncate font-medium ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'}`, title: d.description || undefined }, d.title),
-          ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [])
+          h(UIconComp, { name: 'i-lucide-list-todo', class: 'h-3.5 w-3.5 shrink-0 text-sky-600' }),
+          isPlanningCellEditing(d, 'title')
+            ? h(UInputComp, {
+                modelValue: getPlanningInlineDraft(d).title,
+                size: 'xs',
+                autofocus: true,
+                class: 'min-w-0 flex-1',
+                disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
+                'onUpdate:modelValue': (value?: string | number) => updatePlanningInlineDraft(d, { title: String(value ?? '') }),
+                onBlur: () => deactivatePlanningCell(d.id, 'title'),
+                onKeydown: (event: KeyboardEvent) => {
+                  if (event.key === 'Escape' || event.key === 'Enter')
+                    deactivatePlanningCell(d.id, 'title')
+                }
+              })
+            : h('button', {
+                type: 'button',
+                class: `min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
+                title: d.description || undefined,
+                disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
+                onClick: () => activatePlanningCell(d, 'title')
+              }, displayItem.title),
+          ...d.dependsOn.map(dep => renderDependencyIcon(dep, 'dependsOn', d)),
+          ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
+          ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
+            !issueLinks.length ? h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' }) : null
+          ].filter(Boolean))
         ]))
       }
 
-      if (!groupDemandsByEpic.value || !d.epicId) {
-        const relationshipNodes = [
-          ...d.dependsOn.slice(0, 2).map(dependency => renderDependsOnBadge(d, dependency)),
-          ...(d.dependsOn.length > 2
-            ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependsOn.length - 2}`)]
-            : []),
-          ...d.dependedOnBy.slice(0, 2).map(dependency => renderDependencyBadge(dependency)),
-          ...(d.dependedOnBy.length > 2
-            ? [h('span', { class: 'text-[11px] text-muted' }, `+${d.dependedOnBy.length - 2}`)]
-            : [])
-        ]
-
-        if (relationshipNodes.length)
-          textNodes.push(h('div', { class: 'mt-1 flex flex-wrap items-center gap-1' }, relationshipNodes))
-      }
       return h('div', { class: 'min-w-0' }, textNodes)
     },
   },
@@ -3671,22 +4762,73 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.includes(buildQuarterValue(row.original.quarterYear, row.original.quarterNumber))
     },
-    size: 96,
-    meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 96) }), th: () => ({ width: listColWidth('quarterLabel', 96) }) } },
+    size: 112,
+    meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 112) }), th: () => ({ width: listColWidth('quarterLabel', 112) }) } },
     cell: ({ row }) => {
       const demand = row.original
       if (isCollapsedRepresentative(demand))
         return h('span', { class: 'text-xs text-muted' }, '—')
 
-      const quarterNode = isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
+      const displayItem = getPlanningDraftDisplayItem(demand)
+      const quarterNode = isSpecialBacklogQuarter(displayItem.quarterYear, displayItem.quarterNumber)
         ? h('span', {
-          class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
-        }, planningQuarterDisplayLabel(demand))
-        : h('span', { class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-mono text-highlighted' }, planningQuarterDisplayLabel(demand))
+          class: 'text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
+        }, planningQuarterDisplayLabel(displayItem))
+        : h('span', { class: 'text-[10px] font-mono text-highlighted' }, planningQuarterDisplayLabel(displayItem))
+
+      if (isPlanningCellEditing(demand, 'quarterType')) {
+        return h('div', {
+          class: 'relative z-20 flex min-w-0 flex-col gap-1',
+          style: {
+            width: '18rem',
+            maxWidth: '18rem'
+          }
+        }, [
+          h(USelectComp, {
+            modelValue: getPlanningInlineDraft(demand).quarterValue,
+            items: planningQuarterOptions.value,
+            valueKey: 'value',
+            optionAttribute: 'label',
+            size: 'xs',
+            class: 'w-full',
+            disabled: isPlanningInlineSaving(demand.id) || isSavingAllPlanningInlineEdits.value,
+            'onUpdate:modelValue': (value?: string) => {
+              if (value)
+                updatePlanningInlineDraft(demand, { quarterValue: value })
+            }
+          }),
+          h(USelectComp, {
+            modelValue: getPlanningInlineDraft(demand).type,
+            items: [
+              { label: 'Planejado', value: 'Planned' },
+              { label: 'Transbordo', value: 'Spillover' },
+              { label: 'Não Planejado', value: 'Unplanned' },
+              { label: 'Adicional', value: 'Additional' }
+            ],
+            valueKey: 'value',
+            optionAttribute: 'label',
+            size: 'xs',
+            class: 'w-full',
+            disabled: isPlanningInlineSaving(demand.id) || isSavingAllPlanningInlineEdits.value,
+            'onUpdate:modelValue': (value?: DemandType) => {
+              if (value)
+                updatePlanningInlineDraft(demand, { type: value })
+            },
+            onBlur: () => deactivatePlanningCell(demand.id, 'quarterType')
+          })
+        ])
+      }
 
       return h('div', { class: 'flex min-w-0 flex-col gap-0.5' }, [
-        quarterNode,
-        h('span', { class: 'text-[11px] text-muted' }, typeLabels[demand.type])
+        h('button', {
+          type: 'button',
+          class: `flex min-w-0 flex-col items-start gap-0.5 rounded-md border px-1 py-0.5 text-left transition-colors ${getPlanningEditableCellButtonClass(demand)}`,
+          disabled: isPlanningInlineSaving(demand.id) || isSavingAllPlanningInlineEdits.value,
+          onClick: () => activatePlanningCell(demand, 'quarterType')
+        }, [
+          quarterNode,
+          h('span', { class: `whitespace-nowrap text-[10px] font-medium ${typeColors[getPlanningInlineDraft(demand).type]}` }, typeLabels[getPlanningInlineDraft(demand).type])
+        ])
       ])
     },
   },
@@ -3704,16 +4846,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     meta: { style: { td: () => ({ width: listColWidth('status', 124) }), th: () => ({ width: listColWidth('status', 124) }) } },
   },
   {
-    id: 'conclusion',
-    header: 'Conclusão',
-    accessorFn: row => getDisplayedConclusionDate(row) ?? '',
-    enableSorting: true,
-    sortingFn: withListGroupSorting((left, right) => (getDisplayedConclusionDate(left) ?? '').localeCompare(getDisplayedConclusionDate(right) ?? '', 'pt-BR')),
-    enableColumnFilter: false,
-    size: 118,
-    meta: { style: { td: () => ({ width: listColWidth('conclusion', 118) }), th: () => ({ width: listColWidth('conclusion', 118) }) } },
-  },
-  {
     accessorKey: 'products',
     header: 'Produtos',
     enableSorting: false,
@@ -3724,22 +4856,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     },
     size: 124,
     meta: { style: { td: () => ({ width: listColWidth('products', 124) }), th: () => ({ width: listColWidth('products', 124) }) } },
-    cell: ({ row }) => {
-      if (isCollapsedRepresentative(row.original))
-        return h('span', { class: 'text-xs text-muted' }, '—')
-
-      const prods = row.original.products
-      if (!prods.length) return h('span', { class: 'text-xs text-muted' }, '—')
-      return h('div', { class: 'flex flex-wrap gap-1' },
-        prods.slice(0, 2).map(p => h('span', {
-          class: 'inline-flex items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[10px] text-highlighted'
-        }, p.name)).concat(
-          prods.length > 2
-            ? [h('span', { class: 'text-[11px] text-muted' }, `+${prods.length - 2}`)]
-            : []
-        )
-      )
-    },
   },
   {
     accessorKey: 'customers',
@@ -3765,6 +4881,16 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     },
   },
   {
+    id: 'conclusion',
+    header: 'Conclusão',
+    accessorFn: row => getDisplayedConclusionDate(row) ?? '',
+    enableSorting: true,
+    sortingFn: withListGroupSorting((left, right) => (getDisplayedConclusionDate(left) ?? '').localeCompare(getDisplayedConclusionDate(right) ?? '', 'pt-BR')),
+    enableColumnFilter: false,
+    size: 118,
+    meta: { style: { td: () => ({ width: listColWidth('conclusion', 118) }), th: () => ({ width: listColWidth('conclusion', 118) }) } },
+  },
+  {
     accessorKey: 'hours',
     header: 'Hrs',
     enableSorting: true,
@@ -3772,19 +4898,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableColumnFilter: false,
     size: 60,
     meta: { class: { td: 'text-right' }, style: { td: () => ({ width: listColWidth('hours', 60) }), th: () => ({ width: listColWidth('hours', 60) }) } },
-    cell: ({ row }) => {
-      const demand = row.original
-      if (isCollapsedRepresentative(demand))
-        return h('span', { class: 'text-xs text-muted' }, '—')
-
-      return isDemandEstimated(demand)
-        ? h('span', {
-          class: 'inline-flex items-center rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold text-highlighted'
-        }, `${demand.hours}h`)
-        : h('span', {
-          class: 'inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-        }, '0h')
-    },
   },
   {
     id: '_actions',
@@ -4281,9 +5394,9 @@ watch(activeDemandKpiId, async (value) => {
         </UButton>
       </div>
 
-      <div class="mt-3 overflow-hidden rounded-xl border border-default">
-        <div class="overflow-hidden bg-elevated/30" :style="{ transform: `translateX(-${listHeaderScrollLeft}px)` }">
-          <table class="w-full table-fixed border-collapse" :style="{ width: listTableWidth }">
+      <div class="mt-3 overflow-visible rounded-xl border border-default bg-default shadow-sm">
+        <div class="sticky top-14 z-20 overflow-hidden rounded-t-xl border-b border-default bg-elevated/95 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-elevated/85 md:top-0">
+          <table class="w-full table-fixed border-collapse" :style="{ width: listTableWidth, transform: `translateX(-${listHeaderScrollLeft}px)` }">
             <thead>
               <tr ref="listHeaderRowRef">
                 <th
@@ -4292,7 +5405,7 @@ watch(activeDemandKpiId, async (value) => {
                   class="relative border-b border-default bg-elevated/40 text-left align-top"
                   :style="{ width: listColWidth(col.id, col.defaultWidth) }"
                 >
-                  <div class="flex items-center gap-1 px-3 py-2 text-xs font-semibold text-muted">
+                  <div class="flex items-center gap-1 px-3 py-1 text-xs font-semibold text-muted">
                     <button
                       v-if="!col.disableSorting"
                       type="button"
@@ -4323,7 +5436,7 @@ watch(activeDemandKpiId, async (value) => {
                 <th
                   v-for="col in listOrderedCols"
                   :key="`${col.id}-filter`"
-                  class="border-b border-default bg-elevated/35 px-3 py-2 align-top"
+                  class="border-b border-default bg-elevated/35 px-3 py-1 align-top"
                   :style="{ width: listColWidth(col.id, col.defaultWidth) }"
                 >
                   <input
@@ -4386,8 +5499,6 @@ watch(activeDemandKpiId, async (value) => {
             </thead>
           </table>
         </div>
-      </div>
-
         <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'" @scroll="syncListHeaderScroll">
           <div ref="listTableRootRef" :style="{ width: listTableWidth }">
             <UTable
@@ -4401,51 +5512,148 @@ watch(activeDemandKpiId, async (value) => {
               :columns="listTanstackColumns"
               :get-row-id="(row: RoadmapDemand) => row.id"
               :column-sizing-options="{ enableColumnResizing: true, columnResizeMode: 'onChange' }"
-              :ui="{ base: 'w-full table-fixed', thead: 'hidden', td: 'border-b border-default py-2.5 align-top overflow-hidden' }"
+              :ui="{ base: 'w-full table-fixed', thead: 'hidden', td: 'border-b border-default px-3 py-0.5 align-top overflow-hidden' }"
             >
               <template #status-cell="{ row }">
                 <div
                   class="flex flex-col gap-1"
-                  :title="getDemandNotesTooltip(row.original) || getDisplayedDemandStatus(row.original).label"
+                  :title="getDemandNotesTooltip(getPlanningDraftDisplayItem(row.original)) || getDisplayedDemandStatus(getPlanningDraftDisplayItem(row.original)).label"
                 >
                   <template v-if="!isCollapsedRepresentative(row.original)">
-                    <div class="flex items-center gap-1.5">
-                    <span
-                      class="inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium"
-                      :class="getStatusBadgeClass(row.original.status)"
-                    >
-                      {{ getDisplayedDemandStatus(row.original).label }}
-                    </span>
-                    <span
-                      v-if="row.original.status === 'Blocked'"
-                      class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
-                    >
-                      <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
-                    </span>
-                    <span
-                      v-else-if="getDemandNotesTooltip(row.original)"
-                      class="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                    >
-                      <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
-                    </span>
+                    <USelect
+                      v-if="isPlanningCellEditing(row.original, 'status')"
+                      :model-value="getPlanningInlineDraft(row.original).status"
+                      :items="STATUS_SELECT_OPTIONS"
+                      value-key="value"
+                      option-attribute="label"
+                      size="xs"
+                      class="w-full"
+                      :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                      @blur="deactivatePlanningCell(row.original.id, 'status')"
+                      @update:model-value="(value) => value && handlePlanningStatusChange(row.original, value as DemandStatus)"
+                    />
+                    <div v-else class="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        class="inline-flex w-fit items-center rounded-md border px-1.5 py-0.5 text-[10px] font-medium transition-colors"
+                        :class="[getStatusBadgeClass(getPlanningInlineDraft(row.original).status), getPlanningEditableCellButtonClass(row.original)]"
+                        :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                        @click="activatePlanningCell(row.original, 'status')"
+                      >
+                        {{ statusLabels[getPlanningInlineDraft(row.original).status] }}
+                      </button>
+                      <span
+                        v-if="getPlanningDraftDisplayItem(row.original).status === 'Blocked'"
+                        class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
+                      >
+                        <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
+                      </span>
+                      <span
+                        v-else-if="getDemandNotesTooltip(getPlanningDraftDisplayItem(row.original))"
+                        class="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                      >
+                        <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
+                      </span>
                     </div>
                   </template>
                   <span v-else class="text-xs text-muted">—</span>
                 </div>
               </template>
+              <template #products-cell="{ row }">
+                <div v-if="isCollapsedRepresentative(row.original)" class="text-xs text-muted">—</div>
+                <UPopover
+                  v-else
+                  :open="isPlanningCellEditing(row.original, 'products')"
+                  :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
+                  @update:open="(open) => handlePlanningPopoverOpenChange(row.original, 'products', open)"
+                >
+                  <button
+                    v-if="getPlanningDraftProductDisplay(row.original).items.length"
+                    type="button"
+                    class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors"
+                    :class="getPlanningEditableCellButtonClass(row.original)"
+                    :title="getPlanningDraftProductDisplay(row.original).fullLabel"
+                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                    @click="activatePlanningCell(row.original, 'products')"
+                  >
+                    <span class="max-w-[140px] truncate">{{ getPlanningDraftProductDisplay(row.original).previewLabel }}</span>
+                    <span v-if="!getPlanningDraftProductDisplay(row.original).allVisible" class="shrink-0 text-muted">+{{ getPlanningDraftProductDisplay(row.original).hiddenCount }}</span>
+                  </button>
+                  <button
+                    v-else
+                    type="button"
+                    class="text-xs transition-colors"
+                    :class="getPlanningEditableCellButtonClass(row.original)"
+                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                    @click="activatePlanningCell(row.original, 'products')"
+                  >
+                    —
+                  </button>
+
+                  <template #content>
+                    <div class="flex min-w-44 flex-col gap-2 p-3">
+                      <label v-for="product in getPlanningEditableProductOptions(row.original)" :key="product.value" class="flex items-center gap-2 text-[11px] text-highlighted">
+                        <input type="checkbox" class="h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary" :checked="getPlanningInlineDraft(row.original).productIds.includes(product.value)" @change="togglePlanningDraftProduct(row.original, product.value, ($event.target as HTMLInputElement).checked)">
+                        <span class="truncate">{{ product.label }}</span>
+                      </label>
+                    </div>
+                  </template>
+                </UPopover>
+              </template>
+              <template #customers-cell="{ row }">
+                <div v-if="isCollapsedRepresentative(row.original)" class="text-xs text-muted">—</div>
+                <template v-else>
+                  <span v-if="getPlanningCustomerCellDisplay(row.original).allVisible && getPlanningCustomerCellDisplay(row.original).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getPlanningCustomerCellDisplay(row.original).fullLabel">
+                    {{ getPlanningCustomerCellDisplay(row.original).previewLabel }}
+                  </span>
+                  <UPopover v-else-if="getPlanningCustomerCellDisplay(row.original).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button type="button" class="inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[11px] text-muted transition-colors hover:text-highlighted" :title="getPlanningCustomerCellDisplay(row.original).fullLabel">
+                      <span class="max-w-[140px] truncate">{{ getPlanningCustomerCellDisplay(row.original).previewLabel }}</span>
+                      <span class="shrink-0 text-muted">+{{ getPlanningCustomerCellDisplay(row.original).hiddenCount }}</span>
+                    </button>
+                    <template #content>
+                      <div class="flex max-w-xs flex-col gap-1 p-2">
+                        <span v-for="customer in getPlanningCustomerCellDisplay(row.original).items" :key="`${row.original.id}-${customer}`" class="text-xs text-highlighted">
+                          {{ customer }}
+                        </span>
+                      </div>
+                    </template>
+                  </UPopover>
+                  <div v-else class="text-xs text-muted">—</div>
+                </template>
+              </template>
               <template #conclusion-cell="{ row }">
                 <div class="flex flex-col gap-1">
                   <template v-if="!isCollapsedRepresentative(row.original)">
-                    <div
-                    v-if="getDisplayedConclusionDate(row.original)"
-                    class="flex items-center gap-1 text-[11px]"
-                    :class="row.original.status === 'Done' && row.original.deliveryDate ? 'text-green-600 dark:text-green-400' : 'text-muted'"
-                  >
-                    <UIcon :name="row.original.status === 'Done' && row.original.deliveryDate ? 'i-lucide-calendar-check' : 'i-lucide-calendar-clock'" class="h-3 w-3" />
-                    <span>{{ formatDemandDate(getDisplayedConclusionDate(row.original)) }}</span>
-                  </div>
+                    <UInput
+                      v-if="isPlanningCellEditing(row.original, 'dueDate')"
+                      :model-value="getPlanningInlineDraft(row.original).dueDate"
+                      type="date"
+                      size="xs"
+                      class="w-full"
+                      autofocus
+                      :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                      @blur="deactivatePlanningCell(row.original.id, 'dueDate')"
+                      @keydown.esc.prevent="deactivatePlanningCell(row.original.id, 'dueDate')"
+                      @keydown.enter.prevent="deactivatePlanningCell(row.original.id, 'dueDate')"
+                      @update:model-value="(value) => updatePlanningInlineDraft(row.original, { dueDate: String(value ?? '') })"
+                    />
+                    <button
+                      v-else
+                      type="button"
+                      class="flex w-fit items-center gap-1 rounded-md border px-1 py-0.5 text-[11px] transition-colors"
+                      :class="getPlanningEditableCellButtonClass(row.original)"
+                      :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                      @click="activatePlanningCell(row.original, 'dueDate')"
+                    >
+                      <template v-if="getDisplayedConclusionDate(getPlanningDraftDisplayItem(row.original))">
+                        <UIcon :name="getPlanningDraftDisplayItem(row.original).status === 'Done' && getPlanningDraftDisplayItem(row.original).deliveryDate ? 'i-lucide-calendar-check' : 'i-lucide-calendar-clock'" class="h-3 w-3" />
+                        <span :class="getPlanningDraftDisplayItem(row.original).status === 'Done' && getPlanningDraftDisplayItem(row.original).deliveryDate ? 'text-green-600 dark:text-green-400' : 'text-muted'">{{ formatDemandDate(getDisplayedConclusionDate(getPlanningDraftDisplayItem(row.original))) }}</span>
+                      </template>
+                      <span v-else class="text-xs text-muted">—</span>
+                    </button>
                   <div
-                    v-if="showDemandDelayMarker(row.original)"
+                    v-if="showDemandDelayMarker(getPlanningDraftDisplayItem(row.original))"
                     class="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400"
                   >
                     <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
@@ -4455,7 +5663,73 @@ watch(activeDemandKpiId, async (value) => {
                   <span v-else class="text-xs text-muted">—</span>
                 </div>
               </template>
+              <template #hours-cell="{ row }">
+                <div v-if="isCollapsedRepresentative(row.original)" class="text-xs text-muted">—</div>
+                <div v-else-if="isPlanningCellEditing(row.original, 'hours')" class="ml-auto w-full max-w-[84px]">
+                  <UInput
+                    :model-value="getPlanningInlineDraft(row.original).hoursInput"
+                    type="text"
+                    inputmode="decimal"
+                    size="xs"
+                    autofocus
+                    class="w-full text-right"
+                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                    @blur="deactivatePlanningCell(row.original.id, 'hours')"
+                    @keydown.esc.prevent="deactivatePlanningCell(row.original.id, 'hours')"
+                    @keydown.enter.prevent="deactivatePlanningCell(row.original.id, 'hours')"
+                    @update:model-value="(value) => updatePlanningInlineDraft(row.original, { hoursInput: String(value ?? '') })"
+                  />
+                </div>
+                <div v-else class="flex items-center justify-end gap-1">
+                  <button
+                    type="button"
+                    class="inline-flex h-4 w-4 items-center justify-center rounded text-muted/50 transition-colors hover:text-muted"
+                    :class="row.original.excludeFromCapacity ? '!text-amber-500 hover:!text-amber-600' : ''"
+                    :title="row.original.excludeFromCapacity ? 'Excluído do capacity. Clique para incluir.' : 'Clique para excluir do capacity.'"
+                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                    @click.stop="toggleExcludeFromCapacity(row.original)"
+                  >
+                    <UIcon :name="row.original.excludeFromCapacity ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="h-3 w-3" />
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold transition-colors hover:border-primary/40"
+                    :class="[row.original.excludeFromCapacity ? 'line-through text-muted' : 'text-highlighted', isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10' : '']"
+                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                    @click="activatePlanningCell(row.original, 'hours')"
+                  >
+                    {{ getPlanningInlineDraft(row.original).hoursInput ? `${getPlanningInlineDraft(row.original).hoursInput}h` : `${row.original.hours ?? 0}h` }}
+                  </button>
+                </div>
+              </template>
             </UTable>
+          </div>
+        </div>
+      </div>
+
+        <div v-if="planningPendingEditCount" class="pointer-events-none fixed inset-x-0 bottom-4 z-40 flex justify-center px-4">
+          <div class="pointer-events-auto flex w-full max-w-3xl items-center justify-between gap-3 rounded-2xl border border-primary/20 bg-default/95 px-4 py-3 shadow-2xl backdrop-blur">
+            <div>
+              <p class="text-sm font-semibold text-highlighted">Alterações pendentes no planejamento</p>
+              <p class="text-xs text-muted">{{ planningPendingEditCount.toLocaleString('pt-BR') }} alteração(ões) aguardando confirmação.</p>
+            </div>
+            <div class="flex items-center gap-2">
+              <UButton
+                color="neutral"
+                variant="outline"
+                :disabled="isSavingAllPlanningInlineEdits"
+                @click="discardAllPlanningInlineEdits"
+              >
+                Descartar
+              </UButton>
+              <UButton
+                color="primary"
+                :loading="isSavingAllPlanningInlineEdits"
+                @click="saveAllPlanningInlineEdits"
+              >
+                {{ planningPendingEditLabel }}
+              </UButton>
+            </div>
           </div>
         </div>
 
@@ -4618,6 +5892,77 @@ watch(activeDemandKpiId, async (value) => {
       :is-saving="isBulkPlanning"
       @submit="handlePlanningBulkEdit"
     />
+
+    <UModal v-model:open="planningStatusModalOpen" :title="planningStatusModalDraft ? `Completar status: ${statusLabels[planningStatusModalDraft.status]}` : 'Completar status'" :ui="{ content: 'sm:max-w-2xl' }" @update:open="(open) => { if (!open) closePlanningStatusModal({ restoreSnapshot: true }) }">
+      <template #body>
+        <div v-if="planningStatusModalDraft" class="space-y-4">
+          <p class="text-sm text-muted">Alguns status exigem informações adicionais antes de salvar a edição.</p>
+
+          <UFormField v-if="planningStatusModalRequiresDeliveryDate" label="Data de entrega" required>
+            <UInput
+              :model-value="planningStatusModalDraft.deliveryDate"
+              type="date"
+              class="w-full"
+              @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { deliveryDate: String(value ?? '') })"
+            />
+          </UFormField>
+
+          <UFormField v-if="planningStatusModalRequiresBlockedReason" label="Motivo do impedimento" required>
+            <UTextarea
+              :model-value="planningStatusModalDraft.blockedReason"
+              :rows="4"
+              class="w-full"
+              @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { blockedReason: String(value ?? '') })"
+            />
+          </UFormField>
+
+          <template v-if="planningStatusModalRequiresDeprioritization">
+            <UFormField label="Motivo da despriorização" required>
+              <USelect
+                :model-value="planningStatusModalDraft.deprioritizationReason"
+                :items="deprioritizationReasonOptions"
+                value-key="value"
+                option-attribute="label"
+                class="w-full"
+                @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { deprioritizationReason: value as DeprioritizationReason | undefined })"
+              />
+            </UFormField>
+
+            <UFormField label="Demanda priorizada no lugar">
+              <USelect
+                :model-value="planningStatusModalDraft.replacementDemandId"
+                :items="planningStatusReplacementDemandOptions"
+                value-key="value"
+                option-attribute="label"
+                placeholder="Opcional"
+                class="w-full"
+                @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { replacementDemandId: value ? String(value) : undefined })"
+              />
+            </UFormField>
+
+            <UFormField label="Observação despriorização" required>
+              <UTextarea
+                :model-value="planningStatusModalDraft.observation"
+                :rows="4"
+                class="w-full"
+                @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { observation: String(value ?? '') })"
+              />
+            </UFormField>
+          </template>
+        </div>
+      </template>
+
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton color="neutral" variant="outline" @click="closePlanningStatusModal({ restoreSnapshot: true })">
+            Cancelar
+          </UButton>
+          <UButton color="primary" @click="confirmPlanningStatusModal">
+            Confirmar
+          </UButton>
+        </div>
+      </template>
+    </UModal>
 
     <!-- Create / Edit modal -->
     <RoadmapDemandFormModal

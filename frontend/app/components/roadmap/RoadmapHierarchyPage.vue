@@ -53,6 +53,7 @@ const isSavingAllHierarchyEdits = ref(false)
 const hierarchyDemands = ref<RoadmapDemand[]>([])
 const selectedHierarchyItemIds = ref<string[]>([])
 type HierarchyInlineDraft = {
+  title: string
   status: DemandStatus
   dueDate: string
   hoursInput: string
@@ -65,7 +66,7 @@ type HierarchyInlineDraft = {
   deprioritizationReason?: DeprioritizationReason
   replacementDemandId?: string
 }
-type HierarchyEditableField = 'status' | 'dueDate' | 'hours' | 'classification' | 'products' | 'customers'
+type HierarchyEditableField = 'title' | 'status' | 'dueDate' | 'hours' | 'classification' | 'products' | 'customers'
 type HierarchyActiveCell = {
   itemId: string
   field: HierarchyEditableField
@@ -1425,6 +1426,7 @@ function requiresHierarchyStatusDetails(status: DemandStatus) {
 
 function createHierarchyInlineDraft(item: RoadmapDemand): HierarchyInlineDraft {
   return {
+    title: item.title,
     status: item.status,
     dueDate: item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? ''),
     hoursInput: item.itemType === 'Demand' && item.hours != null ? String(item.hours) : '',
@@ -1613,6 +1615,10 @@ function getHierarchyReadonlyCellClass(hasValue = true) {
     : 'text-muted/70 opacity-55'
 }
 
+function getHierarchyReadonlyOverflowTriggerClass() {
+  return 'inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[11px] text-muted transition-colors hover:text-highlighted'
+}
+
 function getHierarchyDraftDisplayItem(item: RoadmapDemand): RoadmapDemand {
   const draft = hierarchyInlineDrafts.value[item.id]
   if (!draft)
@@ -1622,6 +1628,7 @@ function getHierarchyDraftDisplayItem(item: RoadmapDemand): RoadmapDemand {
 
   return {
     ...item,
+    title: draft.title,
     status: draft.status,
     classification: draft.classification,
     customers: draft.customers,
@@ -1723,6 +1730,7 @@ function isHierarchyInlineDirty(item: RoadmapDemand) {
     return true
 
   return draft.status !== item.status
+    || draft.title.trim() !== item.title.trim()
     || draft.dueDate !== originalDueDate
     || (draft.status === 'Done' && draft.deliveryDate !== (item.deliveryDate ?? ''))
     || (draft.status === 'Blocked' && draft.blockedReason.trim() !== (item.blockedReason ?? '').trim())
@@ -1805,6 +1813,7 @@ async function saveHierarchyInline(
     hierarchyInlineSavingIds.value = [...hierarchyInlineSavingIds.value, item.id]
 
     await roadmapStore.updateDemand(item.id, buildDemandFormData(item, {
+      title: draft.title.trim() || item.title,
       status: draft.status,
       classification: item.itemType === 'Epic' ? draft.classification : item.classification,
       productIds: item.itemType === 'Demand' ? draft.productIds : item.products.map(product => product.productId),
@@ -2499,8 +2508,20 @@ void initializeHierarchyPage()
                       <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(group.roadmap)">
                         <div class="mt-0.5 flex items-start gap-1">
                           <UIcon name="i-lucide-map" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" />
-                          <div class="min-w-0">
-                            <p class="truncate text-[12px] font-semibold text-highlighted" :title="group.roadmap.description || undefined">{{ group.roadmap.title }}</p>
+                          <div class="min-w-0 flex-1">
+                            <UInput
+                              v-if="isHierarchyCellEditing(group.roadmap, 'title')"
+                              :model-value="getHierarchyInlineDraft(group.roadmap).title"
+                              size="xs"
+                              autofocus
+                              class="min-w-0 w-full"
+                              :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits"
+                              @blur="deactivateHierarchyCell(group.roadmap.id, 'title')"
+                              @keydown.esc.prevent="deactivateHierarchyCell(group.roadmap.id, 'title')"
+                              @keydown.enter.prevent="deactivateHierarchyCell(group.roadmap.id, 'title')"
+                              @update:model-value="(value) => updateHierarchyInlineDraft(group.roadmap, { title: String(value ?? '') })"
+                            />
+                            <button v-else type="button" class="w-full truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-semibold text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(group.roadmap)" :title="group.roadmap.description || undefined" :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(group.roadmap, 'title')">{{ getHierarchyDraftDisplayItem(group.roadmap).title }}</button>
                           </div>
                         </div>
                       </div>
@@ -2530,14 +2551,14 @@ void initializeHierarchyPage()
                       {{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}
                     </span>
                     <UPopover v-else-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                      <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                      <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
                         <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}</span>
                         <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).hiddenCount }}</span>
                       </button>
 
                       <template #content>
-                        <div class="flex max-w-xs flex-wrap gap-1.5 p-2">
-                          <span v-for="product in getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items" :key="`${group.roadmap.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                        <div class="flex max-w-xs flex-col gap-1 p-2">
+                          <span v-for="product in getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items" :key="`${group.roadmap.id}-${product}`" class="text-xs text-highlighted">
                             {{ product }}
                           </span>
                         </div>
@@ -2626,8 +2647,20 @@ void initializeHierarchyPage()
                           </div>
                           <div class="mt-0.5 flex items-start gap-1">
                             <UIcon name="i-lucide-star" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" :class="getCrossProjectWatermarkClass(epicEntry.epic)" />
-                            <div class="flex min-w-0 items-center gap-1">
-                              <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="epicEntry.epic.description || undefined">{{ epicEntry.epic.title }}</p>
+                            <div class="flex min-w-0 flex-1 items-center gap-1">
+                              <UInput
+                                v-if="isHierarchyCellEditing(epicEntry.epic, 'title')"
+                                :model-value="getHierarchyInlineDraft(epicEntry.epic).title"
+                                size="xs"
+                                autofocus
+                                class="min-w-0 flex-1 w-full"
+                                :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits"
+                                @blur="deactivateHierarchyCell(epicEntry.epic.id, 'title')"
+                                @keydown.esc.prevent="deactivateHierarchyCell(epicEntry.epic.id, 'title')"
+                                @keydown.enter.prevent="deactivateHierarchyCell(epicEntry.epic.id, 'title')"
+                                @update:model-value="(value) => updateHierarchyInlineDraft(epicEntry.epic, { title: String(value ?? '') })"
+                              />
+                              <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :title="epicEntry.epic.description || undefined" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'title')">{{ getHierarchyDraftDisplayItem(epicEntry.epic).title }}</button>
                               <a
                                 v-if="getDisplayIssueLinks(epicEntry.epic).length === 1 && getDisplayIssueLinks(epicEntry.epic)[0]?.url"
                                 :href="getDisplayIssueLinks(epicEntry.epic)[0]?.url"
@@ -2635,12 +2668,11 @@ void initializeHierarchyPage()
                                 rel="noreferrer"
                                 class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
                               >
-                                <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                                <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                               </a>
                               <UPopover v-else-if="getDisplayIssueLinks(epicEntry.epic).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                                 <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
-                                  <UIcon name="i-lucide-link-2" class="h-3 w-3" />
-                                  <span v-if="getDisplayIssueLinks(epicEntry.epic).length > 1">{{ getDisplayIssueLinks(epicEntry.epic).length }}</span>
+                                  <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                                 </button>
                                 <template #content>
                                   <div class="flex min-w-40 flex-col gap-1 p-1">
@@ -2657,6 +2689,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
+                              <UIcon v-else name="i-lucide-unlink" class="h-3.5 w-3.5 shrink-0 text-red-400" title="Sem issue Jira associada" />
                             </div>
                           </div>
                         </div>
@@ -2686,13 +2719,13 @@ void initializeHierarchyPage()
                         {{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}
                       </span>
                       <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                        <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
                           <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}</span>
                           <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).hiddenCount }}</span>
                         </button>
                         <template #content>
                           <div class="flex min-w-44 flex-col gap-1 p-1">
-                            <span v-for="product in getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items" :key="`${epicEntry.epic.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                            <span v-for="product in getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items" :key="`${epicEntry.epic.id}-${product}`" class="text-xs text-highlighted">
                               {{ product }}
                             </span>
                           </div>
@@ -2838,8 +2871,20 @@ void initializeHierarchyPage()
                           </div>
                           <div class="mt-0.5 flex items-start gap-1">
                             <UIcon name="i-lucide-list-todo" class="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600" :class="getCrossProjectWatermarkClass(demand)" />
-                            <div class="flex min-w-0 items-center gap-1">
-                              <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
+                            <div class="flex min-w-0 flex-1 items-center gap-1">
+                              <UInput
+                                v-if="isHierarchyCellEditing(demand, 'title')"
+                                :model-value="getHierarchyInlineDraft(demand).title"
+                                size="xs"
+                                autofocus
+                                class="min-w-0 flex-1 w-full"
+                                :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                                @blur="deactivateHierarchyCell(demand.id, 'title')"
+                                @keydown.esc.prevent="deactivateHierarchyCell(demand.id, 'title')"
+                                @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'title')"
+                                @update:model-value="(value) => updateHierarchyInlineDraft(demand, { title: String(value ?? '') })"
+                              />
+                              <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="demand.description || undefined" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'title')">{{ getHierarchyDraftDisplayItem(demand).title }}</button>
                               <a
                                 v-if="getDisplayIssueLinks(demand).length === 1 && getDisplayIssueLinks(demand)[0]?.url"
                                 :href="getDisplayIssueLinks(demand)[0]?.url"
@@ -2847,12 +2892,11 @@ void initializeHierarchyPage()
                                 rel="noreferrer"
                                 class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
                               >
-                                <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                                <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                               </a>
                               <UPopover v-else-if="getDisplayIssueLinks(demand).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                                 <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
-                                  <UIcon name="i-lucide-link-2" class="h-3 w-3" />
-                                  <span v-if="getDisplayIssueLinks(demand).length > 1">{{ getDisplayIssueLinks(demand).length }}</span>
+                                  <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                                 </button>
                                 <template #content>
                                   <div class="flex min-w-40 flex-col gap-1 p-1">
@@ -2869,6 +2913,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
+                              <UIcon v-else name="i-lucide-unlink" class="h-3.5 w-3.5 shrink-0 text-red-400" title="Sem issue Jira associada" />
                             </div>
                           </div>
                         </div>
@@ -2949,13 +2994,13 @@ void initializeHierarchyPage()
                         {{ getCustomerCellDisplay(demand).previewLabel }}
                       </span>
                       <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
+                        <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getCustomerCellDisplay(demand).fullLabel">
                           <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
                           <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
                         </button>
                         <template #content>
-                          <div class="flex max-w-xs flex-wrap gap-1.5 p-2">
-                            <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                          <div class="flex max-w-xs flex-col gap-1 p-2">
+                            <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="text-xs text-highlighted">
                               {{ customer }}
                             </span>
                           </div>
@@ -3029,8 +3074,20 @@ void initializeHierarchyPage()
                       <span class="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">
                         Épico órfão
                       </span>
-                      <div class="mt-0.5 flex items-center gap-1">
-                        <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="epic.description || undefined">{{ epic.title }}</p>
+                      <div class="mt-0.5 flex min-w-0 items-center gap-1">
+                        <UInput
+                          v-if="isHierarchyCellEditing(epic, 'title')"
+                          :model-value="getHierarchyInlineDraft(epic).title"
+                          size="xs"
+                          autofocus
+                          class="min-w-0 flex-1 w-full"
+                          :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits"
+                          @blur="deactivateHierarchyCell(epic.id, 'title')"
+                          @keydown.esc.prevent="deactivateHierarchyCell(epic.id, 'title')"
+                          @keydown.enter.prevent="deactivateHierarchyCell(epic.id, 'title')"
+                          @update:model-value="(value) => updateHierarchyInlineDraft(epic, { title: String(value ?? '') })"
+                        />
+                        <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epic)" :title="epic.description || undefined" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'title')">{{ getHierarchyDraftDisplayItem(epic).title }}</button>
                         <a
                           v-if="getDisplayIssueLinks(epic).length === 1 && getDisplayIssueLinks(epic)[0]?.url"
                           :href="getDisplayIssueLinks(epic)[0]?.url"
@@ -3038,12 +3095,11 @@ void initializeHierarchyPage()
                           rel="noreferrer"
                           class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
                         >
-                          <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                          <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                         </a>
                         <UPopover v-else-if="getDisplayIssueLinks(epic).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                           <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
-                            <UIcon name="i-lucide-link-2" class="h-3 w-3" />
-                            <span v-if="getDisplayIssueLinks(epic).length > 1">{{ getDisplayIssueLinks(epic).length }}</span>
+                            <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                           </button>
                           <template #content>
                             <div class="flex min-w-40 flex-col gap-1 p-1">
@@ -3060,6 +3116,7 @@ void initializeHierarchyPage()
                             </div>
                           </template>
                         </UPopover>
+                        <UIcon v-else name="i-lucide-unlink" class="h-3.5 w-3.5 shrink-0 text-red-400" title="Sem issue Jira associada" />
                       </div>
                     </div>
                   </div>
@@ -3086,13 +3143,13 @@ void initializeHierarchyPage()
                     {{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}
                   </span>
                   <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors hover:border-primary/40" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
+                    <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
                       <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}</span>
                       <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epic)).hiddenCount }}</span>
                     </button>
                     <template #content>
                       <div class="flex min-w-44 flex-col gap-1 p-1">
-                        <span v-for="product in getProductCellDisplay(getEpicDisplayProductNames(epic)).items" :key="`${epic.id}-${product}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                        <span v-for="product in getProductCellDisplay(getEpicDisplayProductNames(epic)).items" :key="`${epic.id}-${product}`" class="text-xs text-highlighted">
                           {{ product }}
                         </span>
                       </div>
@@ -3241,8 +3298,20 @@ void initializeHierarchyPage()
                         </span>
                         <span v-else class="text-xs text-muted">—</span>
                       </div>
-                      <div class="mt-0.5 flex items-center gap-1">
-                        <p class="min-w-0 truncate text-[12px] font-medium text-highlighted" :title="demand.description || undefined">{{ demand.title }}</p>
+                      <div class="mt-0.5 flex min-w-0 items-center gap-1">
+                          <UInput
+                            v-if="isHierarchyCellEditing(demand, 'title')"
+                            :model-value="getHierarchyInlineDraft(demand).title"
+                            size="xs"
+                            autofocus
+                            class="min-w-0 flex-1 w-full"
+                            :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                            @blur="deactivateHierarchyCell(demand.id, 'title')"
+                            @keydown.esc.prevent="deactivateHierarchyCell(demand.id, 'title')"
+                            @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'title')"
+                            @update:model-value="(value) => updateHierarchyInlineDraft(demand, { title: String(value ?? '') })"
+                          />
+                          <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="demand.description || undefined" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'title')">{{ getHierarchyDraftDisplayItem(demand).title }}</button>
                         <a
                           v-if="getDisplayIssueLinks(demand).length === 1 && getDisplayIssueLinks(demand)[0]?.url"
                           :href="getDisplayIssueLinks(demand)[0]?.url"
@@ -3250,12 +3319,11 @@ void initializeHierarchyPage()
                           rel="noreferrer"
                           class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40"
                         >
-                          <UIcon name="i-lucide-link-2" class="h-3 w-3" />
+                          <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                         </a>
                         <UPopover v-else-if="getDisplayIssueLinks(demand).length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                           <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-default bg-default px-1 text-[9px] font-medium text-primary transition-colors hover:border-primary/40">
-                            <UIcon name="i-lucide-link-2" class="h-3 w-3" />
-                            <span v-if="getDisplayIssueLinks(demand).length > 1">{{ getDisplayIssueLinks(demand).length }}</span>
+                            <UIcon name="i-simple-icons-jira" class="h-3 w-3" />
                           </button>
                           <template #content>
                             <div class="flex min-w-40 flex-col gap-1 p-1">
@@ -3346,13 +3414,13 @@ void initializeHierarchyPage()
                     {{ getCustomerCellDisplay(demand).previewLabel }}
                   </span>
                   <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border border-default bg-elevated px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
+                    <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getCustomerCellDisplay(demand).fullLabel">
                       <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
                       <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
                     </button>
                     <template #content>
-                      <div class="flex max-w-xs flex-wrap gap-1.5 p-2">
-                        <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="inline-flex items-center rounded-md border border-default bg-default px-2 py-1.5 text-xs font-medium text-highlighted">
+                      <div class="flex max-w-xs flex-col gap-1 p-2">
+                        <span v-for="customer in getCustomerCellDisplay(demand).items" :key="`${demand.id}-${customer}`" class="text-xs text-highlighted">
                           {{ customer }}
                         </span>
                       </div>
