@@ -5680,25 +5680,25 @@ watch(activeDemandKpiId, async (value) => {
                     @update:model-value="(value) => updatePlanningInlineDraft(row.original, { hoursInput: String(value ?? '') })"
                   />
                 </div>
-                <div v-else class="flex items-center justify-end gap-1">
+                <div v-else class="flex flex-col items-end gap-0.5">
                   <button
                     type="button"
-                    class="inline-flex h-4 w-4 items-center justify-center rounded text-muted/50 transition-colors hover:text-muted"
+                    class="rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold transition-colors hover:border-primary/40"
+                    :class="[row.original.excludeFromCapacity || row.original.status === 'Deprioritized' ? 'line-through text-muted' : 'text-highlighted', isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10' : '']"
+                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                    @click="activatePlanningCell(row.original, 'hours')"
+                  >
+                    {{ getPlanningInlineDraft(row.original).hoursInput ? `${getPlanningInlineDraft(row.original).hoursInput}h` : `${row.original.hours ?? 0}h` }}
+                  </button>
+                  <button
+                    type="button"
+                    class="inline-flex h-3.5 w-3.5 items-center justify-center rounded text-muted/40 transition-colors hover:text-muted"
                     :class="row.original.excludeFromCapacity ? '!text-amber-500 hover:!text-amber-600' : ''"
                     :title="row.original.excludeFromCapacity ? 'Excluído do capacity. Clique para incluir.' : 'Clique para excluir do capacity.'"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
                     @click.stop="toggleExcludeFromCapacity(row.original)"
                   >
-                    <UIcon :name="row.original.excludeFromCapacity ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="h-3 w-3" />
-                  </button>
-                  <button
-                    type="button"
-                    class="rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold transition-colors hover:border-primary/40"
-                    :class="[row.original.excludeFromCapacity ? 'line-through text-muted' : 'text-highlighted', isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10' : '']"
-                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
-                    @click="activatePlanningCell(row.original, 'hours')"
-                  >
-                    {{ getPlanningInlineDraft(row.original).hoursInput ? `${getPlanningInlineDraft(row.original).hoursInput}h` : `${row.original.hours ?? 0}h` }}
+                    <UIcon :name="row.original.excludeFromCapacity ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="h-2.5 w-2.5" />
                   </button>
                 </div>
               </template>
