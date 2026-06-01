@@ -120,6 +120,7 @@ const hierarchyProblemOptions = [
   { value: 'overdueOpen', label: 'Demandas atrasadas' },
   { value: 'deliveredLate', label: 'Demandas entregues com atraso' },
   { value: 'noKpi', label: 'Demandas sem KPIs' },
+  { value: 'doneNoKpi', label: 'Concluídas sem KPI apurado' },
   { value: 'noJira', label: 'Demandas sem issue Jira' },
   { value: 'noHours', label: 'Demandas sem horas' }
 ] as const
@@ -383,6 +384,9 @@ const hierarchyProductsFilterLabel = computed(() => {
 
 const hierarchyProblemFilterLabel = computed(() => {
   if (!hierarchyProblemFilter.value.length)
+    return 'Problemas'
+
+  if (hierarchyProblemFilter.value.includes('__all__'))
     return 'Todos os problemas'
 
   if (hierarchyProblemFilter.value.length === 1)
@@ -687,7 +691,27 @@ function getDemandProblemKeys(item: RoadmapDemand) {
   if (item.hours == null)
     keys.push('noHours')
 
+  const targetEpicForDoneKpi = getKpiTargetEpic(item)
+  if (item.status === 'Done' && targetEpicForDoneKpi && targetEpicForDoneKpi.status === 'Done' && !targetEpicForDoneKpi.hasNoKpi && targetEpicForDoneKpi.kpiLinks.length > 0) {
+    const hasApuratedKpi = (targetEpicForDoneKpi.kpiMeasurements?.length ?? 0) > 0
+    if (!hasApuratedKpi)
+      keys.push('doneNoKpi')
+  }
+
   return keys
+}
+
+const problemLabels: Record<string, string> = {
+  overdueOpen: 'Demanda atrasada',
+  deliveredLate: 'Entregue com atraso',
+  noKpi: 'Sem KPIs associados',
+  doneNoKpi: 'Concluída sem KPI apurado',
+  noJira: 'Sem issue Jira associada',
+  noHours: 'Sem horas estimadas',
+}
+
+function getDemandProblemTooltip(item: RoadmapDemand) {
+  return getDemandProblemKeys(item).map(k => problemLabels[k] ?? k).join('\n')
 }
 
 function getCustomersLine(customers: string[]) {
@@ -1018,8 +1042,14 @@ function matchesHierarchyFilters(
       return false
 
     const problemKeys = getDemandProblemKeys(item)
-    if (!hierarchyProblemFilter.value.every(problem => problemKeys.includes(problem)))
+    const isAllProblems = hierarchyProblemFilter.value.includes('__all__')
+    if (isAllProblems) {
+      if (problemKeys.length === 0)
+        return false
+    }
+    else if (!hierarchyProblemFilter.value.some(problem => problemKeys.includes(problem))) {
       return false
+    }
   }
 
   if (!matchesTextFilter([options?.customerText], customerQuery))
@@ -1372,8 +1402,12 @@ function toggleHierarchyProblemFilter(problem: string) {
     hierarchyProblemFilter.value = hierarchyProblemFilter.value.filter(value => value !== problem)
     return
   }
-
-  hierarchyProblemFilter.value = [...hierarchyProblemFilter.value, problem]
+  // Selecting __all__ clears specific selections and vice versa
+  if (problem === '__all__') {
+    hierarchyProblemFilter.value = ['__all__']
+    return
+  }
+  hierarchyProblemFilter.value = [...hierarchyProblemFilter.value.filter(v => v !== '__all__'), problem]
 }
 
 function clearHierarchyProblemFilter() {
@@ -2291,6 +2325,11 @@ void initializeHierarchyPage()
                     <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProblemFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyProblemFilter">
                       <UIcon v-if="hierarchyProblemFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
                       <span v-else class="inline-block h-4 w-4 shrink-0" />
+                      Sem filtro
+                    </button>
+                    <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProblemFilter.includes('__all__') ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyProblemFilter('__all__')">
+                      <UIcon v-if="hierarchyProblemFilter.includes('__all__')" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                      <span v-else class="inline-block h-4 w-4 shrink-0" />
                       Todos os problemas
                     </button>
                     <button v-for="problem in hierarchyProblemOptions" :key="problem.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyProblemFilter.includes(problem.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyProblemFilter(problem.value)">
@@ -2689,7 +2728,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
-                              <UIcon v-else name="i-lucide-unlink" class="h-3.5 w-3.5 shrink-0 text-red-400" title="Sem issue Jira associada" />
+                              <button v-else type="button" class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epicEntry.epic)"><UIcon name="i-lucide-unlink" class="h-3 w-3" /></button>
                             </div>
                           </div>
                         </div>
@@ -2889,6 +2928,7 @@ void initializeHierarchyPage()
                                 @update:model-value="(value) => updateHierarchyInlineDraft(demand, { title: String(value ?? '') })"
                               />
                               <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="demand.description || undefined" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'title')">{{ getHierarchyDraftDisplayItem(demand).title }}</button>
+                              <UIcon v-if="getDemandProblemKeys(demand).length" name="i-lucide-triangle-alert" class="h-3.5 w-3.5 shrink-0 text-warning" :title="getDemandProblemTooltip(demand)" />
                               <a
                                 v-if="getDisplayIssueLinks(demand).length === 1 && getDisplayIssueLinks(demand)[0]?.url"
                                 :href="getDisplayIssueLinks(demand)[0]?.url"
@@ -2917,7 +2957,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
-                              <UIcon v-else name="i-lucide-unlink" class="h-3.5 w-3.5 shrink-0 text-red-400" title="Sem issue Jira associada" />
+                              <button v-else type="button" class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors" title="Sem issue Jira — clique para adicionar" @click="openEditModal(demand)"><UIcon name="i-lucide-unlink" class="h-3 w-3" /></button>
                             </div>
                           </div>
                         </div>
@@ -3120,7 +3160,7 @@ void initializeHierarchyPage()
                             </div>
                           </template>
                         </UPopover>
-                        <UIcon v-else name="i-lucide-unlink" class="h-3.5 w-3.5 shrink-0 text-red-400" title="Sem issue Jira associada" />
+                        <button v-else type="button" class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epic)"><UIcon name="i-lucide-unlink" class="h-3 w-3" /></button>
                       </div>
                     </div>
                   </div>
@@ -3316,6 +3356,7 @@ void initializeHierarchyPage()
                             @update:model-value="(value) => updateHierarchyInlineDraft(demand, { title: String(value ?? '') })"
                           />
                           <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="demand.description || undefined" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'title')">{{ getHierarchyDraftDisplayItem(demand).title }}</button>
+                          <UIcon v-if="getDemandProblemKeys(demand).length" name="i-lucide-triangle-alert" class="h-3.5 w-3.5 shrink-0 text-warning" :title="getDemandProblemTooltip(demand)" />
                         <a
                           v-if="getDisplayIssueLinks(demand).length === 1 && getDisplayIssueLinks(demand)[0]?.url"
                           :href="getDisplayIssueLinks(demand)[0]?.url"

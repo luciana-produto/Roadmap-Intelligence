@@ -104,6 +104,7 @@ const props = defineProps<{
   defaultQuarterNumber?: number
   availableKpis?: Kpi[]
   isSaving?: boolean
+  focusField?: string
 }>()
 
 const emit = defineEmits<{
@@ -221,6 +222,7 @@ const parentSearch = ref('')
 const activeTab = ref<DemandFormTab>('general')
 const showSubmitHint = ref(false)
 const customerInputRef = useTemplateRef<HTMLInputElement>('customerInput')
+const issueLinksContainerRef = useTemplateRef<HTMLElement>('issueLinksContainer')
 const customerRenameSource = ref<string | null>(null)
 const pendingCustomerRenames = ref<CustomerRename[]>([])
 let submitHintTimeout: ReturnType<typeof setTimeout> | null = null
@@ -675,10 +677,21 @@ watch(
 
     if (props.demand) {
       populateFormFromDemand(props.demand)
-      return
+    }
+    else {
+      resetFormForCreate()
     }
 
-    resetFormForCreate()
+    if (props.focusField === 'jiraIssue') {
+      setTimeout(() => {
+        if (!form.issueLinks.length)
+          addIssueLink()
+        setTimeout(() => {
+          const input = issueLinksContainerRef.value?.querySelector<HTMLInputElement>('input[placeholder="https://..."]')
+          input?.focus()
+        }, 50)
+      }, 50)
+    }
   },
   { immediate: true }
 )
@@ -1883,7 +1896,7 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <UFormField v-if="!isRoadmap" label="Issues (Jira)"><div class="space-y-2">
+          <UFormField v-if="!isRoadmap" label="Issues (Jira)"><div ref="issueLinksContainer" class="space-y-2">
             <div
               v-for="(issue, index) in form.issueLinks"
               :key="index"

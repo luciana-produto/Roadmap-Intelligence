@@ -234,6 +234,87 @@ function getDemandKpiSummary(demand: RoadmapDemand) {
   }
 }
 
+const listProblemOptions = [
+  { value: 'overdueOpen', label: 'Demandas atrasadas' },
+  { value: 'deliveredLate', label: 'Demandas entregues com atraso' },
+  { value: 'noKpi', label: 'Demandas sem KPIs' },
+  { value: 'doneNoKpi', label: 'Concluídas sem KPI apurado' },
+  { value: 'noJira', label: 'Demandas sem issue Jira' },
+  { value: 'noHours', label: 'Demandas sem horas' },
+] as const
+
+const listProblemLabels: Record<string, string> = {
+  overdueOpen: 'Demanda atrasada',
+  deliveredLate: 'Entregue com atraso',
+  noKpi: 'Sem KPIs associados',
+  doneNoKpi: 'Concluída sem KPI apurado',
+  noJira: 'Sem issue Jira associada',
+  noHours: 'Sem horas estimadas',
+}
+
+const listProblemFilter = ref<string[]>([])
+
+const listProblemFilterLabel = computed(() => {
+  if (!listProblemFilter.value.length)
+    return 'Problemas'
+  if (listProblemFilter.value.includes('__all__'))
+    return 'Todos os problemas'
+  if (listProblemFilter.value.length === 1)
+    return listProblemOptions.find(o => o.value === listProblemFilter.value[0])?.label ?? '1 problema'
+  return `${listProblemFilter.value.length} problemas`
+})
+
+function getDemandProblemKeys(demand: RoadmapDemand) {
+  if (demand.itemType !== 'Demand')
+    return []
+
+  const keys: string[] = []
+  const targetEpic = demand.epicId ? itemsById.value.get(demand.epicId) ?? null : null
+
+  if (demand.status !== 'Done' && demand.isOverdue)
+    keys.push('overdueOpen')
+
+  if (demand.status === 'Done' && demand.isDeliveredLate)
+    keys.push('deliveredLate')
+
+  if (!targetEpic || targetEpic.itemType !== 'Epic' || targetEpic.hasNoKpi || targetEpic.kpiLinks.length === 0)
+    keys.push('noKpi')
+
+  if (!getDisplayIssueLinks(demand).length)
+    keys.push('noJira')
+
+  if (demand.hours == null)
+    keys.push('noHours')
+
+  if (targetEpic?.itemType === 'Epic' && targetEpic.status === 'Done' && demand.status === 'Done' && !targetEpic.hasNoKpi && targetEpic.kpiLinks.length > 0) {
+    const hasApuratedKpi = (targetEpic.kpiMeasurements?.length ?? 0) > 0
+    if (!hasApuratedKpi)
+      keys.push('doneNoKpi')
+  }
+
+  return keys
+}
+
+function getDemandProblemTooltip(demand: RoadmapDemand) {
+  return getDemandProblemKeys(demand).map(k => listProblemLabels[k] ?? k).join('\n')
+}
+
+function toggleListProblemFilter(problem: string) {
+  if (listProblemFilter.value.includes(problem)) {
+    listProblemFilter.value = listProblemFilter.value.filter(v => v !== problem)
+    return
+  }
+  if (problem === '__all__') {
+    listProblemFilter.value = ['__all__']
+    return
+  }
+  listProblemFilter.value = [...listProblemFilter.value.filter(v => v !== '__all__'), problem]
+}
+
+function clearListProblemFilter() {
+  listProblemFilter.value = []
+}
+
 function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
   // Group by epicId only — demands from the same epic must share a single grouper
   // regardless of which quarter they belong to.
@@ -555,7 +636,7 @@ function createEpicDependencyBadge(demand: RoadmapDemand, dependency: DemandDepe
     : 'inline-flex max-w-full cursor-pointer items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 transition-colors hover:border-amber-300 hover:bg-amber-100 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:hover:border-amber-700 dark:hover:bg-amber-900/50'
   button.title = relation === 'dependsOn'
     ? `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand.quarterLabel}, ou sem priorização.` : ''}`
-    : formatDependencySummaryLine(dependency)
+    : getDependencyTooltip('Bloqueia', dependency)
   button.addEventListener('click', async (event) => {
     event.preventDefault()
     event.stopPropagation()
@@ -1921,7 +2002,7 @@ function syncListSectionDividers() {
                 : 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-200 bg-red-50 text-red-600 transition-colors hover:border-red-300 hover:bg-red-100 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400'
               btn.title = relation === 'dependsOn'
                 ? `${getDependencyTooltip('É bloqueado por', dep)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${headerMeta.epic.quarterLabel}, ou sem priorização.` : ''}`
-                : formatDependencySummaryLine(dep)
+                : getDependencyTooltip('Bloqueia', dep)
               const iconSvg = relation === 'dependsOn'
                 ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-2.5 w-2.5"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>'
                 : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-2.5 w-2.5"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/></svg>'
@@ -2435,11 +2516,11 @@ function syncListSectionDividers() {
         }
 
         if (column.id === '_actions') {
-          const cell = createGridCell('relative overflow-visible !px-0 py-0.5 align-top')
+          const cell = createGridCell('relative overflow-visible !px-0 self-stretch')
           if (headerMeta) {
             // Wrapper with group class for hover-based overlay (same pattern as demand rows)
             const wrapper = document.createElement('div')
-            wrapper.className = 'group relative flex items-center justify-center py-0.5'
+            wrapper.className = 'group absolute inset-0 flex items-center justify-center'
 
             const dots = document.createElement('span')
             dots.className = 'pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0'
@@ -2447,7 +2528,7 @@ function syncListSectionDividers() {
             wrapper.appendChild(dots)
 
             const actions = document.createElement('div')
-            actions.className = 'pointer-events-none absolute right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 py-0.5 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
+            actions.className = 'pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
 
             const createButton = document.createElement('button')
             createButton.type = 'button'
@@ -2584,6 +2665,7 @@ const capacityModalOpen = ref(false)
 const isSavingCapacity = ref(false)
 const isSavingDemand = ref(false)
 const editingDemand = ref<RoadmapDemand | null>(null)
+const modalEditFocusField = ref<string | undefined>()
 const createItemType = ref<RoadmapItemType | undefined>()
 const defaultParentDemandId = ref<string | undefined>()
 const defaultProjectId = ref<string | undefined>()
@@ -2665,11 +2747,12 @@ function openCapacityModal() {
   capacityModalOpen.value = true
 }
 
-function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus) {
+function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus, focusField?: string) {
   editingDemand.value = nextStatus ? { ...demand, status: nextStatus } : demand
   defaultParentDemandId.value = undefined
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
+  modalEditFocusField.value = focusField
   modalOpen.value = true
 }
 
@@ -3082,33 +3165,45 @@ const visibleEpicIds = computed(() => {
 })
 
 const tableDemands = computed(() => {
-  if (!groupDemandsByEpic.value)
-    return quarterFilteredDemands.value
+  const base = (() => {
+    if (!groupDemandsByEpic.value)
+      return quarterFilteredDemands.value
 
-  // Pre-group demands by epic so that even with no active sort column all demands
-  // of the same epic are contiguous. Groups are ordered by the minimum sortOrder
-  // of their member demands (same logic used by withListGroupSorting).
-  const epicMinOrder: Record<string, number> = {}
-  for (const demand of quarterFilteredDemands.value) {
-    if (!demand.epicId) continue
-    const current = epicMinOrder[demand.epicId]
-    if (current === undefined || demand.sortOrder < current)
-      epicMinOrder[demand.epicId] = demand.sortOrder
-  }
-
-  return [...quarterFilteredDemands.value].sort((left, right) => {
-    const groupComparison = compareListDemandGroups(left, right)
-    if (groupComparison !== 0) return groupComparison
-
-    const epicA = left.epicId
-    const epicB = right.epicId
-    if (epicA && epicB && epicA !== epicB) {
-      const minA = epicMinOrder[epicA] ?? left.sortOrder
-      const minB = epicMinOrder[epicB] ?? right.sortOrder
-      if (minA !== minB) return minA - minB
+    // Pre-group demands by epic so that even with no active sort column all demands
+    // of the same epic are contiguous. Groups are ordered by the minimum sortOrder
+    // of their member demands (same logic used by withListGroupSorting).
+    const epicMinOrder: Record<string, number> = {}
+    for (const demand of quarterFilteredDemands.value) {
+      if (!demand.epicId) continue
+      const current = epicMinOrder[demand.epicId]
+      if (current === undefined || demand.sortOrder < current)
+        epicMinOrder[demand.epicId] = demand.sortOrder
     }
 
-    return left.sortOrder - right.sortOrder
+    return [...quarterFilteredDemands.value].sort((left, right) => {
+      const groupComparison = compareListDemandGroups(left, right)
+      if (groupComparison !== 0) return groupComparison
+
+      const epicA = left.epicId
+      const epicB = right.epicId
+      if (epicA && epicB && epicA !== epicB) {
+        const minA = epicMinOrder[epicA] ?? left.sortOrder
+        const minB = epicMinOrder[epicB] ?? right.sortOrder
+        if (minA !== minB) return minA - minB
+      }
+
+      return left.sortOrder - right.sortOrder
+    })
+  })()
+
+  if (!listProblemFilter.value.length)
+    return base
+
+  return base.filter((demand) => {
+    const problemKeys = getDemandProblemKeys(demand)
+    if (listProblemFilter.value.includes('__all__'))
+      return problemKeys.length > 0
+    return listProblemFilter.value.some(p => problemKeys.includes(p))
   })
 })
 
@@ -3740,7 +3835,8 @@ function getPlanningDraftDisplayItem(item: RoadmapDemand): RoadmapDemand {
     quarterLabel: quarterShortLabel(draft.quarterValue),
     status: draft.status,
     promisedDate: isDoneStatus ? item.promisedDate : draft.dueDate,
-    deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+    effectivePromisedDate: isDoneStatus ? item.effectivePromisedDate : draft.dueDate,
+    deliveryDate: isDoneStatus ? draft.dueDate : ''
   }
 }
 
@@ -4039,7 +4135,7 @@ async function savePlanningInline(
       replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
       hours,
       promisedDate: isDoneStatus ? (item.promisedDate ?? '') : (isBacklogDemand(item) ? '' : draft.dueDate),
-      deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+      deliveryDate: isDoneStatus ? draft.dueDate : ''
     }))
 
     clearPlanningInlineDraft(item.id)
@@ -4574,7 +4670,7 @@ function renderDependencyIcon(dependency: DemandDependency, relation: 'dependsOn
   const inconsistent = relation === 'dependsOn' && !!demand && isDependencyInconsistent(demand, dependency)
   const title = relation === 'dependsOn'
     ? `${getDependencyTooltip('É bloqueado por', dependency)}${inconsistent ? `\n\nInconsistência: a demanda vinculada está em ${dependency.quarterLabel}, depois de ${demand!.quarterLabel}, ou sem priorização.` : ''}`
-    : formatDependencySummaryLine(dependency)
+    : getDependencyTooltip('Bloqueia', dependency)
 
   return h('button', {
     type: 'button',
@@ -4676,7 +4772,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             }, d.epicTitle),
             ...(renderIssueTrigger(epicIssueLinks)
               ? [renderIssueTrigger(epicIssueLinks)!]
-              : [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' })])
+              : [h('button', { type: 'button', class: 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors', title: 'Sem issue Jira — clique para adicionar', onClick: () => { const epic = d.epicId ? itemsById.value.get(d.epicId) : null; if (epic) openEditModal(epic, undefined, 'jiraIssue') } }, [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3' })])])
           ])
         )
       }
@@ -4709,8 +4805,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
                     }, displayItem.title),
                 ...d.dependsOn.map(dep => renderDependencyIcon(dep, 'dependsOn', d)),
                 ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
+                ...(getDemandProblemKeys(d).length ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })] : []),
                 ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
-                  h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' })
+                  h('button', { type: 'button', class: 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3' })])
                 ])
               ])
             ])
@@ -4745,6 +4842,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               }, displayItem.title),
           ...d.dependsOn.map(dep => renderDependencyIcon(dep, 'dependsOn', d)),
           ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
+          ...(getDemandProblemKeys(d).length ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })] : []),
           ...(d.successorDemandId
             ? [h('span', {
                 class: 'inline-flex shrink-0 items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0 text-[8px] font-medium text-amber-600 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300',
@@ -4755,7 +4853,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               ])]
             : []),
           ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
-            !issueLinks.length ? h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3 shrink-0 text-red-400', title: 'Sem issue Jira associada' }) : null
+            !issueLinks.length ? h('button', { type: 'button', class: 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3' })]) : null
           ].filter(Boolean))
         ]))
       }
@@ -4981,24 +5079,18 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
 
       // 1st: Transbordo / Repriorizar
       if (demand.itemType === 'Demand' && !demand.successorDemandId) {
-        const spilloverTitle = demand.status === 'Deprioritized'
-          ? 'Repriorizar em outro quarter'
-          : 'Criar Transbordo'
         actionSlots.push(
           h(UButtonComp, {
             size: 'xs',
             variant: 'ghost',
             color: 'neutral',
             class: 'h-6 w-6 p-0',
-            title: spilloverTitle,
+            title: demand.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo',
             onClick: () => openSpilloverModal(demand)
           }, {
             default: () => h(UIconComp, { name: 'i-lucide-forward', class: 'h-4 w-4' })
           })
         )
-      }
-      else {
-        actionSlots.push(h('span', { class: 'h-6 w-6' }))
       }
 
       // 2nd: Agendar (backlog only)
@@ -5022,9 +5114,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           })
         )
       }
-      else {
-        actionSlots.push(h('span', { class: 'h-6 w-6' }))
-      }
 
       // 3rd: KPI
       if (kpiSummary.actionLabel !== 'Associe a demanda a um épico') {
@@ -5039,9 +5128,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             onClick: () => openDemandKpiWorkspace(demand)
           })
         )
-      }
-      else {
-        actionSlots.push(h('span', { class: 'h-6 w-6' }))
       }
 
       // 4th: Editar / 5th: Excluir
@@ -5063,7 +5149,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       )
 
       return h('div', {
-        class: 'group relative flex items-center justify-center py-0.5'
+        class: 'group absolute inset-0 flex items-center justify-center'
       }, [
         // Dots indicator — visible when not hovering
         h('span', {
@@ -5071,7 +5157,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         }, '···'),
         // Action panel — absolutely positioned, floats left on hover
         h('div', {
-          class: 'pointer-events-none absolute right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 py-0.5 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
+          class: 'pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
         }, actionSlots)
       ])
     },
@@ -5431,6 +5517,35 @@ watch(activeDemandKpiId, async (value) => {
             :label="areAllEpicGroupsCollapsed ? 'Expandir épicos' : 'Recolher épicos'"
             @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
           />
+          <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
+            <UButton
+              type="button"
+              size="xs"
+              color="neutral"
+              :variant="listProblemFilter.length ? 'soft' : 'outline'"
+              icon="i-lucide-triangle-alert"
+              :label="listProblemFilterLabel"
+            />
+            <template #content>
+              <div class="min-w-56 space-y-0.5 p-1">
+                <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearListProblemFilter">
+                  <UIcon v-if="listProblemFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  Sem filtro
+                </button>
+                <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.includes('__all__') ? 'text-primary' : 'text-highlighted'" @click="toggleListProblemFilter('__all__')">
+                  <UIcon v-if="listProblemFilter.includes('__all__')" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  Todos os problemas
+                </button>
+                <button v-for="prob in listProblemOptions" :key="prob.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.includes(prob.value) ? 'text-primary' : 'text-highlighted'" @click="toggleListProblemFilter(prob.value)">
+                  <UIcon v-if="listProblemFilter.includes(prob.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  {{ prob.label }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
         </div>
       </div>
 
@@ -6070,6 +6185,7 @@ watch(activeDemandKpiId, async (value) => {
       :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? undefined"
       :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? undefined"
       :is-saving="isSavingDemand"
+      :focus-field="modalEditFocusField"
       @trade-off-deleted="handleTradeOffDeleted"
       @submit="handleSubmit"
     />
