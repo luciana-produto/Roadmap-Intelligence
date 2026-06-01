@@ -92,6 +92,7 @@ const deprioritizationReasonOptions = [
 ] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
 
 const filterQuarters = ref<string[]>([])
+const filterListProjectIds = ref<string[]>([])
 
 function quarterShortLabel(val: string): string {
   const { quarterYear, quarterNumber } = parseQuarterValue(val)
@@ -109,6 +110,13 @@ const quarterFilterLabel = computed(() => {
   if (filterQuarters.value.length === 1) return quarterShortLabel(filterQuarters.value[0]!)
   if (filterQuarters.value.length === 2) return filterQuarters.value.map(quarterShortLabel).join(', ')
   return `${filterQuarters.value.length} quarters`
+})
+
+const filterListProjectsLabel = computed(() => {
+  if (!filterListProjectIds.value.length) return 'Todos os projetos'
+  if (filterListProjectIds.value.length === 1)
+    return projects.value.find(p => p.id === filterListProjectIds.value[0])?.name ?? '1 projeto'
+  return `${filterListProjectIds.value.length} projetos`
 })
 
 function formatDemandCustomers(customers?: string[]): string {
@@ -690,6 +698,12 @@ function toggleQuarterFilter(val: string) {
   else filterQuarters.value.push(val)
 }
 
+function toggleListProjectFilter(id: string) {
+  const idx = filterListProjectIds.value.indexOf(id)
+  if (idx >= 0) filterListProjectIds.value.splice(idx, 1)
+  else filterListProjectIds.value.push(id)
+}
+
 function isBacklogDemand(demand: RoadmapDemand): boolean {
   return isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
 }
@@ -747,23 +761,28 @@ const demandClassifications: DemandClassification[] = [
   'TechnicalDebtSecurity', 'Strategic', 'Evolution', 'ImprovementGap', 'Mandatory', 'Homologation', 'Customizacao'
 ]
 
-const selectedProjectProducts = computed(() =>
-  projects.value.find(p => p.id === selectedProjectId.value)?.products ?? []
-)
+const selectedProjectProducts = computed(() => {
+  const projectId = filterListProjectIds.value.length === 1 ? filterListProjectIds.value[0] : null
+  return projects.value.find(p => p.id === projectId)?.products ?? []
+})
 
 const activeCapacityScope = computed(() => {
-  if (!selectedProjectId.value || filterQuarters.value.length !== 1) return null
+  if (filterListProjectIds.value.length !== 1 || filterQuarters.value.length !== 1) return null
 
   const { quarterYear, quarterNumber } = parseQuarterValue(filterQuarters.value[0]!)
   if (isSpecialBacklogQuarter(quarterYear, quarterNumber)) return null
 
   return {
-    projectId: selectedProjectId.value,
+    projectId: filterListProjectIds.value[0]!,
     quarterYear,
     quarterNumber,
     quarterLabel: quarterShortLabel(filterQuarters.value[0]!)
   }
 })
+
+const capacityProjectName = computed(() =>
+  projects.value.find(p => p.id === activeCapacityScope.value?.projectId)?.name ?? 'Projeto'
+)
 
 const selectedDemandScope = computed(() => {
   if (filterQuarters.value.length !== 1) return null
@@ -1000,6 +1019,14 @@ watch(selectedProjectId, () => {
   setListMultiFilter('products', [])
 })
 
+watch(filterListProjectIds, () => {
+  filterProducts.value = []
+  setListMultiFilter('status', [])
+  setListMultiFilter('type', [])
+  setListMultiFilter('classification', [])
+  setListMultiFilter('products', [])
+})
+
 const quarterFilteredDemands = computed(() => {
   const orderedDemands = [...demandItems.value].sort((left, right) => {
     const groupComparison = compareListDemandGroups(left, right)
@@ -1008,8 +1035,11 @@ const quarterFilteredDemands = computed(() => {
 
     return left.sortOrder - right.sortOrder
   })
-  if (!filterQuarters.value.length) return orderedDemands
-  return orderedDemands.filter(d =>
+  const projectFiltered = filterListProjectIds.value.length
+    ? orderedDemands.filter(d => filterListProjectIds.value.includes(d.projectId ?? ''))
+    : orderedDemands
+  if (!filterQuarters.value.length) return projectFiltered
+  return projectFiltered.filter(d =>
     filterQuarters.value.includes(`${d.quarterNumber}-${d.quarterYear}`)
   )
 })
@@ -2722,14 +2752,12 @@ function openCreateModal(
 }
 
 function openListView() {
+  roadmapStore.selectProject(null)
   groupDemandsByEpic.value = true
   collapsedEpicIds.value = [...visibleEpicIds.value]
   hasInitializedCollapsedEpicIds.value = true
 
-  navigateTo({
-    path: '/roadmap',
-    query: selectedProjectId.value ? { projectId: selectedProjectId.value } : undefined
-  })
+  navigateTo({ path: '/roadmap' })
 }
 
 function openHierarchyView() {
@@ -5233,7 +5261,9 @@ async function initializeRoadmapPage() {
     ? route.query.projectId
     : null
 
-  if (queryProjectId && projects.value.some(project => project.id === queryProjectId))
+  // For hierarchy view, restore project selection from URL
+  // For list view, keep selectedProjectId = null so all demands are loaded
+  if (viewMode.value === 'hierarchy' && queryProjectId && projects.value.some(project => project.id === queryProjectId))
     selectedProjectId.value = queryProjectId
 
   await Promise.all([
@@ -5380,9 +5410,8 @@ watch(activeDemandKpiId, async (value) => {
       </div>
 
       <div class="mt-4 flex flex-wrap items-center gap-2">
-        <div class="flex items-center gap-2 flex-wrap">
+        <template v-if="viewMode === 'hierarchy'">
           <button
-            v-if="viewMode === 'hierarchy'"
             class="px-4 py-1.5 rounded-full text-sm font-medium transition-all border"
             :class="selectedProjectId === null
               ? 'bg-primary text-white border-primary shadow-sm'
@@ -5402,13 +5431,48 @@ watch(activeDemandKpiId, async (value) => {
           >
             {{ project.name }}
           </button>
-        </div>
+        </template>
 
-        <div class="ml-auto flex w-full flex-wrap items-center gap-2 sm:w-auto">
-          <UPopover>
-            <button class="flex w-full items-center gap-1.5 rounded-lg border border-default bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40 sm:min-w-[220px] sm:w-auto">
+        <template v-else>
+          <!-- Projeto -->
+          <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+            <button class="flex items-center gap-1.5 rounded-lg border border-default bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40">
+              <UIcon name="i-lucide-folder-kanban" class="w-3.5 h-3.5 shrink-0 text-muted" />
+              <span class="text-left truncate text-highlighted">{{ filterListProjectsLabel }}</span>
+              <UBadge v-if="filterListProjectIds.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ filterListProjectIds.length }}</UBadge>
+              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+            </button>
+            <template #content>
+              <div class="py-1 min-w-[220px] max-h-72 overflow-y-auto">
+                <button
+                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                  :class="filterListProjectIds.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
+                  @click="filterListProjectIds = []"
+                >
+                  <UIcon v-if="filterListProjectIds.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
+                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                  Todos os projetos
+                </button>
+                <button
+                  v-for="project in sortedProjects"
+                  :key="project.id"
+                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                  :class="filterListProjectIds.includes(project.id) ? 'text-primary' : 'text-highlighted'"
+                  @click="toggleListProjectFilter(project.id)"
+                >
+                  <UIcon v-if="filterListProjectIds.includes(project.id)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
+                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                  {{ project.name }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
+
+          <!-- Quarter -->
+          <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+            <button class="flex items-center gap-1.5 rounded-lg border border-default bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40">
               <UIcon name="i-lucide-calendar" class="w-3.5 h-3.5 shrink-0 text-muted" />
-              <span class="flex-1 text-left truncate text-highlighted">{{ quarterFilterLabel }}</span>
+              <span class="text-left truncate text-highlighted">{{ quarterFilterLabel }}</span>
               <UBadge v-if="filterQuarters.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ filterQuarters.length }}</UBadge>
               <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
             </button>
@@ -5437,7 +5501,73 @@ watch(activeDemandKpiId, async (value) => {
               </div>
             </template>
           </UPopover>
-        </div>
+
+          <!-- Exibição -->
+          <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+            <button
+              class="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40"
+              :class="!groupDemandsByEpic ? 'border-primary/40 text-primary' : 'border-default'"
+            >
+              <UIcon name="i-lucide-layout-list" class="w-3.5 h-3.5 shrink-0 text-muted" />
+              <span class="text-highlighted">Exibição</span>
+              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+            </button>
+            <template #content>
+              <div class="min-w-48 space-y-0.5 p-1">
+                <button
+                  type="button"
+                  class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                  :class="groupDemandsByEpic ? 'text-primary' : 'text-highlighted'"
+                  @click="groupDemandsByEpic = !groupDemandsByEpic"
+                >
+                  <UIcon v-if="groupDemandsByEpic" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  Agrupar por épico
+                </button>
+                <button
+                  v-if="groupDemandsByEpic"
+                  type="button"
+                  class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                  :class="visibleEpicIds.length ? 'text-highlighted' : 'cursor-not-allowed opacity-40 text-muted'"
+                  :disabled="!visibleEpicIds.length"
+                  @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
+                >
+                  <UIcon name="i-lucide-chevrons-up-down" class="h-4 w-4 shrink-0 text-muted" />
+                  {{ areAllEpicGroupsCollapsed ? 'Expandir épicos' : 'Recolher épicos' }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
+
+          <!-- Problemas -->
+          <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+            <button class="flex items-center gap-1.5 rounded-lg border bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40" :class="listProblemFilter.length ? 'border-primary/40 text-primary' : 'border-default'">
+              <UIcon name="i-lucide-triangle-alert" class="w-3.5 h-3.5 shrink-0 text-muted" />
+              <span class="text-highlighted">{{ listProblemFilterLabel }}</span>
+              <UBadge v-if="listProblemFilter.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ listProblemFilter.length }}</UBadge>
+              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+            </button>
+            <template #content>
+              <div class="min-w-56 space-y-0.5 p-1">
+                <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearListProblemFilter">
+                  <UIcon v-if="listProblemFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  Sem filtro
+                </button>
+                <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.includes('__all__') ? 'text-primary' : 'text-highlighted'" @click="toggleListProblemFilter('__all__')">
+                  <UIcon v-if="listProblemFilter.includes('__all__')" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  Todos os problemas
+                </button>
+                <button v-for="prob in listProblemOptions" :key="prob.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.includes(prob.value) ? 'text-primary' : 'text-highlighted'" @click="toggleListProblemFilter(prob.value)">
+                  <UIcon v-if="listProblemFilter.includes(prob.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                  <span v-else class="inline-block h-4 w-4 shrink-0" />
+                  {{ prob.label }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
+        </template>
       </div>
     </div>
 
@@ -5446,7 +5576,7 @@ watch(activeDemandKpiId, async (value) => {
         <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
           <span class="inline-flex items-center gap-1 rounded-full border border-default bg-elevated px-2.5 py-0.5">
             <UIcon name="i-lucide-folder-kanban" class="h-3.5 w-3.5 text-primary" />
-            <span class="font-medium text-highlighted">{{ selectedProject?.name ?? 'Projeto' }}</span>
+            <span class="font-medium text-highlighted">{{ capacityProjectName }}</span>
           </span>
           <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ activeCapacityScope?.quarterLabel ?? 'Selecione 1 quarter' }}</span>
           <span class="rounded-full border border-default bg-default px-2.5 py-0.5">
@@ -5497,55 +5627,6 @@ watch(activeDemandKpiId, async (value) => {
             :disabled="!activeCapacityScope"
             @click="openCapacityModal"
           />
-          <UButton
-            type="button"
-            size="xs"
-            color="neutral"
-            :variant="groupDemandsByEpic ? 'soft' : 'outline'"
-            :icon="groupDemandsByEpic ? 'i-lucide-fold-vertical' : 'i-lucide-unfold-vertical'"
-            :label="groupDemandsByEpic ? 'Desagrupar por épico' : 'Agrupar por épico'"
-            @click="groupDemandsByEpic = !groupDemandsByEpic"
-          />
-          <UButton
-            v-if="groupDemandsByEpic"
-            type="button"
-            size="xs"
-            color="neutral"
-            variant="outline"
-            icon="i-lucide-chevrons-up-down"
-            :disabled="!visibleEpicIds.length"
-            :label="areAllEpicGroupsCollapsed ? 'Expandir épicos' : 'Recolher épicos'"
-            @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
-          />
-          <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
-            <UButton
-              type="button"
-              size="xs"
-              color="neutral"
-              :variant="listProblemFilter.length ? 'soft' : 'outline'"
-              icon="i-lucide-triangle-alert"
-              :label="listProblemFilterLabel"
-            />
-            <template #content>
-              <div class="min-w-56 space-y-0.5 p-1">
-                <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearListProblemFilter">
-                  <UIcon v-if="listProblemFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
-                  <span v-else class="inline-block h-4 w-4 shrink-0" />
-                  Sem filtro
-                </button>
-                <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.includes('__all__') ? 'text-primary' : 'text-highlighted'" @click="toggleListProblemFilter('__all__')">
-                  <UIcon v-if="listProblemFilter.includes('__all__')" name="i-lucide-check" class="h-4 w-4 shrink-0" />
-                  <span v-else class="inline-block h-4 w-4 shrink-0" />
-                  Todos os problemas
-                </button>
-                <button v-for="prob in listProblemOptions" :key="prob.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="listProblemFilter.includes(prob.value) ? 'text-primary' : 'text-highlighted'" @click="toggleListProblemFilter(prob.value)">
-                  <UIcon v-if="listProblemFilter.includes(prob.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
-                  <span v-else class="inline-block h-4 w-4 shrink-0" />
-                  {{ prob.label }}
-                </button>
-              </div>
-            </template>
-          </UPopover>
         </div>
       </div>
 
@@ -6178,7 +6259,7 @@ watch(activeDemandKpiId, async (value) => {
       :demand="editingDemand"
       :default-item-type="createItemType"
       :default-parent-demand-id="defaultParentDemandId"
-      :default-project-id="defaultProjectId ?? selectedProjectId ?? undefined"
+      :default-project-id="defaultProjectId ?? (filterListProjectIds.length === 1 ? filterListProjectIds[0] : selectedProjectId) ?? undefined"
       :default-project-ids="defaultProjectIds"
       :roadmap-options="roadmapParentOptions"
       :epic-options="epicParentOptions"
@@ -6192,7 +6273,7 @@ watch(activeDemandKpiId, async (value) => {
 
     <RoadmapCapacityModal
       v-model:open="capacityModalOpen"
-      :project-name="selectedProject?.name"
+      :project-name="capacityProjectName"
       :quarter-label="activeCapacityScope?.quarterLabel"
       :initial-value="capacityModalInitialValue"
       :is-saving="isSavingCapacity"
