@@ -92,7 +92,7 @@ const hierarchyContainerWidth = ref(0)
 const hierarchyHeaderScrollLeft = ref(0)
 let hierarchyWidthObserver: ResizeObserver | null = null
 
-const HIERARCHY_COL_MIN = 60
+const HIERARCHY_COL_MIN = 30
 const hierarchyColumnOrder: HierarchyColumnId[] = ['item', 'status', 'products', 'hours', 'classification', 'customers', 'due', 'kpi', 'actions']
 const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
   item: 360,
@@ -103,7 +103,7 @@ const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
   customers: 128,
   due: 136,
   kpi: 64,
-  actions: 116
+  actions: 40
 }
 const hierarchyColumnSizing = ref<Partial<Record<HierarchyColumnId, number>>>({})
 
@@ -2428,7 +2428,7 @@ void initializeHierarchyPage()
                   <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('due', $event)" />
                 </th>
                 <th class="relative border-b border-default bg-elevated/95 px-2 py-2" :style="{ width: getHierarchyColWidth('kpi') }">KPI<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('kpi', $event)" /></th>
-                <th class="relative border-b border-default bg-elevated/95 px-3 py-2 text-right" :style="{ width: getHierarchyColWidth('actions') }">Ações<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('actions', $event)" /></th>
+                <th class="relative border-b border-default bg-elevated/95 !px-0" :style="{ width: getHierarchyColWidth('actions') }"><span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('actions', $event)" /></th>
               </tr>
               <tr class="bg-elevated/60 text-left text-[11px] text-muted">
                 <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('item') }">
@@ -2530,7 +2530,7 @@ void initializeHierarchyPage()
 
               <template v-for="group in displayRoadmapGroups" :key="group.roadmap.id">
                 <tr class="border-b border-default bg-default hover:bg-elevated/30 transition-colors">
-                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
                     <div class="flex items-start gap-1">
                       <button
                         type="button"
@@ -2567,7 +2567,7 @@ void initializeHierarchyPage()
                     </div>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-1.5 align-top">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top">
                     <USelect
                       v-if="isHierarchyCellEditing(group.roadmap, 'status')"
                       :model-value="getHierarchyInlineDraft(group.roadmap).status"
@@ -2585,7 +2585,7 @@ void initializeHierarchyPage()
                     </button>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
                     <span v-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).allVisible && getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
                       {{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}
                     </span>
@@ -2606,20 +2606,20 @@ void initializeHierarchyPage()
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                     <span v-if="getDisplayedHours(group.roadmap) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(group.roadmap) }}h</span>
                     <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                     <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                     <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                     <div v-if="getDueDateLabel(group.roadmap) || getDueQuarterLabel(group.roadmap) || isDelayed(group.roadmap)" class="flex min-w-0 items-center gap-1" :class="getHierarchyReadonlyCellClass()" :title="getDueTooltip(group.roadmap)">
                       <span v-if="getDueDateLabel(group.roadmap)" :class="getDueDateClass(group.roadmap)">{{ getDueDateLabel(group.roadmap) }}</span>
                       <span v-if="getDueQuarterLabel(group.roadmap)" class="inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1 py-0 text-[8px] font-medium text-muted">
@@ -2629,18 +2629,20 @@ void initializeHierarchyPage()
                     <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                  <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                     <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
-                        <span class="h-5 w-5" />
-                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-5 w-5 p-0" title="Novo épico" @click="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
-                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar roadmap" @click="openEditModal(group.roadmap)" />
-                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Excluir roadmap" @click="promptDelete(group.roadmap)" />
-                    </div>
-                  </td>
+                    <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="group absolute inset-0 flex items-center justify-center">
+                        <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Novo épico" @click.stop="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
+                          <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar roadmap" @click.stop="openEditModal(group.roadmap)" />
+                          <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir roadmap" @click.stop="promptDelete(group.roadmap)" />
+                        </div>
+                      </div>
+                    </td>
                 </tr>
 
                 <tr
@@ -2657,7 +2659,7 @@ void initializeHierarchyPage()
                     v-show="!isRoadmapCollapsed(group.roadmap.id)"
                     class="bg-elevated/10 hover:bg-elevated/20 transition-colors"
                   >
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
                       <div class="flex items-start gap-1 pl-5">
                         <input
                           type="checkbox"
@@ -2735,7 +2737,7 @@ void initializeHierarchyPage()
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
                       <USelect
                         v-if="isHierarchyCellEditing(epicEntry.epic, 'status')"
                         :model-value="getHierarchyInlineDraft(epicEntry.epic).status"
@@ -2753,7 +2755,7 @@ void initializeHierarchyPage()
                       </button>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
                       <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
                         {{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}
                       </span>
@@ -2773,12 +2775,12 @@ void initializeHierarchyPage()
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                       <span v-if="getDisplayedHours(epicEntry.epic) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(epicEntry.epic) }}h</span>
                       <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                       <USelect
                         v-if="isHierarchyCellEditing(epicEntry.epic, 'classification')"
                         :model-value="getHierarchyInlineDraft(epicEntry.epic).classification"
@@ -2796,7 +2798,7 @@ void initializeHierarchyPage()
                       </button>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                       <UPopover
                         :open="isHierarchyCellEditing(epicEntry.epic, 'customers')"
                         :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
@@ -2843,7 +2845,7 @@ void initializeHierarchyPage()
                       </UPopover>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                       <div v-if="isHierarchyCellEditing(epicEntry.epic, 'dueDate')">
                         <UInput
                           :model-value="getHierarchyInlineDraft(epicEntry.epic).dueDate"
@@ -2866,7 +2868,7 @@ void initializeHierarchyPage()
                       </button>
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
-                    <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                    <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
                         <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
                           {{ getKpiSummary(epicEntry.epic).label }}
@@ -2877,12 +2879,15 @@ void initializeHierarchyPage()
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
-                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-5 w-5 p-0" title="Abrir KPIs do épico" @click="openKpiWorkspace(epicEntry.epic)" />
-                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-5 w-5 p-0" title="Nova demanda" @click="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
-                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar épico" @click="openEditModal(epicEntry.epic)" />
-                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Excluir épico" @click="promptDelete(epicEntry.epic)" />
+                    <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="group absolute inset-0 flex items-center justify-center">
+                        <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epicEntry.epic)" />
+                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
+                          <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epicEntry.epic)" />
+                          <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epicEntry.epic)" />
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -2893,7 +2898,7 @@ void initializeHierarchyPage()
                     :key="demand.id"
                     class="bg-default hover:bg-elevated/10 transition-colors"
                   >
-                    <td class="border-b border-default px-2.5 py-1.5 align-top">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top">
                       <div class="flex items-start gap-1 pl-12">
                         <input
                           type="checkbox"
@@ -2964,7 +2969,7 @@ void initializeHierarchyPage()
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
                       <USelect
                         v-if="isHierarchyCellEditing(demand, 'status')"
                         :model-value="getHierarchyInlineDraft(demand).status"
@@ -2982,7 +2987,7 @@ void initializeHierarchyPage()
                       </button>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
                       <UPopover
                         :open="isHierarchyCellEditing(demand, 'products')"
                         :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
@@ -3005,7 +3010,7 @@ void initializeHierarchyPage()
                       </UPopover>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                       <div v-if="isHierarchyCellEditing(demand, 'hours')">
                         <UInput
                           :model-value="getHierarchyInlineDraft(demand).hoursInput"
@@ -3027,13 +3032,13 @@ void initializeHierarchyPage()
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                       <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="[classificationBadgeClass[getDisplayedClassification(demand)], getHierarchyReadonlyCellClass()]" :title="classificationLabels[getDisplayedClassification(demand)]">
                         {{ getClassificationDisplayLabel(getDisplayedClassification(demand)) }}
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                       <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                         {{ getCustomerCellDisplay(demand).previewLabel }}
                       </span>
@@ -3053,7 +3058,7 @@ void initializeHierarchyPage()
                       <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                       <div v-if="isHierarchyCellEditing(demand, 'dueDate')">
                         <UInput
                           :model-value="getHierarchyInlineDraft(demand).dueDate"
@@ -3077,16 +3082,17 @@ void initializeHierarchyPage()
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                    <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <span class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                      <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
-                        <span class="h-5 w-5" />
-                        <span class="h-5 w-5" />
-                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar demanda" @click="openEditModal(demand)" />
-                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Remover demanda" @click="promptDelete(demand)" />
+                    <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
+                      <div class="group absolute inset-0 flex items-center justify-center">
+                        <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                          <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar demanda" @click.stop="openEditModal(demand)" />
+                          <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Remover demanda" @click.stop="promptDelete(demand)" />
+                        </div>
                       </div>
                     </td>
                   </tr>
@@ -3104,7 +3110,7 @@ void initializeHierarchyPage()
                 :key="`orphan-${epic.id}`"
                 class="bg-rose-50/30 hover:bg-rose-50/50 dark:bg-rose-950/10 dark:hover:bg-rose-950/20 transition-colors"
               >
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
                   <div class="flex items-start gap-1">
                     <input
                       type="checkbox"
@@ -3165,7 +3171,7 @@ void initializeHierarchyPage()
                     </div>
                   </div>
                 </td>
-                    <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
                       <USelect
                         v-if="isHierarchyCellEditing(epic, 'status')"
                         :model-value="getHierarchyInlineDraft(epic).status"
@@ -3182,7 +3188,7 @@ void initializeHierarchyPage()
                         {{ statusLabels[getHierarchyInlineDraft(epic).status] }}
                       </button>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
                   <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epic)).fullLabel">
                     {{ getProductCellDisplay(getEpicDisplayProductNames(epic)).previewLabel }}
                   </span>
@@ -3201,11 +3207,11 @@ void initializeHierarchyPage()
                   </UPopover>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                   <span v-if="getDisplayedHours(epic) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(epic) }}h</span>
                   <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                   <USelect
                     v-if="isHierarchyCellEditing(epic, 'classification')"
                     :model-value="getHierarchyInlineDraft(epic).classification"
@@ -3222,7 +3228,7 @@ void initializeHierarchyPage()
                     {{ getClassificationDisplayLabel(getHierarchyDraftDisplayItem(epic).classification) }}
                   </button>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                   <UPopover
                     :open="isHierarchyCellEditing(epic, 'customers')"
                     :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
@@ -3268,7 +3274,7 @@ void initializeHierarchyPage()
                     </template>
                   </UPopover>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                   <div v-if="isHierarchyCellEditing(epic, 'dueDate')">
                     <UInput
                       :model-value="getHierarchyInlineDraft(epic).dueDate"
@@ -3291,7 +3297,7 @@ void initializeHierarchyPage()
                   </button>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
                     <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
                       {{ getKpiSummary(epic).label }}
@@ -3301,12 +3307,15 @@ void initializeHierarchyPage()
                     </span>
                   </div>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
-                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-5 w-5 p-0" title="Abrir KPIs do épico" @click="openKpiWorkspace(epic)" />
-                    <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-5 w-5 p-0" title="Nova demanda" @click="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
-                    <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar épico" @click="openEditModal(epic)" />
-                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Excluir épico" @click="promptDelete(epic)" />
+                <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
+                  <div class="group absolute inset-0 flex items-center justify-center">
+                    <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epic)" />
+                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
+                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epic)" />
+                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epic)" />
+                    </div>
                   </div>
                 </td>
               </tr>
@@ -3322,7 +3331,7 @@ void initializeHierarchyPage()
                 :key="`orphan-demand-${demand.id}`"
                 class="bg-sky-50/20 hover:bg-sky-50/40 dark:bg-sky-950/10 dark:hover:bg-sky-950/20 transition-colors"
               >
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('item') }">
                   <div class="flex items-start gap-1">
                     <input
                       type="checkbox"
@@ -3389,7 +3398,7 @@ void initializeHierarchyPage()
                     </div>
                   </div>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
                   <USelect
                     v-if="isHierarchyCellEditing(demand, 'status')"
                     :model-value="getHierarchyInlineDraft(demand).status"
@@ -3406,7 +3415,7 @@ void initializeHierarchyPage()
                     {{ statusLabels[getHierarchyInlineDraft(demand).status] }}
                   </button>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
                   <UPopover
                     :open="isHierarchyCellEditing(demand, 'products')"
                     :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
@@ -3428,7 +3437,7 @@ void initializeHierarchyPage()
                     </template>
                   </UPopover>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
                   <div v-if="isHierarchyCellEditing(demand, 'hours')">
                     <UInput
                       :model-value="getHierarchyInlineDraft(demand).hoursInput"
@@ -3449,12 +3458,12 @@ void initializeHierarchyPage()
                   </button>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                   <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="[classificationBadgeClass[getDisplayedClassification(demand)], getHierarchyReadonlyCellClass()]" :title="classificationLabels[getDisplayedClassification(demand)]">
                     {{ getClassificationDisplayLabel(getDisplayedClassification(demand)) }}
                   </span>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                   <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                     {{ getCustomerCellDisplay(demand).previewLabel }}
                   </span>
@@ -3473,7 +3482,7 @@ void initializeHierarchyPage()
                   </UPopover>
                   <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                   <div v-if="isHierarchyCellEditing(demand, 'dueDate')">
                     <UInput
                       :model-value="getHierarchyInlineDraft(demand).dueDate"
@@ -3496,15 +3505,16 @@ void initializeHierarchyPage()
                   </button>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2 py-1.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
+                <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <span class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2.5 py-1.5 align-top" :style="{ width: getHierarchyColWidth('actions') }">
-                  <div class="ml-auto grid w-full max-w-full grid-cols-4 justify-items-end gap-0.5">
-                    <span class="h-5 w-5" />
-                    <span class="h-5 w-5" />
-                    <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-5 w-5 p-0" title="Editar demanda" @click="openEditModal(demand)" />
-                    <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-5 w-5 p-0" title="Remover demanda" @click="promptDelete(demand)" />
+                <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
+                  <div class="group absolute inset-0 flex items-center justify-center">
+                    <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar demanda" @click.stop="openEditModal(demand)" />
+                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Remover demanda" @click.stop="promptDelete(demand)" />
+                    </div>
                   </div>
                 </td>
               </tr>

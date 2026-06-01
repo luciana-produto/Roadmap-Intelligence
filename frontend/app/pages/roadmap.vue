@@ -3983,7 +3983,7 @@ function openPlanningStatusModal(item: RoadmapDemand, status: Extract<DemandStat
 
   updatePlanningInlineDraft(item, {
     status,
-    deliveryDate: status === 'Done' ? (draft.deliveryDate || item.deliveryDate || '') : draft.deliveryDate,
+    dueDate: status === 'Done' ? (draft.deliveryDate || item.deliveryDate || '') : draft.dueDate,
     blockedReason: status === 'Blocked' ? draft.blockedReason : '',
     deprioritizationReason: status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
     replacementDemandId: status === 'Deprioritized' ? draft.replacementDemandId : undefined,
@@ -4023,7 +4023,7 @@ function confirmPlanningStatusModal() {
   if (!item || !draft)
     return
 
-  if (draft.status === 'Done' && !draft.deliveryDate) {
+  if (draft.status === 'Done' && !draft.dueDate) {
     toast.add({ title: 'Informe a data de entrega', color: 'warning' })
     return
   }
@@ -4096,7 +4096,7 @@ async function savePlanningInline(
     return false
   }
 
-  if (draft.status === 'Done' && !draft.deliveryDate) {
+  if (draft.status === 'Done' && !draft.dueDate) {
     toast.add({ title: 'Informe a data de entrega', color: 'warning' })
     return false
   }
@@ -4134,7 +4134,7 @@ async function savePlanningInline(
       deprioritizationReason: draft.status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
       replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
       hours,
-      promisedDate: isDoneStatus ? (item.promisedDate ?? '') : (isBacklogDemand(item) ? '' : draft.dueDate),
+      promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
       deliveryDate: isDoneStatus ? draft.dueDate : ''
     }))
 
@@ -6105,10 +6105,10 @@ watch(activeDemandKpiId, async (value) => {
 
           <UFormField v-if="planningStatusModalRequiresDeliveryDate" label="Data de entrega" required>
             <UInput
-              :model-value="planningStatusModalDraft.deliveryDate"
+              :model-value="planningStatusModalDraft.dueDate"
               type="date"
               class="w-full"
-              @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { deliveryDate: String(value ?? '') })"
+              @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { dueDate: String(value ?? '') })"
             />
           </UFormField>
 
