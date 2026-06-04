@@ -1846,7 +1846,7 @@ async function saveHierarchyInline(
   try {
     hierarchyInlineSavingIds.value = [...hierarchyInlineSavingIds.value, item.id]
 
-    await roadmapStore.updateDemand(item.id, buildDemandFormData(item, {
+    const updated = await roadmapStore.updateDemand(item.id, buildDemandFormData(item, {
       title: draft.title.trim() || item.title,
       status: draft.status,
       classification: item.itemType === 'Epic' ? draft.classification : item.classification,
@@ -1862,8 +1862,13 @@ async function saveHierarchyInline(
     }))
 
     clearHierarchyInlineDraft(item.id)
-    if (reloadAfterSave)
-      await loadPageData()
+    if (reloadAfterSave) {
+      const idx = hierarchyDemands.value.findIndex(d => d.id === updated.id)
+      if (idx !== -1)
+        hierarchyDemands.value.splice(idx, 1, updated)
+      else
+        hierarchyDemands.value.push(updated)
+    }
 
     if (showSuccessToast)
       toast.add({ title: 'Item atualizado', color: 'success' })
@@ -1895,7 +1900,10 @@ async function saveAllHierarchyInlineEdits() {
         return
     }
 
-    await loadPageData()
+    // Sync all updated items from store — no API call, no loading indicator
+    const storeMap = new Map(roadmapStore.demands.map(d => [d.id, d]))
+    hierarchyDemands.value = hierarchyDemands.value.map(d => storeMap.get(d.id) ?? d)
+
     deactivateHierarchyCell()
     toast.add({
       title: 'Edições salvas',
@@ -2139,17 +2147,23 @@ async function handleSubmit(data: DemandFormData) {
   try {
     isSavingDemand.value = true
     if (editingDemand.value) {
-      await roadmapStore.updateDemand(editingDemand.value.id, data)
+      const updated = await roadmapStore.updateDemand(editingDemand.value.id, data)
 
       if (editingDemand.value.itemType === 'Epic')
         await propagateEpicCustomerRenames(editingDemand.value.id, customerRenames)
 
-      await loadPageData()
+      // Sync local list from store — covers the edited item and any customer renames
+      // propagated to other epics, without triggering a full page reload
+      const storeMap = new Map(roadmapStore.demands.map(d => [d.id, d]))
+      hierarchyDemands.value = hierarchyDemands.value.map(d => storeMap.get(d.id) ?? d)
+      if (!hierarchyDemands.value.some(d => d.id === updated.id))
+        hierarchyDemands.value.push(updated)
+
       toast.add({ title: 'Item atualizado', color: 'success' })
     }
     else {
-      await roadmapStore.createDemand(data)
-      await loadPageData()
+      const created = await roadmapStore.createDemand(data)
+      hierarchyDemands.value.push(created)
       toast.add({ title: 'Item criado', color: 'success' })
     }
 
