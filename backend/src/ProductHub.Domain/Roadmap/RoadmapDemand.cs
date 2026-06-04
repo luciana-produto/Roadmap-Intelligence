@@ -27,6 +27,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public IReadOnlyList<RoadmapIssueLink> IssueLinks => _issueLinks;
     public decimal? Hours { get; private set; }
     public bool HoursRed { get; private set; }
+    public string? RowColor { get; private set; }
     public IReadOnlyList<string> Customers { get; private set; } = [];
     public bool IsBlocked { get; private set; }
     public string? BlockedReason { get; private set; }
@@ -75,7 +76,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         bool hasNoKpi = false,
         NoKpiClassification? noKpiClassification = null,
         bool excludeFromCapacity = false,
-        bool hoursRed = false)
+        bool hoursRed = false,
+        string? rowColor = null)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -108,6 +110,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             _issueLinks = NormalizeIssueLinks(issueLinks),
             Hours = normalizedHours,
             HoursRed = itemType == RoadmapItemType.Demand && hoursRed,
+            RowColor = rowColor,
             Customers = NormalizeCustomers(customers),
             IsBlocked = status == DemandStatus.Blocked,
             BlockedReason = normalizedBlockedReason,
@@ -156,7 +159,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         bool hasNoKpi = false,
         NoKpiClassification? noKpiClassification = null,
         bool excludeFromCapacity = false,
-        bool hoursRed = false)
+        bool hoursRed = false,
+        string? rowColor = null)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -188,6 +192,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         _issueLinks = NormalizeIssueLinks(issueLinks);
         Hours = normalizedHours;
         HoursRed = itemType == RoadmapItemType.Demand && hoursRed;
+        RowColor = rowColor;
         Customers = NormalizeCustomers(customers);
         IsBlocked = status == DemandStatus.Blocked;
         BlockedReason = normalizedBlockedReason;

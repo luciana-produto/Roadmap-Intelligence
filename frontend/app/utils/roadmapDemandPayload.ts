@@ -27,6 +27,7 @@ type SharedDemandMutationPayload = {
   issueLinks: IssueLinkInput[]
   hours?: number
   hoursRed: boolean
+  rowColor?: string | null
   promisedDate?: string
   customers: string[]
   isBlocked: boolean
@@ -89,6 +90,7 @@ function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemand
     issueLinks,
     hours: payload.hours ?? undefined,
     hoursRed: payload.itemType === 'Demand' ? (payload.hoursRed ?? false) : false,
+    rowColor: payload.rowColor ?? null,
     promisedDate: sanitizePromisedDateForItem(payload.itemType, payload.quarterYear, payload.quarterNumber, payload.promisedDate),
     customers: sanitizeCustomersForItem(payload.itemType, payload.customers),
     isBlocked,
@@ -143,6 +145,7 @@ export function buildStatusPatchPayload(demand: RoadmapDemand, status: DemandSta
     issueLinks,
     hours: demand.hours ?? undefined,
     hoursRed: demand.itemType === 'Demand' ? (demand.hoursRed ?? false) : false,
+    rowColor: demand.rowColor ?? null,
     customers: sanitizeCustomersForItem(demand.itemType, demand.customers),
     isBlocked,
     blockedReason: isBlocked ? demand.blockedReason || undefined : undefined,

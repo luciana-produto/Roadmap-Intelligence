@@ -1719,18 +1719,18 @@ function syncListSectionDividers() {
       row.dataset.quarterKey = `${demand.quarterYear}:${demand.quarterNumber}`
     }
 
-    const inconsistent = hasInconsistentDependency(demand)
     const isGroupedDemandRow = groupDemandsByEpic.value && !!demand.epicId
-    row.classList.toggle('bg-elevated/5', isGroupedDemandRow && !inconsistent)
-    row.classList.toggle('hover:bg-elevated/15', isGroupedDemandRow && !inconsistent)
-    row.classList.toggle('bg-red-50/70', inconsistent)
-    row.classList.toggle('dark:bg-red-950/20', inconsistent)
+    row.classList.toggle('bg-elevated/5', isGroupedDemandRow)
+    row.classList.toggle('hover:bg-elevated/15', isGroupedDemandRow)
+    const rowColorRgba = demand.rowColor
+      ? (LIST_ROW_COLORS.find(c => c.id === demand.rowColor)?.rgba ?? null)
+      : null
+    row.style.backgroundColor = rowColorRgba ?? ''
 
     for (const cell of Array.from(row.children) as HTMLTableCellElement[]) {
-      cell.classList.toggle('bg-elevated/5', isGroupedDemandRow && !inconsistent)
-      cell.classList.toggle('hover:bg-elevated/15', isGroupedDemandRow && !inconsistent)
-      cell.classList.toggle('bg-red-50/70', inconsistent)
-      cell.classList.toggle('dark:bg-red-950/20', inconsistent)
+      cell.classList.toggle('bg-elevated/5', isGroupedDemandRow)
+      cell.classList.toggle('hover:bg-elevated/15', isGroupedDemandRow)
+      cell.style.backgroundColor = rowColorRgba ?? ''
     }
   })
 
@@ -2020,11 +2020,18 @@ function syncListSectionDividers() {
             epicTitleRow.appendChild(issueTrigger)
           }
           else {
-            // No Jira issue linked — show a subtle indicator
-            const noJira = document.createElement('span')
-            noJira.className = 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400'
-            noJira.title = 'Sem issue Jira associada'
-            noJira.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="h-3 w-3"><path d="m10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="2" y1="2" x2="22" y2="22"/></svg>'
+            const noJira = document.createElement('button')
+            noJira.type = 'button'
+            noJira.className = 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400'
+            noJira.title = 'Sem issue Jira — clique para adicionar'
+            if (headerMeta?.epic) {
+              noJira.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                openEditModal(headerMeta.epic, undefined, 'jiraIssue')
+              })
+            }
+            noJira.appendChild(createFilledSvgIcon(['M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.218 5.218 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zM23.013 0H11.455a5.215 5.215 0 0 0 5.215 5.215h2.129v2.057A5.215 5.215 0 0 0 24 12.483V1.005A1.001 1.001 0 0 0 23.013 0Z'], 'h-3 w-3'))
             epicTitleRow.appendChild(noJira)
           }
 
@@ -2057,6 +2064,50 @@ function syncListSectionDividers() {
               epicTitleRow.appendChild(createDepIcon(dep, 'dependsOn'))
             for (const dep of headerMeta.epic.dependedOnBy)
               epicTitleRow.appendChild(createDepIcon(dep, 'dependedOnBy'))
+
+            const epicInconsistentDeps = headerMeta.epic.dependsOn.filter(dep => isDependencyInconsistent(headerMeta.epic, dep))
+            if (epicInconsistentDeps.length > 0) {
+              const epicInconsistencyTooltip = epicInconsistentDeps.map(dep =>
+                `${getDependencyTooltip('É bloqueado por', dep)}\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${headerMeta.epic.quarterLabel}, ou sem priorização.`
+              ).join('\n\n')
+
+              const inconsistencyBanner = document.createElement('div')
+              inconsistencyBanner.className = 'mt-0.5 flex items-center gap-1 rounded border border-amber-200/70 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/15 dark:text-amber-300/90'
+              inconsistencyBanner.title = epicInconsistencyTooltip
+
+              const warnSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+              warnSvg.setAttribute('viewBox', '0 0 24 24')
+              warnSvg.setAttribute('fill', 'none')
+              warnSvg.setAttribute('stroke', 'currentColor')
+              warnSvg.setAttribute('stroke-width', '2')
+              warnSvg.setAttribute('stroke-linecap', 'round')
+              warnSvg.setAttribute('stroke-linejoin', 'round')
+              warnSvg.setAttribute('class', 'h-3 w-3 shrink-0')
+              const warnPath = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+              warnPath.setAttribute('d', 'm21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3')
+              const warnLine = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+              warnLine.setAttribute('x1', '12')
+              warnLine.setAttribute('x2', '12')
+              warnLine.setAttribute('y1', '9')
+              warnLine.setAttribute('y2', '13')
+              const warnLine2 = document.createElementNS('http://www.w3.org/2000/svg', 'line')
+              warnLine2.setAttribute('x1', '12')
+              warnLine2.setAttribute('x2', '12.01')
+              warnLine2.setAttribute('y1', '17')
+              warnLine2.setAttribute('y2', '17')
+              warnSvg.append(warnPath, warnLine, warnLine2)
+              inconsistencyBanner.appendChild(warnSvg)
+
+              const bannerText = document.createElement('span')
+              bannerText.textContent = 'Dependência inconsistente'
+              inconsistencyBanner.appendChild(bannerText)
+
+              const bannerCount = document.createElement('span')
+              bannerCount.textContent = `(${epicInconsistentDeps.length})`
+              inconsistencyBanner.appendChild(bannerCount)
+
+              titleBlock.appendChild(inconsistencyBanner)
+            }
           }
 
           scopeWrap.append(metaRow, titleBlock)
@@ -2609,6 +2660,66 @@ function syncListSectionDividers() {
             kpiButton.appendChild(kpiSvg)
             actions.appendChild(kpiButton)
 
+            const colorDetails = document.createElement('details')
+            colorDetails.className = 'relative inline-flex shrink-0'
+            colorDetails.addEventListener('click', event => event.stopPropagation())
+
+            const colorSummary = document.createElement('summary')
+            colorSummary.className = 'inline-flex h-6 w-6 list-none cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
+            colorSummary.title = 'Cor da linha'
+            const epicColor = LIST_ROW_COLORS.find(c => c.id === headerMeta.epic.rowColor)
+            const colorDot = document.createElement('span')
+            colorDot.className = 'h-3 w-3 rounded-full'
+            if (epicColor) {
+              colorDot.style.backgroundColor = epicColor.hex
+            }
+            else {
+              colorDot.style.border = '1.5px solid var(--ui-border-muted, #9ca3af)'
+            }
+            colorSummary.appendChild(colorDot)
+            colorDetails.appendChild(colorSummary)
+
+            const colorPanel = document.createElement('div')
+            colorPanel.className = 'absolute right-0 top-full z-30 mt-1 rounded-lg border border-default bg-default p-2 shadow-lg'
+            const colorPanelLabel = document.createElement('p')
+            colorPanelLabel.className = 'mb-2 text-xs font-medium text-muted'
+            colorPanelLabel.textContent = 'Cor da linha'
+            colorPanel.appendChild(colorPanelLabel)
+            const swatchRow = document.createElement('div')
+            swatchRow.className = 'flex flex-wrap gap-1.5'
+
+            const noneBtn = document.createElement('button')
+            noneBtn.type = 'button'
+            noneBtn.className = 'flex h-5 w-5 items-center justify-center rounded border border-default transition-colors hover:border-primary/40'
+            noneBtn.title = 'Sem cor'
+            noneBtn.appendChild(createSvgIcon(['M18 6 6 18', 'M6 6l12 12'], 'h-3 w-3 text-muted'))
+            noneBtn.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              setDemandRowColor(headerMeta.epic, null)
+              colorDetails.removeAttribute('open')
+            })
+            swatchRow.appendChild(noneBtn)
+
+            LIST_ROW_COLORS.forEach((color) => {
+              const swatch = document.createElement('button')
+              swatch.type = 'button'
+              swatch.className = `h-5 w-5 rounded-full transition-all hover:scale-110${headerMeta.epic.rowColor === color.id ? ' ring-2 ring-offset-1 ring-highlighted' : ''}`
+              swatch.style.backgroundColor = color.hex
+              swatch.title = color.label
+              swatch.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setDemandRowColor(headerMeta.epic, color.id)
+                colorDetails.removeAttribute('open')
+              })
+              swatchRow.appendChild(swatch)
+            })
+
+            colorPanel.appendChild(swatchRow)
+            colorDetails.appendChild(colorPanel)
+            actions.appendChild(colorDetails)
+
             const editButton = document.createElement('button')
             editButton.type = 'button'
             editButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
@@ -2688,6 +2799,14 @@ function syncListSectionDividers() {
 
       fullRowCell.appendChild(grid)
       dividerRow.appendChild(fullRowCell)
+
+      const epicRowColorRgba = headerMeta?.epic.rowColor
+        ? (LIST_ROW_COLORS.find(c => c.id === headerMeta.epic.rowColor)?.rgba ?? null)
+        : null
+      if (epicRowColorRgba) {
+        dividerRow.style.backgroundColor = epicRowColorRgba
+        grid.style.backgroundColor = epicRowColorRgba
+      }
 
       tbody.insertBefore(dividerRow, targetRow)
       return
@@ -2842,6 +2961,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     issueLinks: getDisplayIssueLinks(demand).filter((issue): issue is { key: string, url: string } => !!issue.url).map(issue => ({ key: issue.key, url: issue.url })),
     hours: demand.hours,
     hoursRed: demand.hoursRed ?? false,
+    rowColor: demand.rowColor ?? null,
     promisedDate: isBacklogDemand ? '' : (demand.promisedDate ?? ''),
     customers: demand.itemType === 'Demand' ? [] : (demand.customers ?? []),
     dependencyDemandIds: demand.dependsOn.map(item => item.demandId),
@@ -2861,6 +2981,20 @@ async function toggleExcludeFromCapacity(demand: RoadmapDemand) {
   await roadmapStore.updateDemand(demand.id, buildDemandFormData(demand, {
     excludeFromCapacity: !demand.excludeFromCapacity
   }))
+}
+
+async function setDemandRowColor(demand: RoadmapDemand, color: string | null) {
+  if (isPlanningInlineSaving(demand.id) || isSavingAllPlanningInlineEdits.value) return
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  try {
+    planningInlineSavingIds.value = [...planningInlineSavingIds.value, demand.id]
+    await roadmapStore.updateDemand(demand.id, buildDemandFormData(demand, { rowColor: color }))
+    await refreshListPresentation(listScrollTop, listScrollLeft)
+  }
+  finally {
+    planningInlineSavingIds.value = planningInlineSavingIds.value.filter(id => id !== demand.id)
+  }
 }
 
 // --- Criar Transbordo modal ---
@@ -3501,6 +3635,16 @@ const planningStatusReplacementDemandOptions = computed(() => {
 })
 
 const LIST_COL_MIN = 60
+
+const LIST_ROW_COLORS = [
+  { id: 'red',    label: 'Vermelho', hex: '#ef4444', rgba: 'rgba(239, 68, 68, 0.10)' },
+  { id: 'orange', label: 'Laranja',  hex: '#f97316', rgba: 'rgba(249, 115, 22, 0.10)' },
+  { id: 'amber',  label: 'Âmbar',   hex: '#f59e0b', rgba: 'rgba(245, 158, 11, 0.10)' },
+  { id: 'green',  label: 'Verde',   hex: '#22c55e', rgba: 'rgba(34, 197, 94, 0.10)' },
+  { id: 'blue',   label: 'Azul',    hex: '#3b82f6', rgba: 'rgba(59, 130, 246, 0.10)' },
+  { id: 'violet', label: 'Roxo',    hex: '#8b5cf6', rgba: 'rgba(139, 92, 246, 0.10)' },
+  { id: 'pink',   label: 'Rosa',    hex: '#ec4899', rgba: 'rgba(236, 72, 153, 0.10)' },
+] as const
 
 interface ListColMeta {
   id: string
@@ -4272,6 +4416,9 @@ function buildBulkEditOverrides(demand: RoadmapDemand, changes: BulkEditRoadmapI
     }
   }
 
+  if (Object.prototype.hasOwnProperty.call(changes, 'rowColor'))
+    overrides.rowColor = changes.rowColor
+
   return overrides
 }
 
@@ -4817,7 +4964,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             }, d.epicTitle),
             ...(renderIssueTrigger(epicIssueLinks)
               ? [renderIssueTrigger(epicIssueLinks)!]
-              : [h('button', { type: 'button', class: 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors', title: 'Sem issue Jira — clique para adicionar', onClick: () => { const epic = d.epicId ? itemsById.value.get(d.epicId) : null; if (epic) openEditModal(epic, undefined, 'jiraIssue') } }, [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3' })])])
+              : [h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: 'Sem issue Jira — clique para adicionar', onClick: () => { const epic = d.epicId ? itemsById.value.get(d.epicId) : null; if (epic) openEditModal(epic, undefined, 'jiraIssue') } }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })])])
           ])
         )
       }
@@ -4852,7 +4999,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
                 ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
                 ...(getDemandProblemKeys(d).length ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })] : []),
                 ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
-                  h('button', { type: 'button', class: 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3' })])
+                  h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })])
                 ])
               ])
             ])
@@ -4898,9 +5045,26 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               ])]
             : []),
           ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
-            !issueLinks.length ? h('button', { type: 'button', class: 'inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-lucide-unlink', class: 'h-3 w-3' })]) : null
+            !issueLinks.length ? h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })]) : null
           ].filter(Boolean))
         ]))
+      }
+
+      const inconsistentDeps = d.dependsOn.filter(dep => isDependencyInconsistent(d, dep))
+      if (inconsistentDeps.length > 0) {
+        const tooltipText = inconsistentDeps.map(dep =>
+          `${getDependencyTooltip('É bloqueado por', dep)}\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${d.quarterLabel}, ou sem priorização.`
+        ).join('\n\n')
+        textNodes.push(
+          h('div', {
+            class: 'mt-0.5 flex items-center gap-1 rounded border border-amber-200/70 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/15 dark:text-amber-300/90',
+            title: tooltipText
+          }, [
+            h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3 w-3 shrink-0' }),
+            h('span', {}, 'Dependência inconsistente'),
+            h('span', {}, `(${inconsistentDeps.length})`)
+          ])
+        )
       }
 
       return h('div', { class: 'min-w-0' }, textNodes)
@@ -5171,6 +5335,42 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             icon: 'i-lucide-line-chart',
             title: 'Abrir KPIs do épico',
             onClick: () => openDemandKpiWorkspace(demand)
+          })
+        )
+      }
+
+      // Nth: Cor da linha
+      if (!isCollapsedRepresentative(demand)) {
+        actionSlots.push(
+          h(UPopoverComp, { content: { side: 'left', sideOffset: 8 } }, {
+            default: () => h(UButtonComp, {
+              size: 'xs',
+              variant: 'ghost',
+              color: 'neutral',
+              class: 'h-6 w-6 p-0',
+              title: 'Cor da linha',
+              style: demand.rowColor ? { color: LIST_ROW_COLORS.find(c => c.id === demand.rowColor)?.hex } : {}
+            }, { default: () => h(UIconComp, { name: 'i-lucide-palette', class: 'h-4 w-4' }) }),
+            content: () => h('div', { class: 'p-2' }, [
+              h('p', { class: 'mb-2 text-xs font-medium text-muted' }, 'Cor da linha'),
+              h('div', { class: 'flex flex-wrap gap-1.5' }, [
+                h('button', {
+                  type: 'button',
+                  class: 'flex h-5 w-5 items-center justify-center rounded border border-default transition-colors hover:border-primary/40',
+                  title: 'Sem cor',
+                  onClick: () => setDemandRowColor(demand, null)
+                }, [h(UIconComp, { name: 'i-lucide-x', class: 'h-3 w-3 text-muted' })]),
+                ...LIST_ROW_COLORS.map(color =>
+                  h('button', {
+                    type: 'button',
+                    class: `h-5 w-5 rounded-full transition-all hover:scale-110 ${demand.rowColor === color.id ? 'ring-2 ring-offset-1 ring-highlighted' : ''}`,
+                    style: { backgroundColor: color.hex },
+                    title: color.label,
+                    onClick: () => setDemandRowColor(demand, color.id)
+                  })
+                )
+              ])
+            ])
           })
         )
       }
@@ -6045,14 +6245,7 @@ watch(activeDemandKpiId, async (value) => {
               </template>
               <template #hours-cell="{ row }">
                 <div v-if="isCollapsedRepresentative(row.original)" class="text-xs text-muted">—</div>
-                <div v-else-if="isPlanningCellEditing(row.original, 'hours')" class="ml-auto flex max-w-[84px] items-center gap-1">
-                  <button
-                    type="button"
-                    class="h-3 w-3 shrink-0 rounded-full transition-colors"
-                    :class="getPlanningInlineDraft(row.original).hoursRed ? 'bg-red-500 hover:bg-red-600' : 'bg-muted/30 hover:bg-red-300'"
-                    title="Destacar horas em vermelho"
-                    @mousedown.prevent="updatePlanningInlineDraft(row.original, { hoursRed: !getPlanningInlineDraft(row.original).hoursRed })"
-                  />
+                <div v-else-if="isPlanningCellEditing(row.original, 'hours')" class="ml-auto w-full max-w-[84px]">
                   <UInput
                     :model-value="getPlanningInlineDraft(row.original).hoursInput"
                     type="text"
@@ -6080,16 +6273,26 @@ watch(activeDemandKpiId, async (value) => {
                   >
                     {{ getPlanningInlineDraft(row.original).hoursInput ? `${getPlanningInlineDraft(row.original).hoursInput}h` : `${row.original.hours ?? 0}h` }}
                   </button>
-                  <button
-                    type="button"
-                    class="inline-flex h-3.5 w-3.5 items-center justify-center rounded text-muted/40 transition-colors hover:text-muted"
-                    :class="row.original.excludeFromCapacity ? '!text-amber-500 hover:!text-amber-600' : ''"
-                    :title="row.original.excludeFromCapacity ? 'Excluído do capacity. Clique para incluir.' : 'Clique para excluir do capacity.'"
-                    :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
-                    @click.stop="toggleExcludeFromCapacity(row.original)"
-                  >
-                    <UIcon :name="row.original.excludeFromCapacity ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="h-2.5 w-2.5" />
-                  </button>
+                  <div class="flex items-center gap-1">
+                    <button
+                      type="button"
+                      class="inline-flex h-2.5 w-2.5 shrink-0 items-center justify-center rounded-full transition-colors"
+                      :class="getPlanningInlineDraft(row.original).hoursRed ? 'bg-red-500 hover:bg-red-600' : 'border border-muted bg-transparent hover:border-red-400'"
+                      title="Destacar horas em vermelho"
+                      :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                      @click.stop="updatePlanningInlineDraft(row.original, { hoursRed: !getPlanningInlineDraft(row.original).hoursRed })"
+                    />
+                    <button
+                      type="button"
+                      class="inline-flex h-3.5 w-3.5 items-center justify-center rounded text-muted/40 transition-colors hover:text-muted"
+                      :class="row.original.excludeFromCapacity ? '!text-amber-500 hover:!text-amber-600' : ''"
+                      :title="row.original.excludeFromCapacity ? 'Excluído do capacity. Clique para incluir.' : 'Clique para excluir do capacity.'"
+                      :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
+                      @click.stop="toggleExcludeFromCapacity(row.original)"
+                    >
+                      <UIcon :name="row.original.excludeFromCapacity ? 'i-lucide-eye-off' : 'i-lucide-eye'" class="h-2.5 w-2.5" />
+                    </button>
+                  </div>
                 </div>
               </template>
             </UTable>

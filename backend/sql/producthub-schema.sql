@@ -317,3 +317,8 @@ IF COL_LENGTH(N'dbo.RoadmapDemands', N'HoursRed') IS NULL
 BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD HoursRed BIT NOT NULL CONSTRAINT DF_RoadmapDemands_HoursRed DEFAULT (0);
 END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'RowColor') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD RowColor NVARCHAR(50) NULL;
+END;

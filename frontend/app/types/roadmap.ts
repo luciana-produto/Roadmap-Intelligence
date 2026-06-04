@@ -121,6 +121,7 @@ export interface RoadmapDemand {
   issueLinks?: IssueLink[]
   hours?: number
   hoursRed?: boolean
+  rowColor?: string | null
   customers?: string[]
   isBlocked: boolean
   blockedReason?: string
@@ -179,6 +180,7 @@ export interface DemandFormData {
   issueLinks?: IssueLinkInput[]
   hours?: number
   hoursRed?: boolean
+  rowColor?: string | null
   customers?: string[]
   customerRenames?: CustomerRename[]
   dependencyDemandIds?: string[]
@@ -208,6 +210,7 @@ export interface BulkEditRoadmapItemsData {
   type?: DemandType
   quarterYear?: number
   quarterNumber?: number
+  rowColor?: string | null
 }
 
 export interface CapacityFormData {

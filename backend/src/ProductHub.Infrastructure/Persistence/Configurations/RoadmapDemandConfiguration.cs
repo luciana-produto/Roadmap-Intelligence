@@ -75,6 +75,7 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
         issueLinksProperty.Metadata.SetValueComparer(issueLinksComparer);
         builder.Property(x => x.Hours);
         builder.Property(x => x.HoursRed).IsRequired().HasDefaultValue(false);
+        builder.Property(x => x.RowColor).HasMaxLength(50).IsRequired(false);
 
         var customersConverter = new ValueConverter<IReadOnlyList<string>, string?>(
             customers => JsonSerializer.Serialize(customers ?? Array.Empty<string>(), (JsonSerializerOptions?)null),

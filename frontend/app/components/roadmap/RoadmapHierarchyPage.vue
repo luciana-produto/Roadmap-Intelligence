@@ -2763,7 +2763,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
-                              <button v-else type="button" class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epicEntry.epic)"><UIcon name="i-lucide-unlink" class="h-3 w-3" /></button>
+                              <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epicEntry.epic)"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
                             </div>
                           </div>
                         </div>
@@ -2998,7 +2998,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
-                              <button v-else type="button" class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors" title="Sem issue Jira — clique para adicionar" @click="openEditModal(demand)"><UIcon name="i-lucide-unlink" class="h-3 w-3" /></button>
+                              <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(demand)"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
                             </div>
                           </div>
                         </div>
@@ -3211,7 +3211,7 @@ void initializeHierarchyPage()
                             </div>
                           </template>
                         </UPopover>
-                        <button v-else type="button" class="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-red-400 rounded hover:text-red-600 transition-colors" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epic)"><UIcon name="i-lucide-unlink" class="h-3 w-3" /></button>
+                        <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epic)"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
                       </div>
                     </div>
                   </div>

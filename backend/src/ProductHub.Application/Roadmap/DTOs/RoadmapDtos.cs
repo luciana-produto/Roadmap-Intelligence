@@ -83,7 +83,8 @@ public sealed record RoadmapDemandDto(
     DateTime? UpdatedAt,
     bool ExcludeFromCapacity = false,
     Guid? SuccessorDemandId = null,
-    bool HoursRed = false);
+    bool HoursRed = false,
+    string? RowColor = null);
 
 public sealed record RoadmapCapacityDto(
     Guid? Id,

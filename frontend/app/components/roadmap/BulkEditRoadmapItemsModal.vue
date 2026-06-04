@@ -1,5 +1,15 @@
 <script setup lang="ts">
 import type { BulkEditRoadmapItemsData, DemandDependencyOption, DeprioritizationReason, DemandStatus, DemandType, RoadmapDemand } from '~/types/roadmap'
+
+const LIST_ROW_COLORS = [
+  { id: 'red',    label: 'Vermelho', hex: '#ef4444' },
+  { id: 'orange', label: 'Laranja',  hex: '#f97316' },
+  { id: 'amber',  label: 'Âmbar',   hex: '#f59e0b' },
+  { id: 'green',  label: 'Verde',   hex: '#22c55e' },
+  { id: 'blue',   label: 'Azul',    hex: '#3b82f6' },
+  { id: 'violet', label: 'Roxo',    hex: '#8b5cf6' },
+  { id: 'pink',   label: 'Rosa',    hex: '#ec4899' },
+] as const
 import {
   BACKLOG_QUARTER,
   PRIORITIZED_BACKLOG_QUARTER,
@@ -63,6 +73,8 @@ const applyStatus = ref(false)
 const applyPromisedDate = ref(false)
 const applyType = ref(false)
 const applyQuarter = ref(false)
+const applyRowColor = ref(false)
+const rowColor = ref<string | null>(null)
 const status = ref<DemandStatus | undefined>()
 const promisedDate = ref('')
 const deliveryDate = ref('')
@@ -103,7 +115,7 @@ const missingSubmitReason = computed(() => {
   if (!props.selectedItems.length)
     return 'Selecione ao menos um épico ou demanda'
 
-  if (!applyStatus.value && !applyPromisedDate.value && !applyType.value && !applyQuarter.value)
+  if (!applyStatus.value && !applyPromisedDate.value && !applyType.value && !applyQuarter.value && !applyRowColor.value)
     return 'Selecione ao menos um campo para alterar'
 
   if (applyStatus.value && !status.value)
@@ -141,6 +153,8 @@ function resetState() {
   applyPromisedDate.value = false
   applyType.value = false
   applyQuarter.value = false
+  applyRowColor.value = false
+  rowColor.value = null
   status.value = undefined
   promisedDate.value = ''
   deliveryDate.value = ''
@@ -237,6 +251,9 @@ function handleSubmit() {
     payload.quarterYear = quarterYear
     payload.quarterNumber = quarterNumber
   }
+
+  if (applyRowColor.value)
+    payload.rowColor = rowColor.value
 
   emit('submit', payload)
 }
@@ -342,6 +359,41 @@ function handleSubmit() {
             <UFormField v-if="applyQuarter" label="Novo quarter" required>
               <USelect v-model="selectedQuarter" :items="quarterOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
             </UFormField>
+          </div>
+
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-medium text-highlighted">Cor da linha</p>
+                <p class="text-xs text-muted">Destaque visual para épicos e demandas.</p>
+              </div>
+              <USwitch v-model="applyRowColor" />
+            </div>
+
+            <div v-if="applyRowColor" class="space-y-2">
+              <p class="text-xs text-muted">Selecione uma cor ou remova o destaque:</p>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="flex h-6 w-6 items-center justify-center rounded border-2 transition-colors"
+                  :class="rowColor === null ? 'border-primary' : 'border-default hover:border-primary/40'"
+                  title="Sem cor"
+                  @click="rowColor = null"
+                >
+                  <UIcon name="i-lucide-x" class="h-3.5 w-3.5 text-muted" />
+                </button>
+                <button
+                  v-for="color in LIST_ROW_COLORS"
+                  :key="color.id"
+                  type="button"
+                  class="h-6 w-6 rounded-full transition-all hover:scale-110"
+                  :class="rowColor === color.id ? 'ring-2 ring-offset-1 ring-highlighted' : ''"
+                  :style="{ backgroundColor: color.hex }"
+                  :title="color.label"
+                  @click="rowColor = color.id"
+                />
+              </div>
+            </div>
           </div>
         </div>
 
