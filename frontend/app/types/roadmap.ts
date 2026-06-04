@@ -120,6 +120,7 @@ export interface RoadmapDemand {
   jiraIssue?: string
   issueLinks?: IssueLink[]
   hours?: number
+  hoursRed?: boolean
   customers?: string[]
   isBlocked: boolean
   blockedReason?: string
@@ -177,6 +178,7 @@ export interface DemandFormData {
   jiraIssue?: string
   issueLinks?: IssueLinkInput[]
   hours?: number
+  hoursRed?: boolean
   customers?: string[]
   customerRenames?: CustomerRename[]
   dependencyDemandIds?: string[]

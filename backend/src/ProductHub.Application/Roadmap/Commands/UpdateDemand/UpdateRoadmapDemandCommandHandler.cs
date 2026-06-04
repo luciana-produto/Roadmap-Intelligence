@@ -153,7 +153,8 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             request.ProblemClarity,
             request.HasNoKpi,
               noKpiClassification,
-              request.ExcludeFromCapacity);
+              request.ExcludeFromCapacity,
+              request.HoursRed);
         if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
         {
             var existingTradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(demand.Id, cancellationToken);

@@ -129,7 +129,8 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.DeliveryDate,
             request.ProblemClarity,
             request.HasNoKpi,
-            noKpiClassification);
+            noKpiClassification,
+            hoursRed: request.HoursRed);
 
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);

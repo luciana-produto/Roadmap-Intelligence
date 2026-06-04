@@ -145,6 +145,12 @@ function getEffectiveDemandCustomers(demand: Pick<RoadmapDemand, 'itemType' | 'c
   return normalizeCustomerList(epic.customers)
 }
 
+function getEpicForDemand(demand: RoadmapDemand): RoadmapDemand | null {
+  if (!demand.epicId) return null
+  const epic = itemsById.value.get(demand.epicId) ?? null
+  return epic?.itemType === 'Epic' ? epic : null
+}
+
 function getEffectiveDemandClassification(demand: Pick<RoadmapDemand, 'itemType' | 'classification' | 'epicId'>): DemandClassification | undefined {
   if (demand.itemType === 'Epic')
     return demand.classification
@@ -746,6 +752,9 @@ function withListGroupSorting(compareWithinGroup: (left: RoadmapDemand, right: R
         const minA = epicMinSortOrderById.value[epicA] ?? rowA.original.sortOrder
         const minB = epicMinSortOrderById.value[epicB] ?? rowB.original.sortOrder
         if (minA !== minB) return minA - minB
+        // Tiebreaker: keep all demands of the same epic contiguous even when two
+        // epics (from different projects) share the same minimum sortOrder.
+        return epicA < epicB ? -1 : 1
       }
     }
 
@@ -2105,7 +2114,7 @@ function syncListSectionDividers() {
             }
             else if (display.allVisible) {
               const span = document.createElement('span')
-              span.className = 'block max-w-full truncate text-[11px] text-highlighted'
+              span.className = 'block max-w-full truncate text-[10px] text-muted opacity-60'
               span.title = display.fullLabel
               span.textContent = display.previewLabel
               cell.appendChild(span)
@@ -2116,7 +2125,7 @@ function syncListSectionDividers() {
               wrapper.className = 'relative inline-flex items-center gap-1'
 
               const preview = document.createElement('span')
-              preview.className = 'max-w-[120px] truncate text-[11px] text-highlighted'
+              preview.className = 'max-w-[120px] truncate text-[10px] text-muted opacity-60'
               preview.textContent = display.previewLabel
 
               const more = document.createElement('button')
@@ -2161,7 +2170,7 @@ function syncListSectionDividers() {
           if (headerMeta) {
             // Epic hours: plain text (read-only sum, no border)
             const text = document.createElement('span')
-            text.className = 'text-[10px] font-semibold text-muted'
+            text.className = 'text-[10px] font-semibold text-muted opacity-60'
             text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
             cell.appendChild(text)
           }
@@ -2334,7 +2343,7 @@ function syncListSectionDividers() {
 
               const trigger = document.createElement('button')
               trigger.type = 'button'
-              trigger.className = `inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+              trigger.className = `inline-flex max-w-full items-center gap-1 rounded-md border text-[10px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
               trigger.title = customerDisplay.fullLabel || 'Clientes do épico'
 
               const label = document.createElement('span')
@@ -2467,7 +2476,7 @@ function syncListSectionDividers() {
             else {
               const trigger = document.createElement('button')
               trigger.type = 'button'
-              trigger.className = `inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+              trigger.className = `inline-flex max-w-full items-center gap-1 rounded-md border text-[10px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
               trigger.title = customerDisplay.fullLabel || 'Clientes do épico'
               trigger.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
               trigger.addEventListener('click', (event) => {
@@ -2832,6 +2841,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     jiraIssue: demand.jiraIssue ?? '',
     issueLinks: getDisplayIssueLinks(demand).filter((issue): issue is { key: string, url: string } => !!issue.url).map(issue => ({ key: issue.key, url: issue.url })),
     hours: demand.hours,
+    hoursRed: demand.hoursRed ?? false,
     promisedDate: isBacklogDemand ? '' : (demand.promisedDate ?? ''),
     customers: demand.itemType === 'Demand' ? [] : (demand.customers ?? []),
     dependencyDemandIds: demand.dependsOn.map(item => item.demandId),
@@ -3218,6 +3228,9 @@ const tableDemands = computed(() => {
         const minA = epicMinOrder[epicA] ?? left.sortOrder
         const minB = epicMinOrder[epicB] ?? right.sortOrder
         if (minA !== minB) return minA - minB
+        // Tiebreaker: keep all demands of the same epic contiguous even when two
+        // epics (from different projects) share the same minimum sortOrder.
+        return epicA < epicB ? -1 : 1
       }
 
       return left.sortOrder - right.sortOrder
@@ -3397,6 +3410,7 @@ type PlanningInlineDraft = {
   type: DemandType
   dueDate: string
   hoursInput: string
+  hoursRed: boolean
   productIds: string[]
   customers: string[]
   observation: string
@@ -3522,12 +3536,12 @@ const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'priority',       label: 'Prioridade',   defaultWidth: 64, disableFilter: true },
   { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text' },
   { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 112, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
-  { id: 'kpis',           label: 'KPI',           defaultWidth: 100, disableFilter: true },
   { id: 'products',       label: 'Produtos',      defaultWidth: 148, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
-  { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'text' },
+  { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'conclusion',     label: 'Conclusão',     defaultWidth: 118, disableFilter: true },
+  { id: 'kpis',           label: 'KPI',           defaultWidth: 100, disableFilter: true },
   { id: '_actions',       label: '',              defaultWidth: 40, disableFilter: true, disableSorting: true, alignRight: true },
 ]
 
@@ -3724,6 +3738,7 @@ function createPlanningInlineDraft(item: RoadmapDemand): PlanningInlineDraft {
     type: item.type,
     dueDate: item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? ''),
     hoursInput: item.hours != null ? String(item.hours) : '',
+    hoursRed: item.hoursRed ?? false,
     productIds: getPlanningProductEntries(item).map(product => product.value),
     customers: normalizeCustomerList(item.customers),
     observation: item.observation ?? '',
@@ -3980,6 +3995,7 @@ function isPlanningInlineDirty(item: RoadmapDemand) {
     || draft.productIds.slice().sort().join('|') !== getPlanningProductEntries(item).map(product => product.value).sort().join('|')
     || draft.customers.slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|') !== normalizeCustomerList(item.customers).slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|')
     || hours !== item.hours
+    || draft.hoursRed !== (item.hoursRed ?? false)
 }
 
 function closePlanningStatusModal(options?: { restoreSnapshot?: boolean }) {
@@ -4162,6 +4178,7 @@ async function savePlanningInline(
       deprioritizationReason: draft.status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
       replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
       hours,
+      hoursRed: draft.hoursRed,
       promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
       deliveryDate: isDoneStatus ? draft.dueDate : ''
     }))
@@ -5856,7 +5873,7 @@ watch(activeDemandKpiId, async (value) => {
                   <button
                     v-if="getPlanningDraftProductDisplay(row.original).items.length"
                     type="button"
-                    class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors"
+                    class="inline-flex max-w-full items-center gap-1 rounded-md border text-[10px] text-highlighted transition-colors"
                     :class="getPlanningEditableCellButtonClass(row.original)"
                     :title="getPlanningDraftProductDisplay(row.original).fullLabel"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
@@ -5889,23 +5906,100 @@ watch(activeDemandKpiId, async (value) => {
               <template #customers-cell="{ row }">
                 <div v-if="isCollapsedRepresentative(row.original)" class="text-xs text-muted">—</div>
                 <template v-else>
-                  <span v-if="getPlanningCustomerCellDisplay(row.original).allVisible && getPlanningCustomerCellDisplay(row.original).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :title="getPlanningCustomerCellDisplay(row.original).fullLabel">
-                    {{ getPlanningCustomerCellDisplay(row.original).previewLabel }}
-                  </span>
-                  <UPopover v-else-if="getPlanningCustomerCellDisplay(row.original).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button type="button" class="inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[11px] text-muted transition-colors hover:text-highlighted" :title="getPlanningCustomerCellDisplay(row.original).fullLabel">
-                      <span class="max-w-[140px] truncate">{{ getPlanningCustomerCellDisplay(row.original).previewLabel }}</span>
-                      <span class="shrink-0 text-muted">+{{ getPlanningCustomerCellDisplay(row.original).hiddenCount }}</span>
-                    </button>
-                    <template #content>
-                      <div class="flex max-w-xs flex-col gap-1 p-2">
-                        <span v-for="customer in getPlanningCustomerCellDisplay(row.original).items" :key="`${row.original.id}-${customer}`" class="text-xs text-highlighted">
-                          {{ customer }}
-                        </span>
-                      </div>
-                    </template>
-                  </UPopover>
-                  <div v-else class="text-xs text-muted">—</div>
+                  <!-- Não agrupado: edita clientes do épico correspondente -->
+                  <template v-if="!groupDemandsByEpic && getEpicForDemand(row.original)">
+                    <UPopover
+                      :open="isPlanningCellEditing(getEpicForDemand(row.original)!, 'customers')"
+                      :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
+                      @update:open="(open) => handlePlanningPopoverOpenChange(getEpicForDemand(row.original)!, 'customers', open)"
+                    >
+                      <button
+                        v-if="getPlanningDraftCustomerDisplay(getEpicForDemand(row.original)!).items.length"
+                        type="button"
+                        class="inline-flex max-w-full items-center gap-1 rounded-md border text-[10px] text-highlighted transition-colors"
+                        :class="getPlanningEditableCellButtonClass(getEpicForDemand(row.original)!)"
+                        :title="getPlanningDraftCustomerDisplay(getEpicForDemand(row.original)!).fullLabel"
+                        :disabled="isPlanningInlineSaving(getEpicForDemand(row.original)!) || isSavingAllPlanningInlineEdits"
+                        @click="activatePlanningCell(getEpicForDemand(row.original)!, 'customers')"
+                      >
+                        <span class="max-w-[140px] truncate">{{ getPlanningDraftCustomerDisplay(getEpicForDemand(row.original)!).previewLabel }}</span>
+                        <span v-if="!getPlanningDraftCustomerDisplay(getEpicForDemand(row.original)!).allVisible" class="shrink-0 text-muted">+{{ getPlanningDraftCustomerDisplay(getEpicForDemand(row.original)!).hiddenCount }}</span>
+                      </button>
+                      <button
+                        v-else
+                        type="button"
+                        class="text-xs transition-colors"
+                        :class="getPlanningEditableCellButtonClass(getEpicForDemand(row.original)!)"
+                        :disabled="isPlanningInlineSaving(getEpicForDemand(row.original)!) || isSavingAllPlanningInlineEdits"
+                        @click="activatePlanningCell(getEpicForDemand(row.original)!, 'customers')"
+                      >—</button>
+                      <template #content>
+                        <div class="w-[22rem] max-w-[min(22rem,calc(100vw-2rem))] space-y-2 p-3">
+                          <div class="flex max-h-24 flex-wrap gap-1 overflow-y-auto">
+                            <span
+                              v-for="customer in getPlanningInlineDraft(getEpicForDemand(row.original)!).customers"
+                              :key="`ne-${row.original.epicId}-${customer}`"
+                              class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[10px] text-primary"
+                            >
+                              {{ customer }}
+                              <button type="button" class="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full hover:bg-primary/15" @click.prevent.stop="removePlanningCustomer(getEpicForDemand(row.original)!, customer)">
+                                <UIcon name="i-lucide-x" class="h-3 w-3" />
+                              </button>
+                            </span>
+                            <span v-if="!getPlanningInlineDraft(getEpicForDemand(row.original)!).customers.length" class="text-xs text-muted">Nenhum cliente associado.</span>
+                          </div>
+                          <div class="flex items-center gap-2">
+                            <input
+                              type="text"
+                              :value="planningCustomerInputs[row.original.epicId!] ?? ''"
+                              placeholder="Digite um novo cliente"
+                              class="min-w-0 flex-1 rounded-md border border-default bg-default px-2 py-1.5 text-xs text-highlighted outline-none transition-colors focus:border-primary/40"
+                              @click.stop
+                              @input="planningCustomerInputs[row.original.epicId!] = ($event.target as HTMLInputElement).value"
+                              @keydown.enter.prevent="addPlanningCustomer(getEpicForDemand(row.original)!, planningCustomerInputs[row.original.epicId!] ?? '')"
+                              @keydown.esc.prevent="deactivatePlanningCell(row.original.epicId!, 'customers')"
+                            >
+                            <button
+                              type="button"
+                              class="inline-flex items-center rounded-md border border-primary/20 bg-primary/10 px-2 py-1.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/15 disabled:cursor-not-allowed disabled:opacity-50"
+                              :disabled="!(planningCustomerInputs[row.original.epicId!] ?? '').trim()"
+                              @click.prevent.stop="addPlanningCustomer(getEpicForDemand(row.original)!, planningCustomerInputs[row.original.epicId!] ?? '')"
+                            >Adicionar</button>
+                          </div>
+                          <div v-if="getFilteredPlanningCustomerSuggestions(getEpicForDemand(row.original)!).length" class="max-h-32 overflow-y-auto rounded border border-default bg-elevated/40">
+                            <button
+                              v-for="customer in getFilteredPlanningCustomerSuggestions(getEpicForDemand(row.original)!)"
+                              :key="customer"
+                              type="button"
+                              class="flex w-full px-2 py-1.5 text-left text-[11px] text-highlighted hover:bg-elevated"
+                              @click="addPlanningCustomer(getEpicForDemand(row.original)!, customer)"
+                            >{{ customer }}</button>
+                          </div>
+                        </div>
+                      </template>
+                    </UPopover>
+                  </template>
+
+                  <!-- Agrupado (demanda) ou sem épico: somente leitura -->
+                  <template v-else>
+                    <span
+                      v-if="getPlanningCustomerCellDisplay(row.original).allVisible && getPlanningCustomerCellDisplay(row.original).items.length"
+                      class="block max-w-full truncate text-[10px] text-muted opacity-60"
+                      :title="getPlanningCustomerCellDisplay(row.original).fullLabel"
+                    >{{ getPlanningCustomerCellDisplay(row.original).previewLabel }}</span>
+                    <UPopover v-else-if="getPlanningCustomerCellDisplay(row.original).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                      <button type="button" class="inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[10px] text-muted opacity-60 cursor-default" :title="getPlanningCustomerCellDisplay(row.original).fullLabel">
+                        <span class="max-w-[140px] truncate">{{ getPlanningCustomerCellDisplay(row.original).previewLabel }}</span>
+                        <span class="shrink-0">+{{ getPlanningCustomerCellDisplay(row.original).hiddenCount }}</span>
+                      </button>
+                      <template #content>
+                        <div class="flex max-w-xs flex-col gap-1 p-2">
+                          <span v-for="customer in getPlanningCustomerCellDisplay(row.original).items" :key="`${row.original.id}-${customer}`" class="text-xs text-highlighted">{{ customer }}</span>
+                        </div>
+                      </template>
+                    </UPopover>
+                    <div v-else class="text-xs text-muted">—</div>
+                  </template>
                 </template>
               </template>
               <template #conclusion-cell="{ row }">
@@ -5951,7 +6045,14 @@ watch(activeDemandKpiId, async (value) => {
               </template>
               <template #hours-cell="{ row }">
                 <div v-if="isCollapsedRepresentative(row.original)" class="text-xs text-muted">—</div>
-                <div v-else-if="isPlanningCellEditing(row.original, 'hours')" class="ml-auto w-full max-w-[84px]">
+                <div v-else-if="isPlanningCellEditing(row.original, 'hours')" class="ml-auto flex max-w-[84px] items-center gap-1">
+                  <button
+                    type="button"
+                    class="h-3 w-3 shrink-0 rounded-full transition-colors"
+                    :class="getPlanningInlineDraft(row.original).hoursRed ? 'bg-red-500 hover:bg-red-600' : 'bg-muted/30 hover:bg-red-300'"
+                    title="Destacar horas em vermelho"
+                    @mousedown.prevent="updatePlanningInlineDraft(row.original, { hoursRed: !getPlanningInlineDraft(row.original).hoursRed })"
+                  />
                   <UInput
                     :model-value="getPlanningInlineDraft(row.original).hoursInput"
                     type="text"
@@ -5969,8 +6070,11 @@ watch(activeDemandKpiId, async (value) => {
                 <div v-else class="flex flex-col items-end gap-0.5">
                   <button
                     type="button"
-                    class="rounded-md border border-default bg-default px-2 py-0.5 text-[10px] font-semibold transition-colors hover:border-primary/40"
-                    :class="[row.original.excludeFromCapacity || row.original.status === 'Deprioritized' ? 'line-through text-muted' : 'text-highlighted', isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10' : '']"
+                    class="rounded-md border text-[10px] font-semibold transition-colors"
+                    :class="[
+                      row.original.excludeFromCapacity || row.original.status === 'Deprioritized' ? 'line-through text-muted' : (getPlanningInlineDraft(row.original).hoursRed ? 'text-red-500' : 'text-highlighted'),
+                      isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10 hover:border-primary/60 hover:bg-primary/5' : 'border-transparent hover:border-primary/30 hover:bg-elevated'
+                    ]"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
                     @click="activatePlanningCell(row.original, 'hours')"
                   >

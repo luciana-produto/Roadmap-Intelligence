@@ -57,6 +57,7 @@ type HierarchyInlineDraft = {
   status: DemandStatus
   dueDate: string
   hoursInput: string
+  hoursRed: boolean
   classification: RoadmapDemand['classification']
   productIds: string[]
   customers: string[]
@@ -93,7 +94,7 @@ const hierarchyHeaderScrollLeft = ref(0)
 let hierarchyWidthObserver: ResizeObserver | null = null
 
 const HIERARCHY_COL_MIN = 30
-const hierarchyColumnOrder: HierarchyColumnId[] = ['item', 'status', 'products', 'hours', 'classification', 'customers', 'due', 'kpi', 'actions']
+const hierarchyColumnOrder: HierarchyColumnId[] = ['item', 'products', 'hours', 'classification', 'customers', 'status', 'due', 'kpi', 'actions']
 const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
   item: 360,
   status: 88,
@@ -103,7 +104,7 @@ const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
   customers: 128,
   due: 136,
   kpi: 64,
-  actions: 40
+  actions: 28
 }
 const hierarchyColumnSizing = ref<Partial<Record<HierarchyColumnId, number>>>({})
 
@@ -1462,8 +1463,9 @@ function createHierarchyInlineDraft(item: RoadmapDemand): HierarchyInlineDraft {
   return {
     title: item.title,
     status: item.status,
-    dueDate: item.status === 'Done' ? (item.deliveryDate ?? '') : (item.promisedDate ?? ''),
+    dueDate: item.status === 'Done' ? (item.deliveryDate ?? '') : (item.effectivePromisedDate ?? item.promisedDate ?? ''),
     hoursInput: item.itemType === 'Demand' && item.hours != null ? String(item.hours) : '',
+    hoursRed: item.itemType === 'Demand' ? (item.hoursRed ?? false) : false,
     classification: item.classification,
     productIds: getProductEntries(item).map(product => product.value),
     customers: getDisplayedCustomers(item),
@@ -1524,6 +1526,7 @@ function openHierarchyStatusModal(item: RoadmapDemand, status: Extract<DemandSta
 
   updateHierarchyInlineDraft(item, {
     status,
+    dueDate: (draft.status === 'Done' && status !== 'Done') ? (item.promisedDate ?? '') : draft.dueDate,
     deliveryDate: status === 'Done' ? (draft.deliveryDate || item.deliveryDate || '') : draft.deliveryDate,
     blockedReason: status === 'Blocked' ? draft.blockedReason : '',
     deprioritizationReason: status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
@@ -1548,6 +1551,7 @@ function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStat
 
   updateHierarchyInlineDraft(item, {
     status: nextStatus,
+    dueDate: currentDraft.status === 'Done' ? (item.promisedDate ?? '') : currentDraft.dueDate,
     deliveryDate: '',
     blockedReason: '',
     deprioritizationReason: undefined,
@@ -1584,6 +1588,9 @@ function confirmHierarchyStatusModal() {
       return
     }
   }
+
+  if (draft.status === 'Done')
+    updateHierarchyInlineDraft(item, { dueDate: draft.deliveryDate })
 
   closeHierarchyStatusModal()
 }
@@ -1643,6 +1650,14 @@ function getHierarchyEditableCellButtonClass(item: RoadmapDemand) {
     : 'border-transparent text-highlighted hover:border-primary/30 hover:bg-elevated'
 }
 
+function getHierarchyHoursButtonClass(item: RoadmapDemand) {
+  const draft = getHierarchyInlineDraft(item)
+  const textClass = draft.hoursRed ? 'text-red-500' : 'text-highlighted'
+  return isHierarchyInlineDirty(item)
+    ? `${textClass} rounded-sm ring-1 ring-primary/20 bg-primary/5 px-0.5`
+    : `${textClass} hover:opacity-70`
+}
+
 function getHierarchyReadonlyCellClass(hasValue = true) {
   return hasValue
     ? 'text-muted opacity-60'
@@ -1666,8 +1681,9 @@ function getHierarchyDraftDisplayItem(item: RoadmapDemand): RoadmapDemand {
     status: draft.status,
     classification: draft.classification,
     customers: draft.customers,
+    effectivePromisedDate: isDoneStatus ? item.effectivePromisedDate : undefined,
     promisedDate: isDoneStatus ? item.promisedDate : draft.dueDate,
-    deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+    deliveryDate: isDoneStatus ? draft.dueDate : ''
   }
 }
 
@@ -1775,6 +1791,7 @@ function isHierarchyInlineDirty(item: RoadmapDemand) {
     || (item.itemType === 'Demand' && draft.productIds.slice().sort().join('|') !== getProductEntries(item).map(product => product.value).sort().join('|'))
     || draft.customers.slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|') !== getDisplayedCustomers(item).slice().sort((left, right) => left.localeCompare(right, 'pt-BR')).join('|')
     || (item.itemType === 'Demand' && hours !== item.hours)
+    || (item.itemType === 'Demand' && draft.hoursRed !== (item.hoursRed ?? false))
 }
 
 function discardAllHierarchyInlineEdits() {
@@ -1857,8 +1874,9 @@ async function saveHierarchyInline(
       deprioritizationReason: draft.status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
       replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
       hours: item.itemType === 'Demand' ? hours : item.hours,
+      hoursRed: item.itemType === 'Demand' ? draft.hoursRed : false,
       promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
-      deliveryDate: isDoneStatus ? draft.deliveryDate : ''
+      deliveryDate: isDoneStatus ? draft.dueDate : ''
     }))
 
     clearHierarchyInlineDraft(item.id)
@@ -1957,6 +1975,7 @@ function buildDemandFormData(item: RoadmapDemand, overrides?: Partial<DemandForm
     jiraIssue: item.jiraIssue ?? '',
     issueLinks: item.issueLinks?.map(issue => ({ key: issue.key, url: issue.url ?? '' })) ?? [],
     hours: item.hours,
+    hoursRed: item.hoursRed ?? false,
     promisedDate: item.promisedDate ?? '',
     customers: item.customers ?? [],
     dependencyDemandIds: item.dependsOn.map(dependency => dependency.demandId),
@@ -2411,13 +2430,6 @@ void initializeHierarchyPage()
                   </button>
                   <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('item', $event)" />
                 </th>
-                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('status') }">
-                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('status')">
-                    <span>Status</span>
-                    <UIcon :name="getHierarchySortIcon('status')" class="h-3.5 w-3.5" />
-                  </button>
-                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('status', $event)" />
-                </th>
                 <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('products') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('products')">
                     <span>Produtos</span>
@@ -2434,6 +2446,13 @@ void initializeHierarchyPage()
                   <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('classification', $event)" />
                 </th>
                 <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('customers') }">Clientes<span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('customers', $event)" /></th>
+                <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('status') }">
+                  <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('status')">
+                    <span>Status</span>
+                    <UIcon :name="getHierarchySortIcon('status')" class="h-3.5 w-3.5" />
+                  </button>
+                  <span class="absolute inset-y-0 right-0 w-2 cursor-col-resize" @mousedown.prevent.stop="startHierarchyResize('status', $event)" />
+                </th>
                 <th class="relative border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('due') }">
                   <button type="button" class="inline-flex items-center gap-1 transition-colors hover:text-highlighted" @click="toggleHierarchySort('due')">
                     <span>Conclusão</span>
@@ -2447,28 +2466,6 @@ void initializeHierarchyPage()
               <tr class="bg-elevated/60 text-left text-[11px] text-muted">
                 <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('item') }">
                   <input v-model="hierarchyItemFilter" type="text" placeholder="Filtrar..." class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
-                </th>
-                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('status') }">
-                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
-                      <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyStatusFilterLabel }}</span>
-                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
-                    </button>
-                    <template #content>
-                      <div class="min-w-44 space-y-1 p-1">
-                        <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyStatusFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyStatusFilter">
-                          <UIcon v-if="hierarchyStatusFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
-                          <span v-else class="inline-block h-4 w-4 shrink-0" />
-                          Todos
-                        </button>
-                        <button v-for="status in statusFilterOptions" :key="status.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyStatusFilter.includes(status.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyStatusFilter(status.value)">
-                          <UIcon v-if="hierarchyStatusFilter.includes(status.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
-                          <span v-else class="inline-block h-4 w-4 shrink-0" />
-                          {{ status.label }}
-                        </button>
-                      </div>
-                    </template>
-                  </UPopover>
                 </th>
                 <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('products') }">
                   <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
@@ -2517,6 +2514,28 @@ void initializeHierarchyPage()
                 </th>
                 <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('customers') }">
                   <input v-model="hierarchyCustomersFilter" type="text" placeholder="Clientes" class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
+                </th>
+                <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('status') }">
+                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
+                      <span class="flex-1 truncate text-left text-highlighted">{{ hierarchyStatusFilterLabel }}</span>
+                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                    <template #content>
+                      <div class="min-w-44 space-y-1 p-1">
+                        <button type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyStatusFilter.length === 0 ? 'text-primary' : 'text-highlighted'" @click="clearHierarchyStatusFilter">
+                          <UIcon v-if="hierarchyStatusFilter.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          Todos
+                        </button>
+                        <button v-for="status in statusFilterOptions" :key="status.value" type="button" class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated" :class="hierarchyStatusFilter.includes(status.value) ? 'text-primary' : 'text-highlighted'" @click="toggleHierarchyStatusFilter(status.value)">
+                          <UIcon v-if="hierarchyStatusFilter.includes(status.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ status.label }}
+                        </button>
+                      </div>
+                    </template>
+                  </UPopover>
                 </th>
                 <th class="border-b border-default bg-elevated/95 px-3 py-2" :style="{ width: getHierarchyColWidth('due') }">
                   <input v-model="hierarchyDueFilter" type="text" placeholder="Quarter/Data" class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40" >
@@ -2581,30 +2600,12 @@ void initializeHierarchyPage()
                     </div>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-0.5 align-top">
-                    <USelect
-                      v-if="isHierarchyCellEditing(group.roadmap, 'status')"
-                      :model-value="getHierarchyInlineDraft(group.roadmap).status"
-                      :items="statusSelectOptions"
-                      value-key="value"
-                      option-attribute="label"
-                      size="xs"
-                      class="w-full"
-                      :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits"
-                      @blur="deactivateHierarchyCell(group.roadmap.id, 'status')"
-                      @update:model-value="(value) => value && handleHierarchyStatusChange(group.roadmap, value as DemandStatus)"
-                    />
-                    <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(group.roadmap).status], getHierarchyEditableCellButtonClass(group.roadmap)]" :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(group.roadmap, 'status')">
-                      {{ statusLabels[getHierarchyInlineDraft(group.roadmap).status] }}
-                    </button>
-                  </td>
-
                   <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                    <span v-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).allVisible && getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                    <span v-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).allVisible && getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" class="block max-w-full truncate text-[9px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
                       {{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}
                     </span>
                     <UPopover v-else-if="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                      <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
+                      <button type="button" class="inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[9px] text-muted transition-colors hover:text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).fullLabel">
                         <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).previewLabel }}</span>
                         <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getRoadmapGroupProductNames(group.roadmap, group.epics.map(entry => entry.epic))).hiddenCount }}</span>
                       </button>
@@ -2620,7 +2621,7 @@ void initializeHierarchyPage()
                     <span v-else class="text-xs text-muted">—</span>
                   </td>
 
-                  <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                  <td class="border-b border-default px-2.5 py-0.5 align-top text-right text-[11px]" :style="{ width: getHierarchyColWidth('hours') }">
                     <span v-if="getDisplayedHours(group.roadmap) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(group.roadmap) }}h</span>
                     <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                   </td>
@@ -2631,6 +2632,24 @@ void initializeHierarchyPage()
 
                     <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
                     <span class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
+                  </td>
+
+                  <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                    <USelect
+                      v-if="isHierarchyCellEditing(group.roadmap, 'status')"
+                      :model-value="getHierarchyInlineDraft(group.roadmap).status"
+                      :items="statusSelectOptions"
+                      value-key="value"
+                      option-attribute="label"
+                      size="xs"
+                      class="w-full"
+                      :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits"
+                      @blur="deactivateHierarchyCell(group.roadmap.id, 'status')"
+                      @update:model-value="(value) => value && handleHierarchyStatusChange(group.roadmap, value as DemandStatus)"
+                    />
+                    <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(group.roadmap).status], getHierarchyEditableCellButtonClass(group.roadmap)]" :disabled="isHierarchyInlineSaving(group.roadmap.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(group.roadmap, 'status')">
+                      {{ statusLabels[getHierarchyInlineDraft(group.roadmap).status] }}
+                    </button>
                   </td>
 
                   <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
@@ -2751,30 +2770,12 @@ void initializeHierarchyPage()
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                      <USelect
-                        v-if="isHierarchyCellEditing(epicEntry.epic, 'status')"
-                        :model-value="getHierarchyInlineDraft(epicEntry.epic).status"
-                        :items="statusSelectOptions"
-                        value-key="value"
-                        option-attribute="label"
-                        size="xs"
-                        class="w-full"
-                        :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits"
-                        @blur="deactivateHierarchyCell(epicEntry.epic.id, 'status')"
-                        @update:model-value="(value) => value && handleHierarchyStatusChange(epicEntry.epic, value as DemandStatus)"
-                      />
-                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(epicEntry.epic).status], getHierarchyEditableCellButtonClass(epicEntry.epic)]" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'status')">
-                        {{ statusLabels[getHierarchyInlineDraft(epicEntry.epic).status] }}
-                      </button>
-                    </td>
-
-                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
-                      <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-left" :style="{ width: getHierarchyColWidth('products') }">
+                      <span v-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).allVisible && getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" class="block max-w-full truncate text-[9px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
                         {{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}
                       </span>
                       <UPopover v-else-if="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[9px] text-muted transition-colors hover:text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).fullLabel">
                           <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).previewLabel }}</span>
                           <span class="shrink-0 text-muted">+{{ getProductCellDisplay(getEpicDisplayProductNames(epicEntry.epic)).hiddenCount }}</span>
                         </button>
@@ -2789,7 +2790,7 @@ void initializeHierarchyPage()
                       <span v-else class="text-xs text-muted">—</span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-right text-[11px]" :style="{ width: getHierarchyColWidth('hours') }">
                       <span v-if="getDisplayedHours(epicEntry.epic) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(epicEntry.epic) }}h</span>
                       <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                     </td>
@@ -2812,13 +2813,14 @@ void initializeHierarchyPage()
                       </button>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-left" :style="{ width: getHierarchyColWidth('customers') }">
                       <UPopover
                         :open="isHierarchyCellEditing(epicEntry.epic, 'customers')"
+
                         :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
                         @update:open="(open) => handleHierarchyPopoverOpenChange(epicEntry.epic, 'customers', open)"
                       >
-                        <button v-if="getHierarchyDraftCustomerDisplay(epicEntry.epic).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :title="getHierarchyDraftCustomerDisplay(epicEntry.epic).fullLabel" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'customers')">
+                        <button v-if="getHierarchyDraftCustomerDisplay(epicEntry.epic).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :title="getHierarchyDraftCustomerDisplay(epicEntry.epic).fullLabel" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'customers')">
                           <span class="max-w-[140px] truncate">{{ getHierarchyDraftCustomerDisplay(epicEntry.epic).previewLabel }}</span>
                           <span v-if="!getHierarchyDraftCustomerDisplay(epicEntry.epic).allVisible" class="shrink-0 text-muted">+{{ getHierarchyDraftCustomerDisplay(epicEntry.epic).hiddenCount }}</span>
                         </button>
@@ -2859,6 +2861,24 @@ void initializeHierarchyPage()
                       </UPopover>
                     </td>
 
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                      <USelect
+                        v-if="isHierarchyCellEditing(epicEntry.epic, 'status')"
+                        :model-value="getHierarchyInlineDraft(epicEntry.epic).status"
+                        :items="statusSelectOptions"
+                        value-key="value"
+                        option-attribute="label"
+                        size="xs"
+                        class="w-full"
+                        :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits"
+                        @blur="deactivateHierarchyCell(epicEntry.epic.id, 'status')"
+                        @update:model-value="(value) => value && handleHierarchyStatusChange(epicEntry.epic, value as DemandStatus)"
+                      />
+                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(epicEntry.epic).status], getHierarchyEditableCellButtonClass(epicEntry.epic)]" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'status')">
+                        {{ statusLabels[getHierarchyInlineDraft(epicEntry.epic).status] }}
+                      </button>
+                    </td>
+
                     <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
                       <div v-if="isHierarchyCellEditing(epicEntry.epic, 'dueDate')">
                         <UInput
@@ -2880,7 +2900,9 @@ void initializeHierarchyPage()
                           {{ getDueQuarterLabel(getHierarchyDraftDisplayItem(epicEntry.epic)) }}
                         </span>
                       </button>
-                      <span v-else class="text-xs text-muted">—</span>
+                      <button v-else type="button" class="flex min-w-0 items-center gap-1 rounded-md border px-1 py-0.5 text-left transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'dueDate')">
+                        <span class="text-xs text-muted">—</span>
+                      </button>
                     </td>
                     <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
@@ -2983,31 +3005,13 @@ void initializeHierarchyPage()
                       </div>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
-                      <USelect
-                        v-if="isHierarchyCellEditing(demand, 'status')"
-                        :model-value="getHierarchyInlineDraft(demand).status"
-                        :items="statusSelectOptions"
-                        value-key="value"
-                        option-attribute="label"
-                        size="xs"
-                        class="w-full"
-                        :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
-                        @blur="deactivateHierarchyCell(demand.id, 'status')"
-                        @update:model-value="(value) => value && handleHierarchyStatusChange(demand, value as DemandStatus)"
-                      />
-                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(demand).status], getHierarchyEditableCellButtonClass(demand)]" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'status')">
-                        {{ statusLabels[getHierarchyInlineDraft(demand).status] }}
-                      </button>
-                    </td>
-
-                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('products') }">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-left" :style="{ width: getHierarchyColWidth('products') }">
                       <UPopover
                         :open="isHierarchyCellEditing(demand, 'products')"
                         :content="{ side: 'bottom', align: 'start', sideOffset: 8 }"
                         @update:open="(open) => handleHierarchyPopoverOpenChange(demand, 'products', open)"
                       >
-                        <button v-if="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0 text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).fullLabel" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'products')">
+                        <button v-if="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).items.length" type="button" class="inline-flex max-w-full items-center gap-1 rounded-md border text-[9px] text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :title="getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).fullLabel" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'products')">
                           <span class="max-w-[140px] truncate">{{ getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).previewLabel }}</span>
                           <span v-if="!getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).allVisible" class="shrink-0 text-muted">+{{ getProductCellDisplay(getHierarchyDraftProductEntries(demand).map(product => product.label)).hiddenCount }}</span>
                         </button>
@@ -3024,8 +3028,8 @@ void initializeHierarchyPage()
                       </UPopover>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                      <div v-if="isHierarchyCellEditing(demand, 'hours')">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-right text-[11px]" :style="{ width: getHierarchyColWidth('hours') }">
+                      <div v-if="isHierarchyCellEditing(demand, 'hours')" class="flex items-center gap-1">
                         <UInput
                           :model-value="getHierarchyInlineDraft(demand).hoursInput"
                           type="text"
@@ -3039,8 +3043,15 @@ void initializeHierarchyPage()
                           @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'hours')"
                           @update:model-value="(value) => updateHierarchyInlineDraft(demand, { hoursInput: String(value ?? '') })"
                         />
+                        <button
+                          type="button"
+                          class="h-3 w-3 shrink-0 rounded-full transition-colors"
+                          :class="getHierarchyInlineDraft(demand).hoursRed ? 'bg-red-500 hover:bg-red-600' : 'bg-muted/30 hover:bg-red-300'"
+                          title="Destacar horas em vermelho"
+                          @mousedown.prevent="updateHierarchyInlineDraft(demand, { hoursRed: !getHierarchyInlineDraft(demand).hoursRed })"
+                        />
                       </div>
-                      <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="rounded-md border px-1 py-0.5 transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
+                      <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
                         {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : `${getDisplayedHours(demand)}h` }}
                       </button>
                       <span v-else class="text-xs text-muted">—</span>
@@ -3052,12 +3063,12 @@ void initializeHierarchyPage()
                       </span>
                     </td>
 
-                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('customers') }">
-                      <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[11px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
+                    <td class="border-b border-default px-2.5 py-0.5 align-top text-left" :style="{ width: getHierarchyColWidth('customers') }">
+                      <span v-if="getCustomerCellDisplay(demand).allVisible && getCustomerCellDisplay(demand).items.length" class="block max-w-full truncate text-[9px] text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                         {{ getCustomerCellDisplay(demand).previewLabel }}
                       </span>
                       <UPopover v-else-if="getCustomerCellDisplay(demand).items.length" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                        <button type="button" :class="[getHierarchyReadonlyOverflowTriggerClass(), getHierarchyReadonlyCellClass()]" :title="getCustomerCellDisplay(demand).fullLabel">
+                        <button type="button" class="inline-flex max-w-full items-center gap-1 truncate bg-transparent p-0 text-[9px] text-muted transition-colors hover:text-highlighted" :class="getHierarchyReadonlyCellClass()" :title="getCustomerCellDisplay(demand).fullLabel">
                           <span class="max-w-[140px] truncate">{{ getCustomerCellDisplay(demand).previewLabel }}</span>
                           <span class="shrink-0 text-muted">+{{ getCustomerCellDisplay(demand).hiddenCount }}</span>
                         </button>
@@ -3070,6 +3081,24 @@ void initializeHierarchyPage()
                         </template>
                       </UPopover>
                       <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
+                    </td>
+
+                    <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('status') }">
+                      <USelect
+                        v-if="isHierarchyCellEditing(demand, 'status')"
+                        :model-value="getHierarchyInlineDraft(demand).status"
+                        :items="statusSelectOptions"
+                        value-key="value"
+                        option-attribute="label"
+                        size="xs"
+                        class="w-full"
+                        :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits"
+                        @blur="deactivateHierarchyCell(demand.id, 'status')"
+                        @update:model-value="(value) => value && handleHierarchyStatusChange(demand, value as DemandStatus)"
+                      />
+                      <button v-else type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors" :class="[statusTone[getHierarchyInlineDraft(demand).status], getHierarchyEditableCellButtonClass(demand)]" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'status')">
+                        {{ statusLabels[getHierarchyInlineDraft(demand).status] }}
+                      </button>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('due') }">
@@ -3093,7 +3122,9 @@ void initializeHierarchyPage()
                           {{ getDueQuarterLabel(getHierarchyDraftDisplayItem(demand)) }}
                         </span>
                       </button>
-                      <span v-else class="text-xs text-muted">—</span>
+                      <button v-else type="button" class="flex min-w-0 items-center gap-1 rounded-md border px-1 py-0.5 text-left transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'dueDate')">
+                        <span class="text-xs text-muted">—</span>
+                      </button>
                     </td>
 
                     <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
@@ -3221,7 +3252,7 @@ void initializeHierarchyPage()
                   </UPopover>
                   <span v-else class="text-xs text-muted">—</span>
                 </td>
-                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
+                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px]" :style="{ width: getHierarchyColWidth('hours') }">
                   <span v-if="getDisplayedHours(epic) !== null" :class="getHierarchyReadonlyCellClass()">{{ getDisplayedHours(epic) }}h</span>
                   <span v-else class="text-xs" :class="getHierarchyReadonlyCellClass(false)">—</span>
                 </td>
@@ -3451,8 +3482,8 @@ void initializeHierarchyPage()
                     </template>
                   </UPopover>
                 </td>
-                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px] text-highlighted" :style="{ width: getHierarchyColWidth('hours') }">
-                  <div v-if="isHierarchyCellEditing(demand, 'hours')">
+                <td class="border-b border-default px-2.5 py-0.5 align-top text-[11px]" :style="{ width: getHierarchyColWidth('hours') }">
+                  <div v-if="isHierarchyCellEditing(demand, 'hours')" class="flex items-center gap-1">
                     <UInput
                       :model-value="getHierarchyInlineDraft(demand).hoursInput"
                       type="text"
@@ -3466,8 +3497,15 @@ void initializeHierarchyPage()
                       @keydown.enter.prevent="deactivateHierarchyCell(demand.id, 'hours')"
                       @update:model-value="(value) => updateHierarchyInlineDraft(demand, { hoursInput: String(value ?? '') })"
                     />
+                    <button
+                      type="button"
+                      class="h-3 w-3 shrink-0 rounded-full transition-colors"
+                      :class="getHierarchyInlineDraft(demand).hoursRed ? 'bg-red-500 hover:bg-red-600' : 'bg-muted/30 hover:bg-red-300'"
+                      title="Destacar horas em vermelho"
+                      @mousedown.prevent="updateHierarchyInlineDraft(demand, { hoursRed: !getHierarchyInlineDraft(demand).hoursRed })"
+                    />
                   </div>
-                  <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="rounded-md border px-1 py-0.5 transition-colors" :class="getHierarchyEditableCellButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
+                  <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
                     {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : `${getDisplayedHours(demand)}h` }}
                   </button>
                   <span v-else class="text-xs text-muted">—</span>

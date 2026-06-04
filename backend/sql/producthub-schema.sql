@@ -312,3 +312,8 @@ BEGIN
     CREATE NONCLUSTERED INDEX IX_DemandTradeOffs_ProjectId_QuarterYear_QuarterNumber
         ON dbo.DemandTradeOffs (ProjectId, QuarterYear, QuarterNumber);
 END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'HoursRed') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD HoursRed BIT NOT NULL CONSTRAINT DF_RoadmapDemands_HoursRed DEFAULT (0);
+END;
