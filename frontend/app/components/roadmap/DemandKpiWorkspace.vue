@@ -309,6 +309,12 @@ function formatMeasurementValue(value: number) {
   }).format(value)
 }
 
+function formatMeasuredPercentage(measuredValue: number, estimatedImpact: number | null | undefined): string | null {
+  if (estimatedImpact == null || estimatedImpact === 0)
+    return null
+  return new Intl.NumberFormat('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 1 }).format((measuredValue / estimatedImpact) * 100) + '%'
+}
+
 function formatMeasurementDate(value: string) {
   if (!value)
     return ''
@@ -1720,12 +1726,13 @@ async function executeDeleteMeasurement(measurementId: string) {
               </div>
 
               <div class="overflow-x-auto rounded-lg border border-default bg-default">
-                <table class="w-full min-w-[720px] border-separate border-spacing-0 text-sm">
+                <table class="w-full min-w-[800px] border-separate border-spacing-0 text-sm">
                   <thead class="bg-elevated/70 text-xs uppercase tracking-[0.08em] text-muted">
                     <tr>
                       <th class="border-b border-default px-3 py-2 text-left">Seq.</th>
                       <th class="border-b border-default px-3 py-2 text-left">Data</th>
                       <th class="border-b border-default px-3 py-2 text-left">Impacto apurado</th>
+                      <th class="border-b border-default px-3 py-2 text-left">% do esperado</th>
                       <th class="border-b border-default px-3 py-2 text-left">Resultado</th>
                       <th class="border-b border-default px-3 py-2 text-left">Observação</th>
                       <th class="border-b border-default px-3 py-2 text-right">Ações</th>
@@ -1747,6 +1754,12 @@ async function executeDeleteMeasurement(measurementId: string) {
                       </td>
                       <td class="border-b border-default px-3 py-2 font-medium text-highlighted">
                         {{ formatMeasurementValue(measurement.measuredValue) }}
+                      </td>
+                      <td class="border-b border-default px-3 py-2 font-medium">
+                        <span v-if="formatMeasuredPercentage(measurement.measuredValue, link.estimatedImpact) !== null">
+                          {{ formatMeasuredPercentage(measurement.measuredValue, link.estimatedImpact) }}
+                        </span>
+                        <span v-else class="text-muted">—</span>
                       </td>
                       <td class="border-b border-default px-3 py-2">
                         <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium" :class="getMeasurementResultTone(getDisplayedMeasurementResult(link.kpiId, measurement))">
