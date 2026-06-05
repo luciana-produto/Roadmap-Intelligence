@@ -4358,12 +4358,21 @@ function getFilteredPlanningCustomerSuggestions(item: RoadmapDemand) {
 }
 
 let pendingSyncDividerFrame: number | null = null
-function schedulePlanningGroupedHeaderSync() {
+let pendingSyncDividerFull = false
+
+function schedulePlanningGroupedHeaderSync(widthOnly = false) {
+  if (!widthOnly)
+    pendingSyncDividerFull = true
   if (pendingSyncDividerFrame !== null)
     cancelAnimationFrame(pendingSyncDividerFrame)
   pendingSyncDividerFrame = requestAnimationFrame(() => {
     pendingSyncDividerFrame = null
-    syncListSectionDividers()
+    const runFull = pendingSyncDividerFull
+    pendingSyncDividerFull = false
+    if (runFull)
+      syncListSectionDividers()
+    else
+      updateSectionDividerWidths()
   })
 }
 
@@ -5103,18 +5112,49 @@ watch(listScrollContainerRef, async (element) => {
       clearTimeout(resizeDebounceTimer)
     resizeDebounceTimer = setTimeout(() => {
       resizeDebounceTimer = null
+      const prevWidth = listViewportWidth.value
       updateListViewportWidth()
-      schedulePlanningGroupedHeaderSync()
+      if (listViewportWidth.value !== prevWidth)
+        schedulePlanningGroupedHeaderSync(true)
     }, 150)
   })
   listWidthObserver.observe(element)
 }, { flush: 'post' })
 
+function updateSectionDividerWidths() {
+  const tbody = listTableRootRef.value?.querySelector('tbody')
+  if (!tbody) return
+
+  const table = tbody.closest<HTMLTableElement>('table')
+  const headerTable = listHeaderRowRef.value?.closest<HTMLTableElement>('table')
+
+  const applyColgroup = (targetTable: HTMLTableElement | null) => {
+    if (!targetTable) return
+    const colgroup = targetTable.querySelector('colgroup')
+    if (!colgroup) return
+    const existingCols = Array.from(colgroup.children) as HTMLTableColElement[]
+    listOrderedCols.value.forEach((col, index) => {
+      if (existingCols[index])
+        existingCols[index].style.width = listColWidth(col.id, col.defaultWidth)
+    })
+  }
+
+  applyColgroup(table)
+  applyColgroup(headerTable)
+
+  const gridTemplate = getListGridTemplateColumns()
+  tbody.querySelectorAll<HTMLElement>('.list-section-divider .grid').forEach((el) => {
+    el.style.gridTemplateColumns = gridTemplate
+  })
+}
+
 watch(
   () => listTitleExtraWidth.value,
   async () => {
     await nextTick()
-    syncListSectionDividers()
+    // Only update widths in-place instead of full sync to avoid height changes
+    // that would cause scrollbar to appear/disappear, creating a feedback loop
+    updateSectionDividerWidths()
   },
   { flush: 'post' }
 )
@@ -6290,7 +6330,7 @@ watch(activeDemandKpiId, async (value) => {
             </thead>
           </table>
         </div>
-        <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-auto' : 'overflow-x-auto overflow-y-visible'" @scroll="syncListHeaderScroll">
+        <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-scroll' : 'overflow-x-auto overflow-y-visible'" :style="shouldConstrainListHeight ? { scrollbarGutter: 'stable' } : undefined" @scroll="syncListHeaderScroll">
           <div ref="listTableRootRef" :style="{ width: listTableWidth }">
             <UTable
               :key="listTableKey"
