@@ -121,6 +121,7 @@ export interface RoadmapDemand {
   issueLinks?: IssueLink[]
   hours?: number
   hoursRed?: boolean
+  isSimple?: boolean
   rowColor?: string | null
   customers?: string[]
   isBlocked: boolean
@@ -180,6 +181,7 @@ export interface DemandFormData {
   issueLinks?: IssueLinkInput[]
   hours?: number
   hoursRed?: boolean
+  isSimple?: boolean
   rowColor?: string | null
   customers?: string[]
   customerRenames?: CustomerRename[]

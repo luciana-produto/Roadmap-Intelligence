@@ -33,7 +33,7 @@ public sealed class CreateRoadmapDemandCommandHandler(
 
         RoadmapProject? project = null;
         Dictionary<Guid, string> productMap = [];
-        if (request.ProjectId.HasValue)
+        if (request.ProjectId.HasValue && itemType == RoadmapItemType.Demand)
         {
             project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId.Value, cancellationToken)
                 ?? throw new NotFoundException("RoadmapProject", request.ProjectId.Value);
@@ -56,6 +56,17 @@ public sealed class CreateRoadmapDemandCommandHandler(
             {
                 if (!validProjectIds.Contains(linkedProjectId))
                     throw new NotFoundException("RoadmapProject", linkedProjectId);
+            }
+
+            if (request.IsSimple)
+            {
+                foreach (var epicProjectId in request.ProjectIds.Where(id => id != Guid.Empty).Distinct())
+                {
+                    var epicProject = await projectRepository.GetByIdWithProductsAsync(epicProjectId, cancellationToken);
+                    if (epicProject != null)
+                        foreach (var product in epicProject.Products)
+                            productMap.TryAdd(product.Id, product.Name);
+                }
             }
         }
 
@@ -131,7 +142,8 @@ public sealed class CreateRoadmapDemandCommandHandler(
             request.HasNoKpi,
             noKpiClassification,
             hoursRed: request.HoursRed,
-            rowColor: request.RowColor);
+            rowColor: request.RowColor,
+            isSimple: request.IsSimple);
 
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);

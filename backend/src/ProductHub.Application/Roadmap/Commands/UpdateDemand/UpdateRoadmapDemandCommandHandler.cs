@@ -46,7 +46,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
 
         RoadmapProject? project = null;
         Dictionary<Guid, string> productMap = [];
-        if (request.ProjectId.HasValue)
+        if (request.ProjectId.HasValue && itemType == RoadmapItemType.Demand)
         {
             project = await projectRepository.GetByIdWithProductsAsync(request.ProjectId.Value, cancellationToken)
                 ?? throw new NotFoundException("RoadmapProject", request.ProjectId.Value);
@@ -69,6 +69,17 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             {
                 if (!validProjectIds.Contains(linkedProjectId))
                     throw new NotFoundException("RoadmapProject", linkedProjectId);
+            }
+
+            if (request.IsSimple)
+            {
+                foreach (var epicProjectId in request.ProjectIds.Where(id => id != Guid.Empty).Distinct())
+                {
+                    var epicProject = await projectRepository.GetByIdWithProductsAsync(epicProjectId, cancellationToken);
+                    if (epicProject != null)
+                        foreach (var product in epicProject.Products)
+                            productMap.TryAdd(product.Id, product.Name);
+                }
             }
         }
 
@@ -155,7 +166,8 @@ public sealed class UpdateRoadmapDemandCommandHandler(
               noKpiClassification,
               request.ExcludeFromCapacity,
               request.HoursRed,
-              request.RowColor);
+              request.RowColor,
+              request.IsSimple);
         if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
         {
             var existingTradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(demand.Id, cancellationToken);

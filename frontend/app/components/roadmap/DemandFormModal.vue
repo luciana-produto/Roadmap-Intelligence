@@ -131,6 +131,27 @@ const isRoadmap = computed(() => form.itemType === 'Roadmap')
 const isEpic = computed(() => form.itemType === 'Epic')
 const isDemand = computed(() => form.itemType === 'Demand')
 
+// Epic mode decision: null = not yet decided (new epic), true = simple, false = composite
+const epicModeDecided = ref(false)
+const isSimpleEpic = computed(() => isEpic.value && !!form.isSimple)
+const isCompositeEpic = computed(() => isEpic.value && !form.isSimple)
+const showEpicModeSelection = computed(() =>
+  isEpic.value && !isEdit.value && !epicModeDecided.value
+)
+
+function selectEpicMode(simple: boolean) {
+  form.isSimple = simple
+  epicModeDecided.value = true
+}
+
+const productsForSimpleEpic = computed(() => {
+  if (!isSimpleEpic.value) return []
+  const selectedProjectIds = new Set(form.projectIds ?? [])
+  return props.projects
+    .filter(p => selectedProjectIds.has(p.id))
+    .flatMap(p => p.products)
+})
+
 const title = computed(() => {
   if (!hasSelectedItemType.value)
     return isEdit.value ? 'Editar item' : 'Novo Item'
@@ -246,6 +267,7 @@ const form = reactive<DemandFormState>({
   type: 'Planned',
   classification: 'Strategic',
   productIds: [],
+  isSimple: false,
   status: 'Backlog',
   observation: '',
   deprioritizationReason: undefined,
@@ -598,6 +620,8 @@ function populateFormFromDemand(demand: RoadmapDemand) {
     ? demand.issueLinks.map(issue => ({ key: issue.key, url: issue.url ?? '' }))
     : (demand.jiraIssue ? [{ key: demand.jiraIssue, url: '' }] : [])
   form.hours = demand.hours ?? undefined
+  form.isSimple = demand.isSimple ?? false
+  epicModeDecided.value = true
   form.customers = demand.customers ?? []
   customerRenameSource.value = null
   pendingCustomerRenames.value = []
@@ -648,6 +672,8 @@ function resetFormForCreate() {
   form.jiraIssue = ''
   form.issueLinks = []
   form.hours = undefined
+  form.isSimple = false
+  epicModeDecided.value = false
   form.customers = []
   customerRenameSource.value = null
   pendingCustomerRenames.value = []
@@ -1422,6 +1448,8 @@ function isKpiLinkComplete(link: EditableDemandKpiLink) {
 const missingSubmitReason = computed(() => {
   if (!form.itemType)
     return 'Selecione o tipo do item'
+  if (showEpicModeSelection.value)
+    return 'Selecione o modo do épico'
   if (!form.title)
     return `Informe o título ${isRoadmap.value ? 'do roadmap' : isEpic.value ? 'do épico' : 'da demanda'}`
   if (!isDemand.value && !(form.projectIds?.length ?? 0))
@@ -1432,12 +1460,16 @@ const missingSubmitReason = computed(() => {
     return 'Selecione o projeto'
   if (isDemand.value && (form.quarterYear == null || form.quarterNumber == null))
     return 'Selecione o quarter'
+  if (isSimpleEpic.value && (form.quarterYear == null || form.quarterNumber == null))
+    return 'Selecione o quarter do épico'
   if (isEpic.value && !form.classification)
     return 'Selecione a classificação'
   if (isEpic.value && form.problemClarity == null)
     return 'Informe a nota de clareza'
   if (isDemand.value && form.productIds.length === 0)
     return 'Selecione ao menos um produto'
+  if (isSimpleEpic.value && form.productIds.length === 0)
+    return 'Selecione ao menos um produto para o épico'
   if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
     return 'Selecione o motivo da despriorização'
   if (observationRequired.value && !form.observation)
@@ -1685,7 +1717,33 @@ async function handleSubmit() {
             Selecione o tipo do item para carregar os campos de cadastro.
           </div>
 
-          <div v-if="hasSelectedItemType" class="space-y-3">
+          <!-- Epic mode selection (only for new epics) -->
+          <div v-if="showEpicModeSelection" class="rounded-xl border border-primary/20 bg-primary/5 p-5 text-center">
+            <h4 class="text-sm font-semibold text-highlighted">Esse épico terá demandas ou dependência de outros times?</h4>
+            <p class="mt-1 text-xs text-muted">Escolha como este épico será planejado.</p>
+            <div class="mt-4 flex justify-center gap-3">
+              <UButton
+                type="button"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-git-branch"
+                @click="selectEpicMode(true)"
+              >
+                Não — Planejar pelo épico
+              </UButton>
+              <UButton
+                type="button"
+                color="neutral"
+                variant="outline"
+                icon="i-lucide-list-todo"
+                @click="selectEpicMode(false)"
+              >
+                Sim — Épico com demandas
+              </UButton>
+            </div>
+          </div>
+
+          <div v-if="hasSelectedItemType && !showEpicModeSelection" class="space-y-3">
           <UFormField v-if="isDemand" label="Épico pai" required>
             <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
               <UButton
@@ -1830,6 +1888,74 @@ async function handleSubmit() {
               />
             </UFormField>
           </div>
+
+          <!-- Simple epic: Quarter, Tipo, Produtos, Horas -->
+          <div v-if="isSimpleEpic" class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <UFormField label="Quarter" required>
+              <USelect
+                v-model="selectedQuarter"
+                :items="quarters"
+                placeholder="Selecione"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Tipo" required>
+              <USelect
+                v-model="form.type as DemandType"
+                :items="typeOptions"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Data prometida">
+              <UInput
+                v-model="form.promisedDate"
+                type="date"
+                class="w-full"
+              />
+            </UFormField>
+
+            <UFormField label="Horas">
+              <UInput
+                :model-value="form.hours ?? ''"
+                type="number"
+                min="0"
+                step="0.5"
+                placeholder="Ex: 8"
+                class="w-full"
+                @update:model-value="updateHours"
+              />
+            </UFormField>
+          </div>
+
+          <UFormField v-if="isSimpleEpic" label="Produto" required>
+            <div
+              v-if="productsForSimpleEpic.length"
+              class="flex flex-wrap gap-2 rounded-lg border border-default bg-elevated p-3"
+            >
+              <label
+                v-for="product in productsForSimpleEpic"
+                :key="product.id"
+                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors select-none hover:bg-default"
+                :class="form.productIds.includes(product.id)
+                  ? 'bg-primary/10 border border-primary/30'
+                  : 'border border-transparent'"
+              >
+                <input
+                  type="checkbox"
+                  :value="product.id"
+                  :checked="form.productIds.includes(product.id)"
+                  class="h-3.5 w-3.5 accent-primary"
+                  @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
+                >
+                <span class="text-sm">{{ product.name }}</span>
+              </label>
+            </div>
+            <p v-else class="text-xs italic text-muted">
+              Selecione ao menos um projeto primeiro.
+            </p>
+          </UFormField>
 
           <div v-if="isEpic" class="grid gap-3 md:grid-cols-3">
             <UFormField label="Classificação" required>

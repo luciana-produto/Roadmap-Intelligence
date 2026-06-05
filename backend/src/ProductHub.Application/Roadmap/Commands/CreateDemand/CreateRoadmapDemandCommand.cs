@@ -32,4 +32,5 @@ public sealed record CreateRoadmapDemandCommand(
     bool HasNoKpi = false,
     string? NoKpiClassification = null,
     bool HoursRed = false,
-    string? RowColor = null) : IRequest<RoadmapDemandDto>;
+    string? RowColor = null,
+    bool IsSimple = false) : IRequest<RoadmapDemandDto>;

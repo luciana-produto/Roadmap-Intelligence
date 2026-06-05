@@ -322,3 +322,8 @@ IF COL_LENGTH(N'dbo.RoadmapDemands', N'RowColor') IS NULL
 BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD RowColor NVARCHAR(50) NULL;
 END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'IsSimple') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD IsSimple BIT NOT NULL CONSTRAINT DF_RoadmapDemands_IsSimple DEFAULT (0);
+END;

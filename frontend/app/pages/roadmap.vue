@@ -382,16 +382,25 @@ function getEpicQuarterMoveScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 't
 }
 
 function getEpicHeaderMeta(anchorDemand?: RoadmapDemand) {
-  const epicId = anchorDemand?.epicId
-  const epic = epicId ? itemsById.value.get(epicId) ?? null : null
-  if (!epic || epic.itemType !== 'Epic')
+  // Handle isSimple epics: the anchorDemand itself IS the epic
+  const resolvedEpic = (anchorDemand?.itemType === 'Epic' && anchorDemand.isSimple)
+    ? anchorDemand
+    : (anchorDemand?.epicId ? (itemsById.value.get(anchorDemand.epicId) ?? null) : null)
+
+  const epic = resolvedEpic?.itemType === 'Epic' ? resolvedEpic : null
+  if (!epic)
     return null
 
   const groupedDemands = getVisibleEpicDemandCluster(anchorDemand)
-  const totalHours = groupedDemands.reduce((sum, demand) => {
-    return sum + (typeof demand.hours === 'number' ? demand.hours : 0)
-  }, 0)
-  const groupedProductNames = Array.from(new Set(groupedDemands.flatMap(demand => demand.products.map(product => product.name))))
+  const totalHours = epic.isSimple
+    ? (typeof epic.hours === 'number' ? epic.hours : 0)
+    : groupedDemands.reduce((sum, demand) => sum + (typeof demand.hours === 'number' ? demand.hours : 0), 0)
+  const groupedProductNames = epic.isSimple
+    ? (() => {
+        const epicProductIds = new Set(epic.products.map(p => p.productId))
+        return projects.value.flatMap(proj => proj.products).filter(p => epicProductIds.has(p.id)).map(p => p.name)
+      })()
+    : Array.from(new Set(groupedDemands.flatMap(demand => demand.products.map(product => product.name))))
   const groupedCustomers = normalizeCustomerList(epic.customers)
 
   return {
@@ -529,6 +538,15 @@ function isDependencyInconsistent(demand: RoadmapDemand, dependency: DemandDepen
 
 function hasInconsistentDependency(demand: RoadmapDemand) {
   return demand.dependsOn.some(dependency => isDependencyInconsistent(demand, dependency))
+}
+
+function getEpicTypeLabel(epicId?: string): string {
+  if (!epicId) return ''
+  const epicDemands = demandItems.value.filter(d => d.epicId === epicId)
+  if (!epicDemands.length) return ''
+  const types = new Set(epicDemands.map(d => d.type))
+  if (types.size === 1) return typeLabels[epicDemands[0]!.type]
+  return 'Múltiplos'
 }
 
 function isDemandEstimated(demand: Pick<RoadmapDemand, 'hours'>) {
@@ -807,11 +825,19 @@ const selectedDemandScope = computed(() => {
 const quarterScopedDemands = computed(() => {
   if (!activeCapacityScope.value) return []
 
-  return demandItems.value.filter(demand =>
-    demand.projectId === activeCapacityScope.value!.projectId
-    && demand.quarterYear === activeCapacityScope.value!.quarterYear
-    && demand.quarterNumber === activeCapacityScope.value!.quarterNumber
+  const scope = activeCapacityScope.value!
+  const demands = demandItems.value.filter(d =>
+    d.projectId === scope.projectId
+    && d.quarterYear === scope.quarterYear
+    && d.quarterNumber === scope.quarterNumber
   )
+  const simpleEpics = epicItems.value.filter(e =>
+    e.isSimple
+    && (e.projectIds ?? []).includes(scope.projectId)
+    && e.quarterYear === scope.quarterYear
+    && e.quarterNumber === scope.quarterNumber
+  )
+  return [...demands, ...simpleEpics]
 })
 
 const capacityScopedDemands = computed(() =>
@@ -1037,7 +1063,9 @@ watch(filterListProjectIds, () => {
 })
 
 const quarterFilteredDemands = computed(() => {
-  const orderedDemands = [...demandItems.value].sort((left, right) => {
+  const simpleEpics = epicItems.value.filter(e => e.isSimple)
+  const allItems = [...demandItems.value, ...simpleEpics]
+  const orderedItems = allItems.sort((left, right) => {
     const groupComparison = compareListDemandGroups(left, right)
     if (groupComparison !== 0)
       return groupComparison
@@ -1045,8 +1073,12 @@ const quarterFilteredDemands = computed(() => {
     return left.sortOrder - right.sortOrder
   })
   const projectFiltered = filterListProjectIds.value.length
-    ? orderedDemands.filter(d => filterListProjectIds.value.includes(d.projectId ?? ''))
-    : orderedDemands
+    ? orderedItems.filter(d => {
+        if (d.itemType === 'Epic')
+          return (d.projectIds ?? []).some(pid => filterListProjectIds.value.includes(pid))
+        return filterListProjectIds.value.includes(d.projectId ?? '')
+      })
+    : orderedItems
   if (!filterQuarters.value.length) return projectFiltered
   return projectFiltered.filter(d =>
     filterQuarters.value.includes(`${d.quarterNumber}-${d.quarterYear}`)
@@ -1668,12 +1700,23 @@ function syncListSectionDividers() {
       targetTable.insertBefore(colgroup, targetTable.firstChild)
     }
 
-    colgroup.innerHTML = ''
-    for (const col of listOrderedCols.value) {
-      const colEl = document.createElement('col')
-      colEl.style.width = listColWidth(col.id, col.defaultWidth)
-      colgroup.appendChild(colEl)
-    }
+    const cols = listOrderedCols.value
+    const existingCols = Array.from(colgroup.children) as HTMLTableColElement[]
+
+    cols.forEach((col, index) => {
+      const width = listColWidth(col.id, col.defaultWidth)
+      if (existingCols[index]) {
+        existingCols[index].style.width = width
+      }
+      else {
+        const colEl = document.createElement('col')
+        colEl.style.width = width
+        colgroup!.appendChild(colEl)
+      }
+    })
+
+    while (colgroup.children.length > cols.length)
+      colgroup.removeChild(colgroup.lastChild!)
   }
 
   syncColgroup(table)
@@ -1699,16 +1742,19 @@ function syncListSectionDividers() {
     }
 
     const isCollapsedRow = groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+    // Simple epics in grouped mode are represented by their group header; hide the redundant table row.
+    const isSimpleEpicTableRow = groupDemandsByEpic.value && demand.itemType === 'Epic' && !!demand.isSimple
+    const isHiddenRow = isCollapsedRow || isSimpleEpicTableRow
     row.dataset.demandId = demand.id
     row.dataset.dragScopeKey = getDemandDragScopeKey(demand)
-    if (isCollapsedRow)
+    if (isHiddenRow)
       row.style.setProperty('display', 'none', 'important')
     else
       row.style.removeProperty('display')
-    row.hidden = isCollapsedRow
-    row.classList.toggle('hidden', isCollapsedRow)
+    row.hidden = isHiddenRow
+    row.classList.toggle('hidden', isHiddenRow)
 
-    if (isCollapsedRow) {
+    if (isHiddenRow) {
       row.classList.remove('list-demand-row')
       delete row.dataset.scopeKey
       delete row.dataset.quarterKey
@@ -1887,21 +1933,95 @@ function syncListSectionDividers() {
           const cell = createGridCell('px-3 py-1 align-top')
 
           if (anchorDemand) {
-            const quarterNode = document.createElement('span')
+            const isSimpleEpicHeader = anchorDemand.itemType === 'Epic' && anchorDemand.isSimple
+            const epic = isSimpleEpicHeader ? anchorDemand : null
 
-            quarterNode.className = isSpecialBacklogQuarter(anchorDemand.quarterYear, anchorDemand.quarterNumber)
-              ? 'text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
-              : 'text-[10px] font-mono text-highlighted'
-            quarterNode.textContent = planningQuarterDisplayLabel(anchorDemand)
+            if (isSimpleEpicHeader && epic && isPlanningCellEditing(epic, 'quarterType')) {
+              const container = document.createElement('div')
+              container.className = 'relative z-20 flex min-w-0 flex-col gap-1'
+              container.style.width = '18rem'
+              container.style.maxWidth = '18rem'
 
-            const typeNode = document.createElement('span')
-            typeNode.className = `whitespace-nowrap text-[10px] font-medium ${typeColors[anchorDemand.type]}`
-            typeNode.textContent = typeLabels[anchorDemand.type]
+              const quarterSelect = document.createElement('select')
+              quarterSelect.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+              quarterSelect.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              planningQuarterOptions.value.forEach((option) => {
+                const optionNode = document.createElement('option')
+                optionNode.value = option.value
+                optionNode.textContent = option.label
+                optionNode.selected = option.value === getPlanningInlineDraft(epic).quarterValue
+                quarterSelect.appendChild(optionNode)
+              })
+              quarterSelect.addEventListener('click', event => event.stopPropagation())
+              quarterSelect.addEventListener('change', (event) => {
+                updatePlanningInlineDraft(epic, { quarterValue: (event.target as HTMLSelectElement).value })
+                schedulePlanningGroupedHeaderSync()
+              })
 
-            const wrap = document.createElement('div')
-            wrap.className = 'flex min-w-0 flex-col gap-0.5'
-            wrap.append(quarterNode, typeNode)
-            cell.appendChild(wrap)
+              const typeSelect = document.createElement('select')
+              typeSelect.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+              typeSelect.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              ;[
+                { label: 'Planejado', value: 'Planned' },
+                { label: 'Transbordo', value: 'Spillover' },
+                { label: 'Não Planejado', value: 'Unplanned' },
+                { label: 'Adicional', value: 'Additional' }
+              ].forEach((option) => {
+                const optionNode = document.createElement('option')
+                optionNode.value = option.value
+                optionNode.textContent = option.label
+                optionNode.selected = option.value === getPlanningInlineDraft(epic).type
+                typeSelect.appendChild(optionNode)
+              })
+              typeSelect.addEventListener('click', event => event.stopPropagation())
+              typeSelect.addEventListener('blur', () => {
+                deactivatePlanningCell(epic.id, 'quarterType')
+                schedulePlanningGroupedHeaderSync()
+              })
+              typeSelect.addEventListener('change', (event) => {
+                updatePlanningInlineDraft(epic, { type: (event.target as HTMLSelectElement).value as DemandType })
+                schedulePlanningGroupedHeaderSync()
+              })
+
+              container.appendChild(quarterSelect)
+              container.appendChild(typeSelect)
+              cell.appendChild(container)
+              requestAnimationFrame(() => quarterSelect.focus())
+            }
+            else {
+              const displayItem = isSimpleEpicHeader && epic ? getPlanningDraftDisplayItem(epic) : anchorDemand
+              const quarterNode = document.createElement('span')
+              quarterNode.className = isSpecialBacklogQuarter(displayItem.quarterYear, displayItem.quarterNumber)
+                ? 'text-[9px] font-semibold uppercase tracking-[0.08em] text-highlighted'
+                : 'text-[10px] font-mono text-highlighted'
+              quarterNode.textContent = planningQuarterDisplayLabel(displayItem)
+
+              const typeLabel = isSimpleEpicHeader && epic
+                ? typeLabels[getPlanningInlineDraft(epic).type]
+                : getEpicTypeLabel(anchorDemand.epicId)
+              const typeNode = document.createElement('span')
+              typeNode.className = `whitespace-nowrap text-[10px] font-medium ${typeLabel === 'Múltiplos' ? 'text-muted' : typeColors[displayItem.type]}`
+              typeNode.textContent = typeLabel
+
+              const wrap = document.createElement('div')
+
+              if (isSimpleEpicHeader && epic) {
+                wrap.className = `flex min-w-0 flex-col gap-0.5 rounded-md border px-1 py-0.5 transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+                wrap.style.cursor = 'pointer'
+                wrap.addEventListener('click', (event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  activatePlanningCell(epic, 'quarterType')
+                  schedulePlanningGroupedHeaderSync()
+                })
+              }
+              else {
+                wrap.className = 'flex min-w-0 flex-col gap-0.5'
+              }
+
+              wrap.append(quarterNode, typeNode)
+              cell.appendChild(wrap)
+            }
           }
 
           grid.appendChild(cell)
@@ -1915,7 +2035,8 @@ function syncListSectionDividers() {
 
           let toggleButton: HTMLButtonElement | null = null
 
-          if (config.epicId) {
+          // Simple epics have no demands to collapse — skip toggle button
+          if (config.epicId && !headerMeta?.epic.isSimple) {
             toggleButton = document.createElement('button')
             toggleButton.type = 'button'
             toggleButton.className = 'inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-default bg-default text-muted transition-colors hover:text-highlighted'
@@ -1949,10 +2070,12 @@ function syncListSectionDividers() {
             metaRow.appendChild(roadmapLabel)
           }
 
-          const countNode = document.createElement('span')
-          countNode.className = 'inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
-          countNode.textContent = String(config.count)
-          metaRow.appendChild(countNode)
+          if (!headerMeta?.epic.isSimple) {
+            const countNode = document.createElement('span')
+            countNode.className = 'inline-flex shrink-0 items-center rounded-md border border-default bg-elevated px-1.5 py-0.5 text-[9px] font-medium text-muted'
+            countNode.textContent = String(config.count)
+            metaRow.appendChild(countNode)
+          }
 
           if (displayEpic) {
             const classificationBadge = document.createElement('span')
@@ -2153,63 +2276,137 @@ function syncListSectionDividers() {
         if (column.id === 'products') {
           const cell = createGridCell('px-3 py-0.5 align-top')
           if (headerMeta) {
-            const products = headerMeta.products
-            const colWidth = getBaseListColPixelWidth('products', 124)
-            const display = getAdaptiveInlineListDisplay(products, colWidth)
+            const epic = headerMeta.epic
 
-            if (!display.items.length) {
-              const empty = document.createElement('span')
-              empty.className = 'text-xs text-muted'
-              empty.textContent = '—'
-              cell.appendChild(empty)
-            }
-            else if (display.allVisible) {
-              const span = document.createElement('span')
-              span.className = 'block max-w-full truncate text-[10px] text-muted opacity-60'
-              span.title = display.fullLabel
-              span.textContent = display.previewLabel
-              cell.appendChild(span)
-            }
-            else {
-              // Overflow: show preview + +N badge with details dropdown on hover/click
+            if (epic.isSimple) {
+              // Simple epics: editable product cell
               const wrapper = document.createElement('div')
-              wrapper.className = 'relative inline-flex items-center gap-1'
+              wrapper.className = 'relative inline-flex'
 
-              const preview = document.createElement('span')
-              preview.className = 'max-w-[120px] truncate text-[10px] text-muted opacity-60'
-              preview.textContent = display.previewLabel
+              const draftEntries = getPlanningDraftProductEntries(epic)
+              const colWidth = getBaseListColPixelWidth('products', 124)
+              const draftDisplay = getAdaptiveInlineListDisplay(draftEntries.map(p => p.label), colWidth, ' · ')
 
-              const more = document.createElement('button')
-              more.type = 'button'
-              more.className = 'shrink-0 rounded border border-default bg-elevated px-1 py-0 text-[9px] text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
-              more.textContent = `+${display.hiddenCount}`
-              more.title = display.fullLabel
-
-              const panel = document.createElement('div')
-              panel.className = 'absolute left-0 top-full z-20 mt-1 hidden min-w-[10rem] flex-col gap-1 rounded-lg border border-default bg-default p-2 shadow-lg'
-              products.forEach((product) => {
-                const item = document.createElement('span')
-                item.className = 'text-[11px] text-highlighted'
-                item.textContent = product
-                panel.appendChild(item)
-              })
-
-              more.addEventListener('click', (event) => {
+              const triggerBtn = document.createElement('button')
+              triggerBtn.type = 'button'
+              triggerBtn.className = `inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0.5 text-[10px] text-highlighted transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+              triggerBtn.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              if (draftDisplay.items.length) {
+                const labelSpan = document.createElement('span')
+                labelSpan.className = 'max-w-[120px] truncate'
+                labelSpan.textContent = draftDisplay.previewLabel
+                triggerBtn.appendChild(labelSpan)
+                if (!draftDisplay.allVisible) {
+                  const moreSpan = document.createElement('span')
+                  moreSpan.className = 'shrink-0 text-muted'
+                  moreSpan.textContent = `+${draftDisplay.hiddenCount}`
+                  triggerBtn.appendChild(moreSpan)
+                }
+              }
+              else {
+                triggerBtn.textContent = '—'
+              }
+              triggerBtn.addEventListener('click', (event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                panel.classList.toggle('hidden')
-                panel.classList.toggle('flex')
+                activatePlanningCell(epic, 'products')
+                schedulePlanningGroupedHeaderSync()
               })
+              wrapper.appendChild(triggerBtn)
 
-              document.addEventListener('click', () => {
-                panel.classList.add('hidden')
-                panel.classList.remove('flex')
-              }, { once: true })
+              if (isPlanningCellEditing(epic, 'products')) {
+                const panel = document.createElement('div')
+                panel.className = 'absolute left-0 top-full z-30 mt-1 flex min-w-[14rem] flex-col gap-2 rounded-lg border border-default bg-default p-3 shadow-xl'
+                panel.addEventListener('click', event => event.stopPropagation())
 
-              wrapper.appendChild(preview)
-              wrapper.appendChild(more)
-              wrapper.appendChild(panel)
+                getPlanningEditableProductOptions(epic).forEach((product) => {
+                  const label = document.createElement('label')
+                  label.className = 'flex items-center gap-2 text-[11px] text-highlighted'
+                  const checkbox = document.createElement('input')
+                  checkbox.type = 'checkbox'
+                  checkbox.className = 'h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary'
+                  checkbox.checked = getPlanningInlineDraft(epic).productIds.includes(product.value)
+                  checkbox.addEventListener('change', () => {
+                    togglePlanningDraftProduct(epic, product.value, checkbox.checked)
+                    schedulePlanningGroupedHeaderSync()
+                  })
+                  const nameSpan = document.createElement('span')
+                  nameSpan.className = 'truncate'
+                  nameSpan.textContent = product.label
+                  label.appendChild(checkbox)
+                  label.appendChild(nameSpan)
+                  panel.appendChild(label)
+                })
+
+                wrapper.appendChild(panel)
+
+                document.addEventListener('click', () => {
+                  deactivatePlanningCell(epic.id, 'products')
+                  schedulePlanningGroupedHeaderSync()
+                }, { once: true })
+              }
+
               cell.appendChild(wrapper)
+            }
+            else {
+              // Regular epics: read-only aggregate
+              const products = headerMeta.products
+              const colWidth = getBaseListColPixelWidth('products', 124)
+              const display = getAdaptiveInlineListDisplay(products, colWidth)
+
+              if (!display.items.length) {
+                const empty = document.createElement('span')
+                empty.className = 'text-xs text-muted'
+                empty.textContent = '—'
+                cell.appendChild(empty)
+              }
+              else if (display.allVisible) {
+                const span = document.createElement('span')
+                span.className = 'block max-w-full truncate text-[10px] text-muted opacity-60'
+                span.title = display.fullLabel
+                span.textContent = display.previewLabel
+                cell.appendChild(span)
+              }
+              else {
+                const wrapper = document.createElement('div')
+                wrapper.className = 'relative inline-flex items-center gap-1'
+
+                const preview = document.createElement('span')
+                preview.className = 'max-w-[120px] truncate text-[10px] text-muted opacity-60'
+                preview.textContent = display.previewLabel
+
+                const more = document.createElement('button')
+                more.type = 'button'
+                more.className = 'shrink-0 rounded border border-default bg-elevated px-1 py-0 text-[9px] text-muted transition-colors hover:border-primary/40 hover:text-highlighted'
+                more.textContent = `+${display.hiddenCount}`
+                more.title = display.fullLabel
+
+                const panel = document.createElement('div')
+                panel.className = 'absolute left-0 top-full z-20 mt-1 hidden min-w-[10rem] flex-col gap-1 rounded-lg border border-default bg-default p-2 shadow-lg'
+                products.forEach((product) => {
+                  const item = document.createElement('span')
+                  item.className = 'text-[11px] text-highlighted'
+                  item.textContent = product
+                  panel.appendChild(item)
+                })
+
+                more.addEventListener('click', (event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  panel.classList.toggle('hidden')
+                  panel.classList.toggle('flex')
+                })
+
+                document.addEventListener('click', () => {
+                  panel.classList.add('hidden')
+                  panel.classList.remove('flex')
+                }, { once: true })
+
+                wrapper.appendChild(preview)
+                wrapper.appendChild(more)
+                wrapper.appendChild(panel)
+                cell.appendChild(wrapper)
+              }
             }
           }
           grid.appendChild(cell)
@@ -2219,11 +2416,56 @@ function syncListSectionDividers() {
         if (column.id === 'hours') {
           const cell = createGridCell('px-3 py-1 text-right align-top')
           if (headerMeta) {
-            // Epic hours: plain text (read-only sum, no border)
-            const text = document.createElement('span')
-            text.className = 'text-[10px] font-semibold text-muted opacity-60'
-            text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
-            cell.appendChild(text)
+            const epic = headerMeta.epic
+            if (epic.isSimple) {
+              if (isPlanningCellEditing(epic, 'hours')) {
+                const input = document.createElement('input')
+                input.type = 'text'
+                input.inputMode = 'decimal'
+                input.value = getPlanningInlineDraft(epic).hoursInput
+                input.className = 'w-full rounded-md border border-default bg-default px-2 py-1 text-right text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
+                input.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+                input.addEventListener('click', event => event.stopPropagation())
+                input.addEventListener('blur', () => {
+                  deactivatePlanningCell(epic.id, 'hours')
+                  schedulePlanningGroupedHeaderSync()
+                })
+                input.addEventListener('keydown', (event) => {
+                  if (event.key === 'Escape' || event.key === 'Enter') {
+                    event.preventDefault()
+                    deactivatePlanningCell(epic.id, 'hours')
+                    schedulePlanningGroupedHeaderSync()
+                  }
+                })
+                input.addEventListener('input', (event) => {
+                  updatePlanningInlineDraft(epic, { hoursInput: (event.target as HTMLInputElement).value })
+                })
+                cell.appendChild(input)
+                requestAnimationFrame(() => input.focus())
+              }
+              else {
+                const draft = getPlanningInlineDraft(epic)
+                const btn = document.createElement('button')
+                btn.type = 'button'
+                btn.className = `rounded-md border text-right text-[10px] font-semibold transition-colors ${getPlanningEditableCellButtonClass(epic)}`
+                btn.textContent = draft.hoursInput ? `${draft.hoursInput}h` : (epic.hours != null ? `${epic.hours}h` : '—')
+                btn.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+                btn.addEventListener('click', (event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  activatePlanningCell(epic, 'hours')
+                  schedulePlanningGroupedHeaderSync()
+                })
+                cell.appendChild(btn)
+              }
+            }
+            else {
+              // Regular epics: read-only sum
+              const text = document.createElement('span')
+              text.className = 'text-[10px] font-semibold text-muted opacity-60'
+              text.textContent = `${headerMeta.totalHours.toLocaleString('pt-BR')}h`
+              cell.appendChild(text)
+            }
           }
           grid.appendChild(cell)
           continue
@@ -2961,6 +3203,7 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     issueLinks: getDisplayIssueLinks(demand).filter((issue): issue is { key: string, url: string } => !!issue.url).map(issue => ({ key: issue.key, url: issue.url })),
     hours: demand.hours,
     hoursRed: demand.hoursRed ?? false,
+    isSimple: demand.isSimple ?? false,
     rowColor: demand.rowColor ?? null,
     promisedDate: isBacklogDemand ? '' : (demand.promisedDate ?? ''),
     customers: demand.itemType === 'Demand' ? [] : (demand.customers ?? []),
@@ -3474,6 +3717,19 @@ const visibleEpicHeaderByDemandId = computed(() => {
     const demand = visibleListRows.value[index]!
     const epicId = demand.epicId
 
+    // Simple epics: in grouped mode show a header (no collapse); in flat mode no header.
+    if (demand.itemType === 'Epic' && demand.isSimple) {
+      result[demand.id] = {
+        showHeader: groupDemandsByEpic.value,
+        count: 0,
+        epicId: demand.id,
+        roadmapTitle: demand.roadmapTitle,
+        epicTitle: demand.title,
+        collapsed: false
+      }
+      continue
+    }
+
     // No-epic demands: show a header each time the group key changes (original logic).
     if (!epicId) {
       const previous = index > 0 ? visibleListRows.value[index - 1]! : null
@@ -3716,6 +3972,8 @@ const listQuarterFilterOptions = computed(() => {
 })
 
 onMounted(() => {
+  updateListViewportWidth()
+
   if (listHeaderRowRef.value) {
     Sortable.create(listHeaderRowRef.value, {
       animation: 150,
@@ -3834,11 +4092,16 @@ function getPlanningProductEntries(item: Pick<RoadmapDemand, 'products'>) {
   const productsMap = new Map<string, string>()
 
   for (const product of item.products ?? []) {
-    if (!product.productId || !product.name)
-      continue
+    if (!product.productId) continue
+
+    let name = product.name
+    if (!name) {
+      name = projects.value.flatMap(p => p.products).find(p => p.id === product.productId)?.name ?? ''
+    }
+    if (!name) continue
 
     if (!productsMap.has(product.productId))
-      productsMap.set(product.productId, product.name)
+      productsMap.set(product.productId, name)
   }
 
   return Array.from(productsMap.entries()).map(([value, label]) => ({ value, label }))
@@ -3924,6 +4187,7 @@ function clearAllPlanningInlineDrafts() {
 
 function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField) {
   const epicEditableFields: PlanningEditableField[] = ['title', 'status', 'classification', 'products', 'customers', 'dueDate']
+  const simpleEpicEditableFields: PlanningEditableField[] = [...epicEditableFields, 'hours', 'quarterType']
 
   if (field === 'customers' && item.itemType === 'Epic') {
     planningCustomerInputs.value = {
@@ -3936,7 +4200,8 @@ function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField)
   }
 
   if (item.itemType === 'Epic') {
-    if (!epicEditableFields.includes(field))
+    const allowedFields = item.isSimple ? simpleEpicEditableFields : epicEditableFields
+    if (!allowedFields.includes(field))
       return
 
     activePlanningCell.value = { itemId: item.id, field }
@@ -4092,8 +4357,14 @@ function getFilteredPlanningCustomerSuggestions(item: RoadmapDemand) {
     .slice(0, 6)
 }
 
+let pendingSyncDividerFrame: number | null = null
 function schedulePlanningGroupedHeaderSync() {
-  requestAnimationFrame(() => syncListSectionDividers())
+  if (pendingSyncDividerFrame !== null)
+    cancelAnimationFrame(pendingSyncDividerFrame)
+  pendingSyncDividerFrame = requestAnimationFrame(() => {
+    pendingSyncDividerFrame = null
+    syncListSectionDividers()
+  })
 }
 
 function togglePlanningDraftProduct(item: RoadmapDemand, productId: string, checked: boolean) {
@@ -4826,9 +5097,15 @@ watch(listScrollContainerRef, async (element) => {
   await nextTick()
   syncListSectionDividers()
 
+  let resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null
   listWidthObserver = new ResizeObserver(() => {
-    updateListViewportWidth()
-    requestAnimationFrame(() => syncListSectionDividers())
+    if (resizeDebounceTimer !== null)
+      clearTimeout(resizeDebounceTimer)
+    resizeDebounceTimer = setTimeout(() => {
+      resizeDebounceTimer = null
+      updateListViewportWidth()
+      schedulePlanningGroupedHeaderSync()
+    }, 150)
   })
   listWidthObserver.observe(element)
 }, { flush: 'post' })
@@ -4941,17 +5218,28 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         || (d.epicTitle?.toLowerCase().includes(q) ?? false)
         || (d.roadmapTitle?.toLowerCase().includes(q) ?? false)
     },
-    size: 560,
-    meta: { style: { td: () => ({ width: listColWidth('title', 560) }), th: () => ({ width: listColWidth('title', 560) }) } },
+    size: 360,
+    meta: { style: { td: () => ({ width: listColWidth('title', 360) }), th: () => ({ width: listColWidth('title', 360) }) } },
     cell: ({ row }) => {
       const d = row.original
       const isDeprioritized = d.status === 'Deprioritized'
       const displayItem = getPlanningDraftDisplayItem(d)
       const textNodes = []
       const issueLinks = getDisplayIssueLinks(d)
+      const isSimpleEpic = d.itemType === 'Epic' && d.isSimple
       if (isCollapsedRepresentative(d))
         return h('span', { class: 'hidden' })
-      if (!groupDemandsByEpic.value && d.epicTitle) {
+      // For simple epics in non-grouped mode: show roadmap as "parent" above
+      if (!groupDemandsByEpic.value && isSimpleEpic && d.roadmapTitle) {
+        textNodes.push(
+          h('div', { class: 'mb-0.5 flex min-w-0 items-center gap-1.5' }, [
+            h(UIconComp, { name: 'i-lucide-layout-list', class: 'h-3.5 w-3.5 shrink-0 text-muted' }),
+            h('span', { class: 'min-w-0 flex-1 truncate text-[10px] text-muted', title: d.roadmapTitle }, d.roadmapTitle),
+          ])
+        )
+      }
+      // For regular demands in non-grouped mode: show parent epic info above (skip for simple epics to avoid self-reference)
+      if (!groupDemandsByEpic.value && d.epicTitle && !isSimpleEpic) {
         const epic = d.epicId ? itemsById.value.get(d.epicId) : null
         const isEpicDeprioritized = epic?.itemType === 'Epic' && epic.status === 'Deprioritized'
         const epicIssueLinks = epic?.itemType === 'Epic' ? getDisplayIssueLinks(epic) : []
@@ -4968,7 +5256,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           ])
         )
       }
-      if (groupDemandsByEpic.value && d.epicId) {
+      if (groupDemandsByEpic.value && d.epicId && !isSimpleEpic) {
         const groupedContentNodes = [
           h('div', { class: 'flex items-start gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-list-todo', class: 'mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-600' }),
@@ -5010,7 +5298,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       }
       else {
         textNodes.push(h('div', { class: 'flex min-w-0 items-center gap-1.5' }, [
-          h(UIconComp, { name: 'i-lucide-list-todo', class: 'h-3.5 w-3.5 shrink-0 text-sky-600' }),
+          h(UIconComp, { name: isSimpleEpic ? 'i-lucide-star' : 'i-lucide-list-todo', class: `h-3.5 w-3.5 shrink-0 ${isSimpleEpic ? 'text-amber-500' : 'text-sky-600'}` }),
           isPlanningCellEditing(d, 'title')
             ? h(UInputComp, {
                 modelValue: getPlanningInlineDraft(d).title,
@@ -5215,8 +5503,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!Array.isArray(filterValue) || !filterValue.length) return true
       return filterValue.some(productId => row.original.products.some(product => product.productId === productId))
     },
-    size: 124,
-    meta: { style: { td: () => ({ width: listColWidth('products', 124) }), th: () => ({ width: listColWidth('products', 124) }) } },
+    size: 148,
+    meta: { style: { td: () => ({ width: listColWidth('products', 148) }), th: () => ({ width: listColWidth('products', 148) }) } },
   },
   {
     accessorKey: 'customers',

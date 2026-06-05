@@ -27,6 +27,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public IReadOnlyList<RoadmapIssueLink> IssueLinks => _issueLinks;
     public decimal? Hours { get; private set; }
     public bool HoursRed { get; private set; }
+    public bool IsSimple { get; private set; }
     public string? RowColor { get; private set; }
     public IReadOnlyList<string> Customers { get; private set; } = [];
     public bool IsBlocked { get; private set; }
@@ -77,17 +78,19 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         NoKpiClassification? noKpiClassification = null,
         bool excludeFromCapacity = false,
         bool hoursRed = false,
-        string? rowColor = null)
+        string? rowColor = null,
+        bool isSimple = false)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
         ValidateHierarchy(itemType, parentDemandId, projectId);
+        var normalizedIsSimple = itemType == RoadmapItemType.Epic && isSimple;
         var normalizedProjectId = NormalizeProjectId(itemType, projectId);
         var normalizedProjectIds = NormalizeProjectIds(itemType, projectIds);
-        var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
+        var normalizedQuarter = NormalizeQuarter(itemType, normalizedIsSimple, quarterYear, quarterNumber);
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
-        var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
+        var normalizedHours = (itemType == RoadmapItemType.Demand || normalizedIsSimple) ? hours : null;
         var normalizedBlockedReason = NormalizeBlockedReason(status, blockedReason);
 
         var demand = new RoadmapDemand
@@ -110,6 +113,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             _issueLinks = NormalizeIssueLinks(issueLinks),
             Hours = normalizedHours,
             HoursRed = itemType == RoadmapItemType.Demand && hoursRed,
+            IsSimple = normalizedIsSimple,
             RowColor = rowColor,
             Customers = NormalizeCustomers(customers),
             IsBlocked = status == DemandStatus.Blocked,
@@ -119,9 +123,9 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             ProblemClarity = problemClarity,
             HasNoKpi = hasNoKpi,
             NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification),
-            ExcludeFromCapacity = itemType == RoadmapItemType.Demand && excludeFromCapacity
+            ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity
         };
-        demand._products = NormalizeProductIds(itemType, productIds)
+        demand._products = NormalizeProductIds(itemType, normalizedIsSimple, productIds)
             .Distinct()
             .Select(id => RoadmapDemandProduct.Create(demand.Id, id))
             .ToList();
@@ -160,17 +164,19 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         NoKpiClassification? noKpiClassification = null,
         bool excludeFromCapacity = false,
         bool hoursRed = false,
-        string? rowColor = null)
+        string? rowColor = null,
+        bool isSimple = false)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
 
         ValidateHierarchy(itemType, parentDemandId, projectId);
+        var normalizedIsSimple = itemType == RoadmapItemType.Epic && isSimple;
         var normalizedProjectId = NormalizeProjectId(itemType, projectId);
         var normalizedProjectIds = NormalizeProjectIds(itemType, projectIds);
-        var normalizedQuarter = NormalizeQuarter(itemType, quarterYear, quarterNumber);
+        var normalizedQuarter = NormalizeQuarter(itemType, normalizedIsSimple, quarterYear, quarterNumber);
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
-        var normalizedHours = itemType == RoadmapItemType.Demand ? hours : null;
+        var normalizedHours = (itemType == RoadmapItemType.Demand || normalizedIsSimple) ? hours : null;
         var normalizedBlockedReason = NormalizeBlockedReason(status, blockedReason);
 
         ItemType = itemType;
@@ -192,6 +198,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         _issueLinks = NormalizeIssueLinks(issueLinks);
         Hours = normalizedHours;
         HoursRed = itemType == RoadmapItemType.Demand && hoursRed;
+        IsSimple = normalizedIsSimple;
         RowColor = rowColor;
         Customers = NormalizeCustomers(customers);
         IsBlocked = status == DemandStatus.Blocked;
@@ -201,12 +208,12 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ProblemClarity = problemClarity;
         HasNoKpi = hasNoKpi;
         NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
-        ExcludeFromCapacity = itemType == RoadmapItemType.Demand && excludeFromCapacity;
+        ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity;
     }
 
     public void ReplaceProducts(IEnumerable<Guid>? productIds)
     {
-        _products = NormalizeProductIds(ItemType, productIds)
+        _products = NormalizeProductIds(ItemType, IsSimple, productIds)
             .Distinct()
             .Select(id => RoadmapDemandProduct.Create(Id, id))
             .ToList();
@@ -285,8 +292,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             .ToList()
         ?? [];
 
-    private static IReadOnlyList<Guid> NormalizeProductIds(RoadmapItemType itemType, IEnumerable<Guid>? productIds) =>
-        itemType == RoadmapItemType.Demand
+    private static IReadOnlyList<Guid> NormalizeProductIds(RoadmapItemType itemType, bool isSimple, IEnumerable<Guid>? productIds) =>
+        (itemType == RoadmapItemType.Demand || (itemType == RoadmapItemType.Epic && isSimple))
             ? (productIds ?? []).Where(id => id != Guid.Empty).ToList()
             : [];
 
@@ -300,8 +307,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             ? projectId.Value
             : null;
 
-    private static (int Year, int Number) NormalizeQuarter(RoadmapItemType itemType, int quarterYear, int quarterNumber) =>
-        itemType == RoadmapItemType.Demand
+    private static (int Year, int Number) NormalizeQuarter(RoadmapItemType itemType, bool isSimple, int quarterYear, int quarterNumber) =>
+        (itemType == RoadmapItemType.Demand || (itemType == RoadmapItemType.Epic && isSimple))
             ? (quarterYear, quarterNumber)
             : (Quarter.BacklogYear, Quarter.BacklogNumber);
 
