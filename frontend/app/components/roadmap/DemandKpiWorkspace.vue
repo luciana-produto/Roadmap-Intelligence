@@ -41,6 +41,10 @@ const props = defineProps<{
   availableKpis?: Kpi[]
 }>()
 
+const emit = defineEmits<{
+  saved: []
+}>()
+
 const kpiStore = useKpiStore()
 const roadmapStore = useRoadmapStore()
 const toast = useToast()
@@ -645,6 +649,8 @@ async function saveKpiSetup() {
       kpiMeasurements: formState.hasNoKpi ? [] : kpiMeasurements.value
     })
     toast.add({ title: 'Registro de KPI atualizado', color: 'success' })
+    // Marking as "sem KPI" finishes the flow: close the workspace and go back.
+    emit('saved')
   }
   catch {
     // error handled by useApi
@@ -657,6 +663,15 @@ async function saveKpiSetup() {
 async function persistKpiLinks(links: DemandKpiLinkInput[]) {
   if (!props.demand)
     return
+
+  // Managing real KPI links means the item is no longer "sem KPI": clear that flag in the
+  // backend too (kpiStore only persists the links, not the demand's hasNoKpi flag).
+  if (props.demand.hasNoKpi && !formState.hasNoKpi) {
+    await roadmapStore.updateDemand(props.demand.id, buildDemandFormData(props.demand, {
+      hasNoKpi: false,
+      noKpiClassification: undefined
+    }))
+  }
 
   persistedKpiLinksState.value = await kpiStore.updateDemandKpiLinks(props.demand.id, links)
   measurementReferenceDrafts.value = Object.fromEntries(

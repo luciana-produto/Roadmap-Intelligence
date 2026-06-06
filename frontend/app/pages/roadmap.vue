@@ -165,6 +165,15 @@ function getEffectiveDemandClassification(demand: Pick<RoadmapDemand, 'itemType'
   return epic.classification
 }
 
+// Inline classification editing targets the epic (classification is an epic-level attribute):
+// for a demand linked to an epic, edits go to that epic; otherwise to the item itself.
+function getPlanningClassificationTarget(demand: RoadmapDemand): RoadmapDemand {
+  if (demand.itemType === 'Demand')
+    return getEpicForDemand(demand) ?? demand
+
+  return demand
+}
+
 function formatDemandDate(value?: string) {
   if (!value)
     return ''
@@ -249,19 +258,19 @@ function getDemandKpiSummary(demand: RoadmapDemand) {
 }
 
 const listProblemOptions = [
-  { value: 'overdueOpen', label: 'Demandas atrasadas' },
-  { value: 'deliveredLate', label: 'Demandas entregues com atraso' },
-  { value: 'noKpi', label: 'Demandas sem KPIs' },
-  { value: 'doneNoKpi', label: 'Concluídas sem KPI apurado' },
-  { value: 'noJira', label: 'Demandas sem issue Jira' },
-  { value: 'noHours', label: 'Demandas sem horas' },
+  { value: 'overdueOpen', label: 'Itens atrasados' },
+  { value: 'deliveredLate', label: 'Itens entregues com atraso' },
+  { value: 'noKpi', label: 'Itens sem KPIs' },
+  { value: 'doneNoKpi', label: 'Concluídos sem KPI apurado' },
+  { value: 'noJira', label: 'Itens sem issue Jira' },
+  { value: 'noHours', label: 'Itens sem horas' },
 ] as const
 
 const listProblemLabels: Record<string, string> = {
-  overdueOpen: 'Demanda atrasada',
+  overdueOpen: 'Item atrasado',
   deliveredLate: 'Entregue com atraso',
   noKpi: 'Sem KPIs associados',
-  doneNoKpi: 'Concluída sem KPI apurado',
+  doneNoKpi: 'Concluído sem KPI apurado',
   noJira: 'Sem issue Jira associada',
   noHours: 'Sem horas estimadas',
 }
@@ -279,6 +288,33 @@ const listProblemFilterLabel = computed(() => {
 })
 
 function getDemandProblemKeys(demand: RoadmapDemand) {
+  // Epics (simple or empty composite) have their own set of problems.
+  if (demand.itemType === 'Epic') {
+    const epicKeys: string[] = []
+
+    if (demand.hasNoKpi || demand.kpiLinks.length === 0)
+      epicKeys.push('noKpi')
+
+    if (!getDisplayIssueLinks(demand).length)
+      epicKeys.push('noJira')
+
+    // Hours/quarter only exist on simple epics.
+    if (demand.isSimple) {
+      if (demand.hours == null)
+        epicKeys.push('noHours')
+      if (demand.status !== 'Done' && demand.isOverdue)
+        epicKeys.push('overdueOpen')
+      if (demand.status === 'Done' && demand.isDeliveredLate)
+        epicKeys.push('deliveredLate')
+    }
+
+    if (demand.status === 'Done' && !demand.hasNoKpi && demand.kpiLinks.length > 0
+      && (demand.kpiMeasurements?.length ?? 0) === 0)
+      epicKeys.push('doneNoKpi')
+
+    return epicKeys
+  }
+
   if (demand.itemType !== 'Demand')
     return []
 
@@ -656,6 +692,35 @@ function createFilledSvgIcon(paths: string[], className = 'h-3 w-3 shrink-0') {
     path.setAttribute('d', pathValue)
     svg.appendChild(path)
   })
+
+  return svg
+}
+
+// Lucide "palette" icon (blob outline + 4 color dots) — standard icon for row-color actions.
+function createPaletteIcon(className = 'h-4 w-4') {
+  const ns = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(ns, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('class', className)
+
+  const blob = document.createElementNS(ns, 'path')
+  blob.setAttribute('d', 'M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2')
+  svg.appendChild(blob)
+
+  for (const [cx, cy] of [['13.5', '6.5'], ['17.5', '10.5'], ['6.5', '12.5'], ['8.5', '7.5']] as const) {
+    const dot = document.createElementNS(ns, 'circle')
+    dot.setAttribute('cx', cx)
+    dot.setAttribute('cy', cy)
+    dot.setAttribute('r', '.5')
+    dot.setAttribute('fill', 'currentColor')
+    dot.setAttribute('stroke', 'none')
+    svg.appendChild(dot)
+  }
 
   return svg
 }
@@ -1069,9 +1134,16 @@ watch(filterListProjectIds, () => {
 })
 
 // Composite epics that have no demands linked. The planning list is built from demands
-// (which carry the quarter), so these epics would otherwise disappear. We always surface
-// them at the end under an "inconsistent epics" group, regardless of the quarter filter.
+// (which carry the quarter), so these epics would otherwise disappear. We surface them at
+// the end under an "inconsistent epics" group — but only when the quarter filter is
+// "Todos os quarters" or one of the Backlog quarters (they have no real quarter to place them).
 const emptyCompositeEpics = computed(() => {
+  const allowsInconsistentEpics = filterQuarters.value.length === 0
+    || filterQuarters.value.includes(BACKLOG_QUARTER.value)
+    || filterQuarters.value.includes(PRIORITIZED_BACKLOG_QUARTER.value)
+  if (!allowsInconsistentEpics)
+    return []
+
   const epicIdsWithDemands = new Set(
     demandItems.value.map(demand => demand.epicId).filter((id): id is string => !!id)
   )
@@ -1903,7 +1975,12 @@ function syncListSectionDividers() {
     }
     else if (kind === 'inconsistent') {
       dividerCell.className = 'border-y-2 border-red-300/50 bg-red-50/60 px-3 py-2.5 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700 shadow-sm dark:border-red-800/50 dark:bg-red-950/20 dark:text-red-300'
-      dividerCell.textContent = config.label
+      const labelSpan = document.createElement('span')
+      labelSpan.textContent = config.label
+      const hintSpan = document.createElement('span')
+      hintSpan.className = 'ml-1 font-normal normal-case lowercase tracking-normal text-red-600/80 dark:text-red-300/80'
+      hintSpan.textContent = ' (crie uma demanda ou transforme-o em épico simples para planejá-lo)'
+      dividerCell.append(labelSpan, hintSpan)
     }
     else {
       const headerMeta = getEpicHeaderMeta(visibleRows[config.rowIndex])
@@ -2066,7 +2143,9 @@ function syncListSectionDividers() {
                 })
               }
               else {
-                wrap.className = 'flex min-w-0 flex-col gap-0.5'
+                // Match the demand quarter cell's box (border + padding) so the epic header
+                // quarter aligns horizontally with the quarter of its demand rows.
+                wrap.className = 'flex min-w-0 flex-col gap-0.5 rounded-md border border-transparent px-1 py-0.5'
               }
 
               wrap.append(quarterNode, typeNode)
@@ -2115,7 +2194,8 @@ function syncListSectionDividers() {
           const roadmapTitleLabel = headerMeta?.epic.roadmapTitle ?? config.roadmapTitle
           if (roadmapTitleLabel) {
             const roadmapLabel = document.createElement('div')
-            roadmapLabel.className = 'min-w-0 flex-1 truncate text-[10px] text-muted'
+            // Não usar flex-1: assim o contador fica logo após o título (e não empurrado à direita).
+            roadmapLabel.className = 'min-w-0 max-w-[60%] shrink truncate text-[10px] text-muted'
             roadmapLabel.textContent = roadmapTitleLabel
             metaRow.appendChild(roadmapLabel)
           }
@@ -2127,11 +2207,45 @@ function syncListSectionDividers() {
             metaRow.appendChild(countNode)
           }
 
-          if (displayEpic) {
-            const classificationBadge = document.createElement('span')
-            classificationBadge.className = `inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium ${classificationBadgeClass[displayEpic.classification]}`
-            classificationBadge.textContent = classificationLabels[displayEpic.classification]
-            metaRow.appendChild(classificationBadge)
+          // Editable classification badge for the epic (inline, inside the title meta row).
+          if (headerMeta && displayEpic) {
+            const epic = headerMeta.epic
+            if (isPlanningCellEditing(epic, 'classification')) {
+              const select = document.createElement('select')
+              select.className = 'ml-auto min-w-0 shrink-0 rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] text-highlighted outline-none transition-colors focus:border-primary/40'
+              select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              ;(Object.entries(classificationLabels) as Array<[DemandClassification, string]>).forEach(([value, label]) => {
+                const optionNode = document.createElement('option')
+                optionNode.value = value
+                optionNode.textContent = label
+                optionNode.selected = value === getPlanningInlineDraft(epic).classification
+                select.appendChild(optionNode)
+              })
+              select.addEventListener('click', event => event.stopPropagation())
+              select.addEventListener('blur', () => {
+                deactivatePlanningCell(epic.id, 'classification')
+                schedulePlanningGroupedHeaderSync()
+              })
+              select.addEventListener('change', (event) => {
+                updatePlanningInlineDraft(epic, { classification: (event.target as HTMLSelectElement).value as DemandClassification })
+              })
+              metaRow.appendChild(select)
+              requestAnimationFrame(() => select.focus())
+            }
+            else {
+              const classificationBadge = document.createElement('button')
+              classificationBadge.type = 'button'
+              classificationBadge.className = `ml-auto inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${classificationBadgeClass[displayEpic.classification]} ${getPlanningEditableCellButtonClass(epic)}`
+              classificationBadge.textContent = classificationLabels[displayEpic.classification]
+              classificationBadge.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
+              classificationBadge.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                activatePlanningCell(epic, 'classification')
+                schedulePlanningGroupedHeaderSync()
+              })
+              metaRow.appendChild(classificationBadge)
+            }
           }
 
           const titleBlock = document.createElement('div')
@@ -2186,6 +2300,15 @@ function syncListSectionDividers() {
               schedulePlanningGroupedHeaderSync()
             })
             epicTitleRow.appendChild(epicTitle)
+          }
+
+          // Problem indicator (same warning icon used on demands).
+          if (headerMeta && getDemandProblemKeys(headerMeta.epic).length) {
+            const warnSpan = document.createElement('span')
+            warnSpan.className = 'inline-flex shrink-0 items-center text-warning'
+            warnSpan.title = getDemandProblemTooltip(headerMeta.epic)
+            warnSpan.appendChild(createSvgIcon(['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01'], 'h-3.5 w-3.5'))
+            epicTitleRow.appendChild(warnSpan)
           }
 
           const issueTrigger = createIssueTriggerElement(headerMeta?.issueLinks ?? [])
@@ -2291,7 +2414,8 @@ function syncListSectionDividers() {
         }
 
         if (column.id === 'kpis') {
-          const cell = createGridCell('pl-2 pr-2 py-1 align-top')
+          // Match the demand KPI cell padding (px-3) so the epic KPI aligns with its demands.
+          const cell = createGridCell('px-3 py-1 align-top')
 
           if (headerMeta) {
             const container = document.createElement('div')
@@ -2399,23 +2523,28 @@ function syncListSectionDividers() {
               cell.appendChild(wrapper)
             }
             else {
-              // Regular epics: read-only aggregate
+              // Regular epics: read-only aggregate. Wrap in a box that mirrors the demand /
+              // simple-epic product cell (border + padding) so the column stays aligned.
               const products = headerMeta.products
               const colWidth = getBaseListColPixelWidth('products', 124)
               const display = getAdaptiveInlineListDisplay(products, colWidth)
+
+              const box = document.createElement('div')
+              box.className = 'inline-flex max-w-full items-center rounded-md border border-transparent px-1 py-0.5'
+              cell.appendChild(box)
 
               if (!display.items.length) {
                 const empty = document.createElement('span')
                 empty.className = 'text-xs text-muted'
                 empty.textContent = '—'
-                cell.appendChild(empty)
+                box.appendChild(empty)
               }
               else if (display.allVisible) {
                 const span = document.createElement('span')
                 span.className = 'block max-w-full truncate text-[10px] text-muted opacity-60'
                 span.title = display.fullLabel
                 span.textContent = display.previewLabel
-                cell.appendChild(span)
+                box.appendChild(span)
               }
               else {
                 const wrapper = document.createElement('div')
@@ -2455,7 +2584,7 @@ function syncListSectionDividers() {
                 wrapper.appendChild(preview)
                 wrapper.appendChild(more)
                 wrapper.appendChild(panel)
-                cell.appendChild(wrapper)
+                box.appendChild(wrapper)
               }
             }
           }
@@ -2498,7 +2627,8 @@ function syncListSectionDividers() {
                 const btn = document.createElement('button')
                 btn.type = 'button'
                 btn.className = `rounded-md border text-right text-[10px] font-semibold transition-colors ${getPlanningEditableCellButtonClass(epic)}`
-                btn.textContent = draft.hoursInput ? `${draft.hoursInput}h` : (epic.hours != null ? `${epic.hours}h` : '—')
+                // Reflect the draft directly: a cleared field shows "—" (no hours), not the old value.
+                btn.textContent = draft.hoursInput ? `${draft.hoursInput}h` : '—'
                 btn.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
                 btn.addEventListener('click', (event) => {
                   event.preventDefault()
@@ -2848,55 +2978,6 @@ function syncListSectionDividers() {
           continue
         }
 
-        if (column.id === 'classification') {
-          const cell = createGridCell('px-3 py-1 align-top')
-          if (headerMeta) {
-            const epic = headerMeta.epic
-            const draftEpic = getPlanningDraftDisplayItem(epic)
-
-            if (isPlanningCellEditing(epic, 'classification')) {
-              const select = document.createElement('select')
-              select.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
-              select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
-
-              ;(Object.entries(classificationLabels) as Array<[DemandClassification, string]>).forEach(([value, label]) => {
-                const optionNode = document.createElement('option')
-                optionNode.value = value
-                optionNode.textContent = label
-                optionNode.selected = value === getPlanningInlineDraft(epic).classification
-                select.appendChild(optionNode)
-              })
-
-              select.addEventListener('click', event => event.stopPropagation())
-              select.addEventListener('blur', () => {
-                deactivatePlanningCell(epic.id, 'classification')
-                schedulePlanningGroupedHeaderSync()
-              })
-              select.addEventListener('change', (event) => {
-                updatePlanningInlineDraft(epic, { classification: (event.target as HTMLSelectElement).value as DemandClassification })
-              })
-              cell.appendChild(select)
-              requestAnimationFrame(() => select.focus())
-            }
-            else {
-              const classificationBadge = document.createElement('button')
-              classificationBadge.type = 'button'
-              classificationBadge.className = `inline-flex items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${classificationBadgeClass[draftEpic.classification]} ${getPlanningEditableCellButtonClass(epic)}`
-              classificationBadge.textContent = classificationLabels[draftEpic.classification]
-              classificationBadge.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
-              classificationBadge.addEventListener('click', (event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                activatePlanningCell(epic, 'classification')
-                schedulePlanningGroupedHeaderSync()
-              })
-              cell.appendChild(classificationBadge)
-            }
-          }
-          grid.appendChild(cell)
-          continue
-        }
-
         if (column.id === '_actions') {
           const cell = createGridCell('relative overflow-visible !px-0 self-stretch')
           if (headerMeta) {
@@ -2912,6 +2993,21 @@ function syncListSectionDividers() {
             const actions = document.createElement('div')
             actions.className = 'pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
 
+            // Criar transbordo (simple epics only, like demands).
+            if (headerMeta.epic.isSimple && !headerMeta.epic.successorDemandId) {
+              const spilloverButton = document.createElement('button')
+              spilloverButton.type = 'button'
+              spilloverButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
+              spilloverButton.title = headerMeta.epic.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo'
+              spilloverButton.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                openSpilloverModal(headerMeta.epic)
+              })
+              spilloverButton.appendChild(createSvgIcon(['m15 17 5-5-5-5', 'M4 18v-2a4 4 0 0 1 4-4h12'], 'h-4 w-4'))
+              actions.appendChild(spilloverButton)
+            }
+
             const createButton = document.createElement('button')
             createButton.type = 'button'
             createButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-primary transition-colors hover:text-primary/80'
@@ -2921,7 +3017,7 @@ function syncListSectionDividers() {
               event.stopPropagation()
               startCreateDemandForEpic(headerMeta.epic)
             })
-            createButton.appendChild(createSvgIcon(['M12 5v14', 'M5 12h14'], 'h-3.5 w-3.5'))
+            createButton.appendChild(createSvgIcon(['M12 5v14', 'M5 12h14'], 'h-4 w-4'))
             actions.appendChild(createButton)
 
             const kpiButton = document.createElement('button')
@@ -2941,7 +3037,7 @@ function syncListSectionDividers() {
             kpiSvg.setAttribute('stroke-width', '2')
             kpiSvg.setAttribute('stroke-linecap', 'round')
             kpiSvg.setAttribute('stroke-linejoin', 'round')
-            kpiSvg.setAttribute('class', 'h-3.5 w-3.5')
+            kpiSvg.setAttribute('class', 'h-4 w-4')
 
             const kpiPath1 = document.createElementNS('http://www.w3.org/2000/svg', 'path')
             kpiPath1.setAttribute('d', 'M3 3v18h18')
@@ -2960,15 +3056,9 @@ function syncListSectionDividers() {
             colorSummary.className = 'inline-flex h-6 w-6 list-none cursor-pointer items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
             colorSummary.title = 'Cor da linha'
             const epicColor = LIST_ROW_COLORS.find(c => c.id === headerMeta.epic.rowColor)
-            const colorDot = document.createElement('span')
-            colorDot.className = 'h-3 w-3 rounded-full'
-            if (epicColor) {
-              colorDot.style.backgroundColor = epicColor.hex
-            }
-            else {
-              colorDot.style.border = '1.5px solid var(--ui-border-muted, #9ca3af)'
-            }
-            colorSummary.appendChild(colorDot)
+            if (epicColor)
+              colorSummary.style.color = epicColor.hex
+            colorSummary.appendChild(createPaletteIcon('h-4 w-4'))
             colorDetails.appendChild(colorSummary)
 
             const colorPanel = document.createElement('div')
@@ -3023,7 +3113,7 @@ function syncListSectionDividers() {
                 event.stopPropagation()
                 promptConvertEpicToSimple(headerMeta.epic)
               })
-              convertButton.appendChild(createSvgIcon(['M15 3h6v6', 'M9 21H3v-6', 'M21 3l-7 7', 'M3 21l7-7'], 'h-3.5 w-3.5'))
+              convertButton.appendChild(createSvgIcon(['M4 14h6v6', 'M20 10h-6V4', 'm14 10 7-7', 'm3 21 7-7'], 'h-4 w-4'))
               actions.appendChild(convertButton)
             }
 
@@ -3037,23 +3127,8 @@ function syncListSectionDividers() {
               openEditModal(headerMeta.epic)
             })
 
-            const editSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-            editSvg.setAttribute('viewBox', '0 0 24 24')
-            editSvg.setAttribute('fill', 'none')
-            editSvg.setAttribute('stroke', 'currentColor')
-            editSvg.setAttribute('stroke-width', '2')
-            editSvg.setAttribute('stroke-linecap', 'round')
-            editSvg.setAttribute('stroke-linejoin', 'round')
-            editSvg.setAttribute('class', 'h-3.5 w-3.5')
-
-            const editPathBody = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-            editPathBody.setAttribute('d', 'M12 20h9')
-
-            const editPathTip = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-            editPathTip.setAttribute('d', 'M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4Z')
-
-            editSvg.append(editPathBody, editPathTip)
-            editButton.appendChild(editSvg)
+            // Standard Lucide "pencil" icon (same as used in every other edit action).
+            editButton.appendChild(createSvgIcon(['M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z', 'm15 5 4 4'], 'h-4 w-4'))
             actions.appendChild(editButton)
 
             const deleteButton = document.createElement('button')
@@ -3073,7 +3148,7 @@ function syncListSectionDividers() {
             deleteSvg.setAttribute('stroke-width', '2')
             deleteSvg.setAttribute('stroke-linecap', 'round')
             deleteSvg.setAttribute('stroke-linejoin', 'round')
-            deleteSvg.setAttribute('class', 'h-3.5 w-3.5')
+            deleteSvg.setAttribute('class', 'h-4 w-4')
 
             const deletePathTop = document.createElementNS('http://www.w3.org/2000/svg', 'path')
             deletePathTop.setAttribute('d', 'M3 6h18')
@@ -3691,6 +3766,8 @@ const classificationLabels: Record<DemandClassification, string> = {
   TechnicalDebtSecurity: 'Débito Técnico', Strategic: 'Estratégico', Evolution: 'Evolução',
   ImprovementGap: 'Melhoria/Gap', Mandatory: 'Mandatório', Homologation: 'Homologação', Customizacao: 'Customização'
 }
+const classificationSelectOptions = (Object.entries(classificationLabels) as Array<[DemandClassification, string]>)
+  .map(([value, label]) => ({ value, label }))
 
 // ─── List view — TanStack table ──────────────────────────────────────────────────────────────────
 const listSorting = ref<SortingState>([])
@@ -3766,9 +3843,9 @@ const tableDemands = computed(() => {
         return listProblemFilter.value.some(p => problemKeys.includes(p))
       })
 
-  // Always append empty composite epics at the end so they remain findable regardless of
-  // the active quarter/filters. They render as their own "inconsistent" group header.
-  if (groupDemandsByEpic.value && emptyCompositeEpics.value.length)
+  // Append empty composite epics at the end (in both grouped and non-grouped modes) so they
+  // remain findable. They render under the "Épicos inconsistentes - sem demanda" section.
+  if (emptyCompositeEpics.value.length)
     return [...filtered, ...emptyCompositeEpics.value]
 
   return filtered
@@ -3845,9 +3922,6 @@ const visibleRoadmapCount = computed(() => new Set(visibleListRows.value.map(dem
 const visibleEpicCount = computed(() => new Set(visibleListRows.value.map(demand => demand.epicId).filter((value): value is string => !!value)).size)
 const visibleDemandCount = computed(() => visibleListRows.value.length)
 const visibleSortableRows = computed(() => visibleListRows.value.filter(demand => !isCollapsedRepresentative(demand)))
-const visibleListDemandCount = computed(() => {
-  return visibleListRows.value.length
-})
 const visibleEpicHeaderByDemandId = computed(() => {
   const result: Record<string, { showHeader: boolean, count: number, epicId?: string, roadmapTitle?: string | null, epicTitle?: string | null, collapsed: boolean }> = {}
 
@@ -3918,7 +3992,6 @@ const visibleEpicHeaderByDemandId = computed(() => {
 
 
 const listHasActiveFilters = computed(() => listColumnFilters.value.length > 0)
-const shouldConstrainListHeight = computed(() => visibleListDemandCount.value > 20)
 const planningGroupedRenderNonce = ref(0)
 const listTableKey = computed(() =>
   tableDemands.value
@@ -4708,7 +4781,16 @@ async function savePlanningInline(
   if (Number.isNaN(hours)) {
     toast.add({
       title: 'Horas inválidas',
-      description: 'Informe um valor numérico maior ou igual a zero.',
+      description: 'Informe um valor numérico maior que zero.',
+      color: 'warning'
+    })
+    return false
+  }
+
+  if (hours === 0) {
+    toast.add({
+      title: 'Horas inválidas',
+      description: '0h não é aceito. Informe um valor válido ou deixe as horas em branco.',
       color: 'warning'
     })
     return false
@@ -5230,7 +5312,7 @@ function getListGridTemplateColumns() {
 const listTableWidth = computed(() => `${listBaseWidth.value + listTitleExtraWidth.value}px`)
 
 watch(
-  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${emptyCompositeEpics.value.map(epic => `${epic.id}:${epic.title}:${epic.status}:${epic.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
+  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${emptyCompositeEpics.value.map(epic => `${epic.id}:${epic.title}:${epic.status}:${epic.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${JSON.stringify(listProblemFilter.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
   async () => {
     await nextTick()
     syncListSectionDividers()
@@ -5324,6 +5406,42 @@ const UIconComp   = resolveComponent('UIcon')
 const UPopoverComp = resolveComponent('UPopover')
 const UInputComp = resolveComponent('UInput')
 const USelectComp = resolveComponent('USelect')
+
+// Inline, editable classification badge shown inside the "Demanda" cell (non-grouped mode).
+// Classification is an epic-level attribute, so for a demand it targets its epic.
+function renderPlanningClassificationBadge(demand: RoadmapDemand) {
+  const target = getPlanningClassificationTarget(demand)
+  const classification = getPlanningDraftDisplayItem(target).classification
+
+  if (isPlanningCellEditing(target, 'classification')) {
+    return h(USelectComp, {
+      modelValue: getPlanningInlineDraft(target).classification,
+      items: classificationSelectOptions,
+      valueKey: 'value',
+      optionAttribute: 'label',
+      size: 'xs',
+      class: 'w-40 shrink-0',
+      disabled: isPlanningInlineSaving(target.id) || isSavingAllPlanningInlineEdits.value,
+      'onUpdate:modelValue': (value?: DemandClassification) => {
+        if (value)
+          updatePlanningInlineDraft(target, { classification: value })
+      },
+      onBlur: () => deactivatePlanningCell(target.id, 'classification')
+    })
+  }
+
+  return h('button', {
+    type: 'button',
+    class: `inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${classificationBadgeClass[classification]} ${getPlanningEditableCellButtonClass(target)}`,
+    disabled: isPlanningInlineSaving(target.id) || isSavingAllPlanningInlineEdits.value,
+    title: target.itemType === 'Epic' && target.id !== demand.id ? 'Classificação do épico' : 'Classificação',
+    onClick: (event: MouseEvent) => {
+      event.preventDefault()
+      event.stopPropagation()
+      activatePlanningCell(target, 'classification')
+    }
+  }, classificationLabels[classification])
+}
 
 function renderDependencyIcon(dependency: DemandDependency, relation: 'dependsOn' | 'dependedOnBy', demand?: RoadmapDemand) {
   const inconsistent = relation === 'dependsOn' && !!demand && isDependencyInconsistent(demand, dependency)
@@ -5432,7 +5550,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       if (!groupDemandsByEpic.value && d.epicTitle && !isSimpleEpic) {
         const epic = d.epicId ? itemsById.value.get(d.epicId) : null
         const isEpicDeprioritized = epic?.itemType === 'Epic' && epic.status === 'Deprioritized'
-        const epicIssueLinks = epic?.itemType === 'Epic' ? getDisplayIssueLinks(epic) : []
         textNodes.push(
           h('div', { class: 'mb-0.5 flex min-w-0 items-center gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-star', class: 'h-3.5 w-3.5 shrink-0 text-amber-500' }),
@@ -5440,9 +5557,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               class: `min-w-0 flex-1 truncate text-[10px] ${isEpicDeprioritized ? 'line-through text-muted' : 'text-muted'}`,
               title: d.epicTitle
             }, d.epicTitle),
-            ...(renderIssueTrigger(epicIssueLinks)
-              ? [renderIssueTrigger(epicIssueLinks)!]
-              : [h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: 'Sem issue Jira — clique para adicionar', onClick: () => { const epic = d.epicId ? itemsById.value.get(d.epicId) : null; if (epic) openEditModal(epic, undefined, 'jiraIssue') } }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })])])
           ])
         )
       }
@@ -5512,7 +5626,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               }, displayItem.title),
           ...d.dependsOn.map(dep => renderDependencyIcon(dep, 'dependsOn', d)),
           ...d.dependedOnBy.map(dep => renderDependencyIcon(dep, 'dependedOnBy')),
-          ...(getDemandProblemKeys(d).length ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })] : []),
+          // When NOT grouped, classification + problem + jira move to the right-aligned stack.
+          ...(groupDemandsByEpic.value && getDemandProblemKeys(d).length ? [h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })] : []),
           ...(d.successorDemandId
             ? [h('span', {
                 class: 'inline-flex shrink-0 items-center gap-0.5 rounded border border-amber-200 bg-amber-50 px-1 py-0 text-[8px] font-medium text-amber-600 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300',
@@ -5522,9 +5637,11 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
                 (() => { const s = demandItems.value.find(x => x.id === d.successorDemandId); return s ? `→ ${s.quarterLabel}` : '→' })()
               ])]
             : []),
-          ...(renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
-            !issueLinks.length ? h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })]) : null
-          ].filter(Boolean))
+          ...(groupDemandsByEpic.value
+            ? (renderIssueTrigger(issueLinks) ? [renderIssueTrigger(issueLinks)!] : [
+                !issueLinks.length ? h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: 'Sem issue Jira — clique para adicionar', onClick: () => openEditModal(d, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })]) : null
+              ].filter(Boolean))
+            : [])
         ]))
       }
 
@@ -5543,6 +5660,36 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             h('span', {}, `(${inconsistentDeps.length})`)
           ])
         )
+      }
+
+      // Non-grouped right-aligned stack (per prototype):
+      //   row 1: [classification] [epic's jira issue]
+      //   row 2:                  [problem?] [demand's jira issue]   (demands only)
+      if (!groupDemandsByEpic.value) {
+        const makeJiraNode = (item: RoadmapDemand, emptyTitle: string) =>
+          renderIssueTrigger(getDisplayIssueLinks(item))
+          ?? h('button', { type: 'button', class: 'inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1.5 text-[10px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400', title: emptyTitle, onClick: () => openEditModal(item, undefined, 'jiraIssue') }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })])
+
+        // Epic-level jira: parent epic for a demand, the epic itself for a simple epic.
+        const epicForJira = isSimpleEpic ? d : (d.epicId ? itemsById.value.get(d.epicId) ?? null : null)
+        const epicJiraNode = epicForJira ? makeJiraNode(epicForJira, 'Épico sem issue Jira — clique para adicionar') : null
+
+        // Demand-level indicators (only when the row is a demand).
+        const problemNode = (!isSimpleEpic && getDemandProblemKeys(d).length)
+          ? h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })
+          : null
+        const demandJiraNode = !isSimpleEpic ? makeJiraNode(d, 'Sem issue Jira — clique para adicionar') : null
+
+        const topRow = [renderPlanningClassificationBadge(d), epicJiraNode].filter(Boolean)
+        const bottomRow = [problemNode, demandJiraNode].filter(Boolean)
+
+        return h('div', { class: 'flex min-w-0 items-start justify-between gap-2' }, [
+          h('div', { class: 'min-w-0 flex-1' }, textNodes),
+          h('div', { class: 'flex shrink-0 flex-col items-end gap-0.5' }, [
+            h('div', { class: 'flex items-center gap-1' }, topRow),
+            bottomRow.length ? h('div', { class: 'flex items-center gap-1' }, bottomRow) : null
+          ].filter(Boolean))
+        ])
       }
 
       return h('div', { class: 'min-w-0' }, textNodes)
@@ -6046,6 +6193,7 @@ watch(activeDemandKpiId, async (value) => {
         <RoadmapDemandKpiWorkspace
           :demand="activeDemandKpi"
           :available-kpis="availableKpis"
+          @saved="closeDemandKpiWorkspace"
         />
       </template>
 
@@ -6480,7 +6628,7 @@ watch(activeDemandKpiId, async (value) => {
             </thead>
           </table>
         </div>
-        <div ref="listScrollContainerRef" :class="shouldConstrainListHeight ? 'max-h-[560px] overflow-x-auto overflow-y-scroll' : 'overflow-x-auto overflow-y-visible'" :style="shouldConstrainListHeight ? { scrollbarGutter: 'stable' } : undefined" @scroll="syncListHeaderScroll">
+        <div ref="listScrollContainerRef" class="overflow-x-auto overflow-y-visible" @scroll="syncListHeaderScroll">
           <div ref="listTableRootRef" :style="{ width: listTableWidth }">
             <UTable
               :key="listTableKey"
@@ -6551,7 +6699,7 @@ watch(activeDemandKpiId, async (value) => {
                   <button
                     v-if="getPlanningDraftProductDisplay(row.original).items.length"
                     type="button"
-                    class="inline-flex max-w-full items-center gap-1 rounded-md border text-[10px] text-highlighted transition-colors"
+                    class="inline-flex max-w-full items-center gap-1 rounded-md border px-1 py-0.5 text-[10px] text-highlighted transition-colors"
                     :class="getPlanningEditableCellButtonClass(row.original)"
                     :title="getPlanningDraftProductDisplay(row.original).fullLabel"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
@@ -6563,7 +6711,7 @@ watch(activeDemandKpiId, async (value) => {
                   <button
                     v-else
                     type="button"
-                    class="text-xs transition-colors"
+                    class="inline-flex items-center rounded-md border px-1 py-0.5 text-xs transition-colors"
                     :class="getPlanningEditableCellButtonClass(row.original)"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
                     @click="activatePlanningCell(row.original, 'products')"
@@ -6749,7 +6897,7 @@ watch(activeDemandKpiId, async (value) => {
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
                     @click="activatePlanningCell(row.original, 'hours')"
                   >
-                    {{ getPlanningInlineDraft(row.original).hoursInput ? `${getPlanningInlineDraft(row.original).hoursInput}h` : `${row.original.hours ?? 0}h` }}
+                    {{ getPlanningInlineDraft(row.original).hoursInput ? `${getPlanningInlineDraft(row.original).hoursInput}h` : '—' }}
                   </button>
                   <div class="flex items-center gap-1">
                     <button
@@ -7126,11 +7274,11 @@ watch(activeDemandKpiId, async (value) => {
         <div class="space-y-4">
           <p class="text-sm text-muted">
             <template v-if="spilloverModalDemand?.status === 'Deprioritized'">
-              A demanda <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será repriorizada
+              {{ spilloverModalDemand?.itemType === 'Epic' ? 'O épico' : 'A demanda' }} <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será repriorizado
               com uma cópia do tipo <em>Spillover</em> no quarter de destino. O registro original permanece preservado.
             </template>
             <template v-else>
-              O histórico da demanda <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será preservado
+              O histórico {{ spilloverModalDemand?.itemType === 'Epic' ? 'do épico' : 'da demanda' }} <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será preservado
               no quarter atual e uma cópia do tipo <em>Spillover</em> será criada no quarter de destino.
             </template>
           </p>

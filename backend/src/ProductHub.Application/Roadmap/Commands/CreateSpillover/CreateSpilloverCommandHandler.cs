@@ -21,11 +21,13 @@ public sealed class CreateSpilloverCommandHandler(
         var original = await demandRepository.GetByIdForUpdateAsync(request.OriginalDemandId, cancellationToken)
             ?? throw new NotFoundException("RoadmapDemand", request.OriginalDemandId);
 
-        if (original.ItemType != RoadmapItemType.Demand)
-            throw new ValidationException([new ValidationFailure(nameof(request.OriginalDemandId), "Only demand items can have a spillover.")]);
+        var isSimpleEpicSpillover = original.ItemType == RoadmapItemType.Epic && original.IsSimple;
+
+        if (original.ItemType != RoadmapItemType.Demand && !isSimpleEpicSpillover)
+            throw new ValidationException([new ValidationFailure(nameof(request.OriginalDemandId), "Only demand or simple epic items can have a spillover.")]);
 
         if (original.SuccessorDemandId.HasValue)
-            throw new ValidationException([new ValidationFailure(nameof(request.OriginalDemandId), "This demand already has a spillover.")]);
+            throw new ValidationException([new ValidationFailure(nameof(request.OriginalDemandId), "This item already has a spillover.")]);
 
         var nextSortOrder = original.ProjectId.HasValue
             ? await demandRepository.GetNextSortOrderAsync(
@@ -35,26 +37,47 @@ public sealed class CreateSpilloverCommandHandler(
                 cancellationToken)
             : 0;
 
-        var spillover = RoadmapDemand.Create(
-            RoadmapItemType.Demand,
-            original.ParentDemandId,
-            original.Title,
-            original.Description,
-            original.ProjectId,
-            null,
-            request.TargetQuarterYear,
-            request.TargetQuarterNumber,
-            DemandStatus.Backlog,
-            DemandType.Spillover,
-            original.Classification,
-            original.Products.Select(p => p.ProductId),
-            nextSortOrder,
-            original.JiraIssue,
-            original.IssueLinks.Count > 0 ? original.IssueLinks : null,
-            original.Hours,
-            original.Customers,
-            hasNoKpi: original.HasNoKpi,
-            noKpiClassification: original.NoKpiClassification);
+        var spillover = isSimpleEpicSpillover
+            ? RoadmapDemand.Create(
+                RoadmapItemType.Epic,
+                original.ParentDemandId,
+                original.Title,
+                original.Description,
+                null,
+                original.ProjectLinks.Select(link => link.ProjectId),
+                request.TargetQuarterYear,
+                request.TargetQuarterNumber,
+                DemandStatus.Backlog,
+                DemandType.Spillover,
+                original.Classification,
+                original.Products.Select(p => p.ProductId),
+                jiraIssue: original.JiraIssue,
+                issueLinks: original.IssueLinks.Count > 0 ? original.IssueLinks : null,
+                hours: original.Hours,
+                customers: original.Customers,
+                hasNoKpi: original.HasNoKpi,
+                noKpiClassification: original.NoKpiClassification,
+                isSimple: true)
+            : RoadmapDemand.Create(
+                RoadmapItemType.Demand,
+                original.ParentDemandId,
+                original.Title,
+                original.Description,
+                original.ProjectId,
+                null,
+                request.TargetQuarterYear,
+                request.TargetQuarterNumber,
+                DemandStatus.Backlog,
+                DemandType.Spillover,
+                original.Classification,
+                original.Products.Select(p => p.ProductId),
+                nextSortOrder,
+                original.JiraIssue,
+                original.IssueLinks.Count > 0 ? original.IssueLinks : null,
+                original.Hours,
+                original.Customers,
+                hasNoKpi: original.HasNoKpi,
+                noKpiClassification: original.NoKpiClassification);
 
         original.SetSuccessor(spillover.Id);
 
@@ -94,11 +117,16 @@ public sealed class CreateSpilloverCommandHandler(
             .ToDictionary(p => p.Id, p => p.Name);
 
         Dictionary<Guid, string> productNamesById = [];
-        if (original.ProjectId.HasValue)
+        // Demands carry a single ProjectId; simple epics carry their project via ProjectLinks.
+        var productProjectIds = original.ProjectId.HasValue
+            ? [original.ProjectId.Value]
+            : original.ProjectLinks.Select(link => link.ProjectId).Distinct().ToArray();
+        foreach (var productProjectId in productProjectIds)
         {
-            var project = await projectRepository.GetByIdWithProductsAsync(original.ProjectId.Value, cancellationToken);
+            var project = await projectRepository.GetByIdWithProductsAsync(productProjectId, cancellationToken);
             if (project is not null)
-                productNamesById = project.Products.ToDictionary(p => p.Id, p => p.Name);
+                foreach (var product in project.Products)
+                    productNamesById.TryAdd(product.Id, product.Name);
         }
 
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync([created.Id], cancellationToken);

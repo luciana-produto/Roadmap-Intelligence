@@ -127,12 +127,12 @@ const deprioritizationReasonOptions = [
 ] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
 
 const hierarchyProblemOptions = [
-  { value: 'overdueOpen', label: 'Demandas atrasadas' },
-  { value: 'deliveredLate', label: 'Demandas entregues com atraso' },
-  { value: 'noKpi', label: 'Demandas sem KPIs' },
-  { value: 'doneNoKpi', label: 'Concluídas sem KPI apurado' },
-  { value: 'noJira', label: 'Demandas sem issue Jira' },
-  { value: 'noHours', label: 'Demandas sem horas' }
+  { value: 'overdueOpen', label: 'Itens atrasados' },
+  { value: 'deliveredLate', label: 'Itens entregues com atraso' },
+  { value: 'noKpi', label: 'Itens sem KPIs' },
+  { value: 'doneNoKpi', label: 'Concluídos sem KPI apurado' },
+  { value: 'noJira', label: 'Itens sem issue Jira' },
+  { value: 'noHours', label: 'Itens sem horas' }
 ] as const
 
 function updateHierarchyContainerWidth() {
@@ -151,7 +151,7 @@ function getHierarchyColWidth(columnId: HierarchyColumnId) {
   return `${getHierarchyColSize(columnId)}px`
 }
 
-function handleHierarchyColumnResize(columnId: HierarchyColumnId, event: MouseEvent) {
+function startHierarchyResize(columnId: HierarchyColumnId, event: MouseEvent) {
   const startX = event.clientX
   const startWidth = getHierarchyColSize(columnId)
 
@@ -685,6 +685,32 @@ function getDisplayedCustomers(item: RoadmapDemand) {
 }
 
 function getDemandProblemKeys(item: RoadmapDemand) {
+  // Epics (simple or composite) have their own set of problems.
+  if (item.itemType === 'Epic') {
+    const epicKeys: string[] = []
+
+    if (item.hasNoKpi || item.kpiLinks.length === 0)
+      epicKeys.push('noKpi')
+
+    if (!getDisplayIssueLinks(item).length)
+      epicKeys.push('noJira')
+
+    if (item.isSimple) {
+      if (item.hours == null)
+        epicKeys.push('noHours')
+      if (item.status !== 'Done' && item.isOverdue)
+        epicKeys.push('overdueOpen')
+      if (item.status === 'Done' && item.isDeliveredLate)
+        epicKeys.push('deliveredLate')
+    }
+
+    if (item.status === 'Done' && !item.hasNoKpi && item.kpiLinks.length > 0
+      && (item.kpiMeasurements?.length ?? 0) === 0)
+      epicKeys.push('doneNoKpi')
+
+    return epicKeys
+  }
+
   if (item.itemType !== 'Demand')
     return []
 
@@ -717,10 +743,10 @@ function getDemandProblemKeys(item: RoadmapDemand) {
 }
 
 const problemLabels: Record<string, string> = {
-  overdueOpen: 'Demanda atrasada',
+  overdueOpen: 'Item atrasado',
   deliveredLate: 'Entregue com atraso',
   noKpi: 'Sem KPIs associados',
-  doneNoKpi: 'Concluída sem KPI apurado',
+  doneNoKpi: 'Concluído sem KPI apurado',
   noJira: 'Sem issue Jira associada',
   noHours: 'Sem horas estimadas',
 }
@@ -1053,7 +1079,8 @@ function matchesHierarchyFilters(
     return false
 
   if (hierarchyProblemFilter.value.length) {
-    if (item.itemType !== 'Demand')
+    // Problems apply to demands and epics (roadmaps have none).
+    if (item.itemType === 'Roadmap')
       return false
 
     const problemKeys = getDemandProblemKeys(item)
@@ -1841,7 +1868,16 @@ async function saveHierarchyInline(
   if (Number.isNaN(hours)) {
     toast.add({
       title: 'Horas inválidas',
-      description: 'Informe um valor numérico maior ou igual a zero.',
+      description: 'Informe um valor numérico maior que zero.',
+      color: 'warning'
+    })
+    return false
+  }
+
+  if ((item.itemType === 'Demand' || item.isSimple) && hours === 0) {
+    toast.add({
+      title: 'Horas inválidas',
+      description: '0h não é aceito. Informe um valor válido ou deixe as horas em branco.',
       color: 'warning'
     })
     return false
@@ -2261,17 +2297,22 @@ async function handleSubmit(data: DemandFormData) {
       hierarchyDemands.value.push(created)
 
       // The backend converts a simple epic to composite when its first demand is created.
-      // Mirror that locally so the parent epic stops rendering its own attributes.
+      // Mirror that on every in-memory copy (local list AND the shared store, which the
+      // planning view reads) so the epic stops rendering as a standalone simple epic.
       if (created.itemType === 'Demand' && created.parentDemandId) {
-        const parentEpic = hierarchyDemands.value.find(item => item.id === created.parentDemandId)
-        if (parentEpic?.isSimple) {
-          parentEpic.isSimple = false
-          parentEpic.hours = undefined
-          parentEpic.hoursRed = false
-          parentEpic.products = []
-          parentEpic.quarterYear = BACKLOG_QUARTER.year
-          parentEpic.quarterNumber = BACKLOG_QUARTER.number
+        const applyConversion = (epic?: RoadmapDemand | null) => {
+          if (!epic?.isSimple)
+            return
+          epic.isSimple = false
+          epic.hours = undefined
+          epic.hoursRed = false
+          epic.products = []
+          epic.quarterYear = BACKLOG_QUARTER.year
+          epic.quarterNumber = BACKLOG_QUARTER.number
         }
+
+        applyConversion(hierarchyDemands.value.find(item => item.id === created.parentDemandId))
+        applyConversion(roadmapStore.demands.find(item => item.id === created.parentDemandId))
       }
 
       toast.add({ title: 'Item criado', color: 'success' })
@@ -2826,6 +2867,7 @@ void initializeHierarchyPage()
                                 @update:model-value="(value) => updateHierarchyInlineDraft(epicEntry.epic, { title: String(value ?? '') })"
                               />
                               <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :title="epicEntry.epic.description || undefined" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'title')">{{ getHierarchyDraftDisplayItem(epicEntry.epic).title }}</button>
+                              <UIcon v-if="getDemandProblemKeys(epicEntry.epic).length" name="i-lucide-triangle-alert" class="h-3.5 w-3.5 shrink-0 text-warning" :title="getDemandProblemTooltip(epicEntry.epic)" />
                               <a
                                 v-if="getDisplayIssueLinks(epicEntry.epic).length === 1 && getDisplayIssueLinks(epicEntry.epic)[0]?.url"
                                 :href="getDisplayIssueLinks(epicEntry.epic)[0]?.url"
@@ -2929,7 +2971,7 @@ void initializeHierarchyPage()
                           />
                         </div>
                         <button v-else-if="getDisplayedHours(epicEntry.epic) !== null || getHierarchyInlineDraft(epicEntry.epic).hoursInput" type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(epicEntry.epic)" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'hours')">
-                          {{ getHierarchyInlineDraft(epicEntry.epic).hoursInput ? `${getHierarchyInlineDraft(epicEntry.epic).hoursInput}h` : `${getDisplayedHours(epicEntry.epic)}h` }}
+                          {{ getHierarchyInlineDraft(epicEntry.epic).hoursInput ? `${getHierarchyInlineDraft(epicEntry.epic).hoursInput}h` : '—' }}
                         </button>
                         <button v-else type="button" class="text-right text-xs transition-colors" :class="getHierarchyEditableCellButtonClass(epicEntry.epic)" :disabled="isHierarchyInlineSaving(epicEntry.epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epicEntry.epic, 'hours')">—</button>
                       </template>
@@ -3065,7 +3107,7 @@ void initializeHierarchyPage()
                         <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                           <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epicEntry.epic)" />
                           <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epicEntry.epic)" />
-                          <UButton v-if="!epicEntry.epic.isSimple && !getDemandsForEpic(epicEntry.epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-shrink" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epicEntry.epic)" />
+                          <UButton v-if="!epicEntry.epic.isSimple && !getDemandsForEpic(epicEntry.epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-minimize-2" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epicEntry.epic)" />
                           <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epicEntry.epic)" />
                           <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epicEntry.epic)" />
                         </div>
@@ -3196,10 +3238,9 @@ void initializeHierarchyPage()
                           @mousedown.prevent="updateHierarchyInlineDraft(demand, { hoursRed: !getHierarchyInlineDraft(demand).hoursRed })"
                         />
                       </div>
-                      <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
-                        {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : `${getDisplayedHours(demand)}h` }}
+                      <button v-else type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
+                        {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : '—' }}
                       </button>
-                      <span v-else class="text-xs text-muted">—</span>
                     </td>
 
                     <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
@@ -3328,6 +3369,7 @@ void initializeHierarchyPage()
                           @update:model-value="(value) => updateHierarchyInlineDraft(epic, { title: String(value ?? '') })"
                         />
                         <button v-else type="button" class="min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium text-highlighted transition-colors" :class="getHierarchyEditableCellButtonClass(epic)" :title="epic.description || undefined" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'title')">{{ getHierarchyDraftDisplayItem(epic).title }}</button>
+                        <UIcon v-if="getDemandProblemKeys(epic).length" name="i-lucide-triangle-alert" class="h-3.5 w-3.5 shrink-0 text-warning" :title="getDemandProblemTooltip(epic)" />
                         <a
                           v-if="getDisplayIssueLinks(epic).length === 1 && getDisplayIssueLinks(epic)[0]?.url"
                           :href="getDisplayIssueLinks(epic)[0]?.url"
@@ -3445,7 +3487,7 @@ void initializeHierarchyPage()
                       />
                     </div>
                     <button v-else-if="getDisplayedHours(epic) !== null || getHierarchyInlineDraft(epic).hoursInput" type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(epic)" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'hours')">
-                      {{ getHierarchyInlineDraft(epic).hoursInput ? `${getHierarchyInlineDraft(epic).hoursInput}h` : `${getDisplayedHours(epic)}h` }}
+                      {{ getHierarchyInlineDraft(epic).hoursInput ? `${getHierarchyInlineDraft(epic).hoursInput}h` : '—' }}
                     </button>
                     <button v-else type="button" class="text-right text-xs transition-colors" :class="getHierarchyEditableCellButtonClass(epic)" :disabled="isHierarchyInlineSaving(epic.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(epic, 'hours')">—</button>
                   </template>
@@ -3556,7 +3598,7 @@ void initializeHierarchyPage()
                     <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epic)" />
                       <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epic)" />
-                      <UButton v-if="!epic.isSimple && !getDemandsForEpic(epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-shrink" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epic)" />
+                      <UButton v-if="!epic.isSimple && !getDemandsForEpic(epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-minimize-2" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epic)" />
                       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epic)" />
                       <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epic)" />
                     </div>
@@ -3704,10 +3746,9 @@ void initializeHierarchyPage()
                       @mousedown.prevent="updateHierarchyInlineDraft(demand, { hoursRed: !getHierarchyInlineDraft(demand).hoursRed })"
                     />
                   </div>
-                  <button v-else-if="getDisplayedHours(demand) !== null || getHierarchyInlineDraft(demand).hoursInput" type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
-                    {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : `${getDisplayedHours(demand)}h` }}
+                  <button v-else type="button" class="text-right transition-colors" :class="getHierarchyHoursButtonClass(demand)" :disabled="isHierarchyInlineSaving(demand.id) || isSavingAllHierarchyEdits" @click="activateHierarchyCell(demand, 'hours')">
+                    {{ getHierarchyInlineDraft(demand).hoursInput ? `${getHierarchyInlineDraft(demand).hoursInput}h` : '—' }}
                   </button>
-                  <span v-else class="text-xs text-muted">—</span>
                 </td>
                 <td class="border-b border-default px-2.5 py-0.5 align-top" :style="{ width: getHierarchyColWidth('classification') }">
                   <span class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium" :class="[classificationBadgeClass[getDisplayedClassification(demand)], getHierarchyReadonlyCellClass()]" :title="classificationLabels[getDisplayedClassification(demand)]">

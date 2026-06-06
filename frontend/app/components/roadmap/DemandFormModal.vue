@@ -146,6 +146,47 @@ const showEpicModeSelection = computed(() =>
 function selectEpicMode(simple: boolean) {
   form.isSimple = simple
   epicModeDecided.value = true
+  // A simple epic can only be linked to a single project.
+  if (simple && (form.projectIds?.length ?? 0) > 1)
+    form.projectIds = form.projectIds!.slice(0, 1)
+}
+
+// Step-by-step reveal when creating a new epic:
+//   tipo → (pergunta simples/composto) → Projetos → Roadmap pai → restante.
+// Quando o épico vem do "+" na linha do roadmap (defaultParentDemandId definido), os campos
+// já vêm preenchidos, então o restante é exibido logo após escolher o modo.
+const isNewEpic = computed(() => isEpic.value && !isEdit.value)
+const epicPrefilledFromRoadmap = computed(() => isNewEpic.value && !!props.defaultParentDemandId)
+
+const showProjectsField = computed(() => {
+  if (!hasSelectedItemType.value) return false
+  if (!isEpic.value) return true
+  if (isEdit.value) return true
+  return epicModeDecided.value
+})
+
+const showRoadmapParentField = computed(() => {
+  if (!isEpic.value || !hasSelectedItemType.value) return false
+  if (isEdit.value) return true
+  if (!epicModeDecided.value) return false
+  if (epicPrefilledFromRoadmap.value) return true
+  return (form.projectIds?.length ?? 0) > 0
+})
+
+const showRestFields = computed(() => {
+  if (!hasSelectedItemType.value) return false
+  if (!isEpic.value) return true
+  if (isEdit.value) return true
+  if (!epicModeDecided.value) return false
+  if (epicPrefilledFromRoadmap.value) return true
+  return (form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId
+})
+
+function setSingleEpicProject(projectId?: string) {
+  form.projectIds = projectId ? [projectId] : []
+  // Simple epics derive products from the single project — drop products that no longer apply.
+  const availableProductIds = new Set(productsForSimpleEpic.value.map(product => product.id))
+  form.productIds = form.productIds.filter(id => availableProductIds.has(id))
 }
 
 const productsForSimpleEpic = computed(() => {
@@ -661,9 +702,13 @@ function resetFormForCreate() {
   form.title = ''
   form.description = ''
   form.projectId = props.defaultProjectId ?? sortedProjects.value[0]?.id ?? ''
-  form.projectIds = props.defaultProjectIds?.length
-    ? [...props.defaultProjectIds]
-    : (props.defaultProjectId ? [props.defaultProjectId] : [])
+  // Epics created from a roadmap line only pre-select the project when the roadmap has exactly
+  // one project; with more than one, the field is left blank for the user to choose.
+  form.projectIds = (props.defaultItemType === 'Epic' && (props.defaultProjectIds?.length ?? 0) > 1)
+    ? []
+    : (props.defaultProjectIds?.length
+        ? [...props.defaultProjectIds]
+        : (props.defaultProjectId ? [props.defaultProjectId] : []))
   form.quarterYear = props.defaultQuarterYear ?? null
   form.quarterNumber = props.defaultQuarterNumber ?? null
   form.type = props.defaultType ?? 'Planned'
@@ -810,9 +855,11 @@ watch(() => form.itemType, (itemType) => {
     form.projectId = ''
     form.projectIds = form.projectIds?.length
       ? form.projectIds
-      : (props.defaultProjectIds?.length
-          ? [...props.defaultProjectIds]
-          : (props.defaultProjectId ? [props.defaultProjectId] : []))
+      : ((props.defaultProjectIds?.length ?? 0) > 1
+          ? []
+          : (props.defaultProjectIds?.length
+              ? [...props.defaultProjectIds]
+              : (props.defaultProjectId ? [props.defaultProjectId] : [])))
     form.productIds = []
     form.type = 'Planned'
     if (!isEdit.value)
@@ -1623,7 +1670,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="hasSelectedItemType" label="Projetos" required>
+            <UFormField v-if="showProjectsField" :label="isSimpleEpic ? 'Projeto' : 'Projetos'" required>
               <USelect
                 v-if="isDemand"
                 v-model="form.projectId"
@@ -1631,6 +1678,16 @@ async function handleSubmit() {
                 placeholder="Selecione"
                 class="w-full"
                 :disabled="isEdit"
+              />
+
+              <!-- Épico simples: apenas 1 projeto -->
+              <USelect
+                v-else-if="isSimpleEpic"
+                :model-value="form.projectIds?.[0] ?? ''"
+                :items="sortedProjects.map(p => ({ value: p.id, label: p.name }))"
+                placeholder="Selecione"
+                class="w-full"
+                @update:model-value="(value) => setSingleEpicProject(value as string | undefined)"
               />
 
               <UPopover v-else :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
@@ -1666,7 +1723,7 @@ async function handleSubmit() {
 
           </div>
 
-          <UFormField v-if="hasSelectedItemType && isEpic" label="Roadmap pai" required>
+          <UFormField v-if="showRoadmapParentField" label="Roadmap pai" required>
             <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
               <UButton
                 type="button"
@@ -1754,7 +1811,7 @@ async function handleSubmit() {
             </div>
           </div>
 
-          <div v-if="hasSelectedItemType && !showEpicModeSelection" class="space-y-3">
+          <div v-if="showRestFields" class="space-y-3">
           <UFormField v-if="isDemand" label="Épico pai" required>
             <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
               <UButton
@@ -2144,7 +2201,7 @@ async function handleSubmit() {
           </div>
         </section>
 
-        <section v-if="hasSelectedItemType && !isRoadmap" class="space-y-4 border-t border-default pt-4">
+        <section v-if="showRestFields && !isRoadmap" class="space-y-4 border-t border-default pt-4">
           <div>
             <h3 class="text-sm font-semibold text-highlighted">Dependências entre épicos e demandas</h3>
             <p class="mt-1 text-xs text-muted">

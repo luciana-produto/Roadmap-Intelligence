@@ -87,7 +87,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ValidateHierarchy(itemType, parentDemandId, projectId);
         var normalizedIsSimple = itemType == RoadmapItemType.Epic && isSimple;
         var normalizedProjectId = NormalizeProjectId(itemType, projectId);
-        var normalizedProjectIds = NormalizeProjectIds(itemType, projectIds);
+        var normalizedProjectIds = NormalizeProjectIds(itemType, normalizedIsSimple, projectIds);
         var normalizedQuarter = NormalizeQuarter(itemType, normalizedIsSimple, quarterYear, quarterNumber);
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = (itemType == RoadmapItemType.Demand || normalizedIsSimple) ? hours : null;
@@ -173,7 +173,7 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ValidateHierarchy(itemType, parentDemandId, projectId);
         var normalizedIsSimple = itemType == RoadmapItemType.Epic && isSimple;
         var normalizedProjectId = NormalizeProjectId(itemType, projectId);
-        var normalizedProjectIds = NormalizeProjectIds(itemType, projectIds);
+        var normalizedProjectIds = NormalizeProjectIds(itemType, normalizedIsSimple, projectIds);
         var normalizedQuarter = NormalizeQuarter(itemType, normalizedIsSimple, quarterYear, quarterNumber);
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = (itemType == RoadmapItemType.Demand || normalizedIsSimple) ? hours : null;
@@ -311,10 +311,18 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
             ? (productIds ?? []).Where(id => id != Guid.Empty).ToList()
             : [];
 
-    private static IReadOnlyList<Guid> NormalizeProjectIds(RoadmapItemType itemType, IEnumerable<Guid>? projectIds) =>
-        itemType == RoadmapItemType.Demand
-            ? []
-            : (projectIds ?? []).Where(id => id != Guid.Empty).Distinct().ToList();
+    private static IReadOnlyList<Guid> NormalizeProjectIds(RoadmapItemType itemType, bool isSimple, IEnumerable<Guid>? projectIds)
+    {
+        if (itemType == RoadmapItemType.Demand)
+            return [];
+
+        var normalized = (projectIds ?? []).Where(id => id != Guid.Empty).Distinct().ToList();
+
+        // A simple epic can only be linked to a single project.
+        return (itemType == RoadmapItemType.Epic && isSimple)
+            ? normalized.Take(1).ToList()
+            : normalized;
+    }
 
     private static Guid? NormalizeProjectId(RoadmapItemType itemType, Guid? projectId) =>
         itemType == RoadmapItemType.Demand && projectId.HasValue && projectId.Value != Guid.Empty
