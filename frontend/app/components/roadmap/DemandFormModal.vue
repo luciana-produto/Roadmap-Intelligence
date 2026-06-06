@@ -102,6 +102,10 @@ const props = defineProps<{
   defaultProjectId?: string
   defaultQuarterYear?: number
   defaultQuarterNumber?: number
+  defaultType?: DemandFormData['type']
+  defaultHours?: number
+  defaultProductIds?: string[]
+  forceSimpleEpic?: boolean
   availableKpis?: Kpi[]
   isSaving?: boolean
   focusField?: string
@@ -662,16 +666,16 @@ function resetFormForCreate() {
     : (props.defaultProjectId ? [props.defaultProjectId] : [])
   form.quarterYear = props.defaultQuarterYear ?? null
   form.quarterNumber = props.defaultQuarterNumber ?? null
-  form.type = 'Planned'
+  form.type = props.defaultType ?? 'Planned'
   form.classification = props.defaultItemType === 'Epic' ? '' : 'Strategic'
-  form.productIds = []
+  form.productIds = props.defaultProductIds ? [...props.defaultProductIds] : []
   form.status = 'Backlog'
   form.observation = ''
   form.deprioritizationReason = undefined
   form.replacementDemandId = undefined
   form.jiraIssue = ''
   form.issueLinks = []
-  form.hours = undefined
+  form.hours = props.defaultHours ?? undefined
   form.isSimple = false
   epicModeDecided.value = false
   form.customers = []
@@ -703,6 +707,13 @@ watch(
 
     if (props.demand) {
       populateFormFromDemand(props.demand)
+
+      // Convert an empty composite epic into a simple one: open in simple mode so the
+      // user fills the now-required quarter/type/hours/product fields.
+      if (props.forceSimpleEpic && props.demand.itemType === 'Epic') {
+        form.isSimple = true
+        epicModeDecided.value = true
+      }
     }
     else {
       resetFormForCreate()

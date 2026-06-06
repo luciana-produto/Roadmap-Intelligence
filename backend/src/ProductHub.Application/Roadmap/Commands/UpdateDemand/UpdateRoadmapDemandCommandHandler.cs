@@ -37,6 +37,15 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         var originalQuarterYear = demand.QuarterYear;
         var originalQuarterNumber = demand.QuarterNumber;
 
+        // A composite epic can only become simple again when it has no demands linked to it.
+        if (itemType == RoadmapItemType.Epic && request.IsSimple && !demand.IsSimple
+            && await demandRepository.HasChildrenAsync(demand.Id, cancellationToken))
+        {
+            throw new ValidationException([
+                new ValidationFailure(nameof(request.IsSimple), "An epic with linked demands cannot be converted to a simple epic.")
+            ]);
+        }
+
         if (request.ProjectId != demand.ProjectId && itemType == RoadmapItemType.Demand)
         {
             throw new ValidationException([

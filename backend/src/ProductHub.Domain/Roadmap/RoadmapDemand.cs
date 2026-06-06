@@ -211,6 +211,20 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity;
     }
 
+    public void ConvertToComposite()
+    {
+        if (ItemType != RoadmapItemType.Epic)
+            throw new InvalidOperationException("Only epic items can be converted to composite.");
+
+        IsSimple = false;
+        Hours = null;
+        HoursRed = false;
+        ExcludeFromCapacity = false;
+        QuarterYear = Quarter.BacklogYear;
+        QuarterNumber = Quarter.BacklogNumber;
+        _products = [];
+    }
+
     public void ReplaceProducts(IEnumerable<Guid>? productIds)
     {
         _products = NormalizeProductIds(ItemType, IsSimple, productIds)

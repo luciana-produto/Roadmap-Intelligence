@@ -148,6 +148,19 @@ public sealed class CreateRoadmapDemandCommandHandler(
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
 
+        // Creating the first demand inside a simple epic converts that epic to composite:
+        // it loses its own quarter/type/hours/products (now controlled per demand).
+        if (itemType == RoadmapItemType.Demand && request.ParentDemandId.HasValue)
+        {
+            var parentEpic = await demandRepository.GetByIdForUpdateAsync(request.ParentDemandId.Value, cancellationToken);
+            if (parentEpic is { ItemType: RoadmapItemType.Epic, IsSimple: true })
+            {
+                // The epic is tracked with its Products loaded; clearing the collection inside
+                // ConvertToComposite removes the orphaned product rows on save (cascade delete).
+                parentEpic.ConvertToComposite();
+            }
+        }
+
         if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
         {
             foreach (var tradeOffProjectId in GetAssociatedProjectIds(itemType, request.ProjectId, request.ProjectIds))

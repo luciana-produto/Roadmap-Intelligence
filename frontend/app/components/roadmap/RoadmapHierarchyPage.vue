@@ -4,6 +4,7 @@ import type { BulkEditRoadmapItemsData, CustomerRename, DemandFormData, DemandSt
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import { buildDemandDueSearchText, buildDueSortKey, hasPlannedQuarter } from '~/utils/roadmapDue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
+import { BACKLOG_QUARTER } from '~/utils/roadmapQuarter'
 
 type HierarchySortKey = 'item' | 'status' | 'products' | 'classification' | 'due'
 type HierarchyColumnId = 'item' | 'status' | 'products' | 'hours' | 'classification' | 'customers' | 'due' | 'kpi' | 'actions'
@@ -41,6 +42,14 @@ const createItemType = ref<RoadmapItemType | undefined>()
 const defaultParentDemandId = ref<string | undefined>()
 const defaultProjectId = ref<string | undefined>()
 const defaultProjectIds = ref<string[]>([])
+const defaultQuarterYear = ref<number | undefined>()
+const defaultQuarterNumber = ref<number | undefined>()
+const defaultType = ref<RoadmapDemand['type'] | undefined>()
+const defaultHours = ref<number | undefined>()
+const defaultProductIds = ref<string[]>([])
+const forceSimpleEpic = ref(false)
+const convertSourceEpic = ref<RoadmapDemand | null>(null)
+const confirmConvertToCompositeOpen = ref(false)
 const deleteTarget = ref<RoadmapDemand | null>(null)
 const confirmDeleteOpen = ref(false)
 const bulkEditModalOpen = ref(false)
@@ -1939,25 +1948,86 @@ async function saveAllHierarchyInlineEdits() {
   }
 }
 
+function resetCreateModalDefaults() {
+  defaultQuarterYear.value = undefined
+  defaultQuarterNumber.value = undefined
+  defaultType.value = undefined
+  defaultHours.value = undefined
+  defaultProductIds.value = []
+}
+
 function openCreateModal(
   itemType?: RoadmapItemType,
   parentDemandId?: string,
-  defaults?: { projectId?: string, projectIds?: string[] }
+  defaults?: {
+    projectId?: string
+    projectIds?: string[]
+    quarterYear?: number
+    quarterNumber?: number
+    type?: RoadmapDemand['type']
+    hours?: number
+    productIds?: string[]
+  }
 ) {
   createItemType.value = itemType
   defaultParentDemandId.value = parentDemandId
   defaultProjectId.value = defaults?.projectId
   defaultProjectIds.value = defaults?.projectIds ?? []
+  defaultQuarterYear.value = defaults?.quarterYear
+  defaultQuarterNumber.value = defaults?.quarterNumber
+  defaultType.value = defaults?.type
+  defaultHours.value = defaults?.hours
+  defaultProductIds.value = defaults?.productIds ?? []
+  forceSimpleEpic.value = false
   editingDemand.value = null
   modalOpen.value = true
 }
 
-function openEditModal(item: RoadmapDemand) {
+function openEditModal(item: RoadmapDemand, options?: { forceSimpleEpic?: boolean }) {
   editingDemand.value = item
   defaultParentDemandId.value = undefined
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
+  resetCreateModalDefaults()
+  forceSimpleEpic.value = options?.forceSimpleEpic ?? false
   modalOpen.value = true
+}
+
+// Adding the first demand to a simple epic turns it into a composite epic: warn the user
+// (its quarter/type/hours/product will be lost) before opening the prefilled demand form.
+function promptCreateDemandInSimpleEpic(epic: RoadmapDemand) {
+  convertSourceEpic.value = epic
+  confirmConvertToCompositeOpen.value = true
+}
+
+function confirmCreateDemandInSimpleEpic() {
+  const epic = convertSourceEpic.value
+  if (!epic)
+    return
+
+  confirmConvertToCompositeOpen.value = false
+  convertSourceEpic.value = null
+
+  openCreateModal('Demand', epic.id, {
+    projectId: pickDefaultProjectId(getItemProjectIds(epic)),
+    quarterYear: epic.quarterYear,
+    quarterNumber: epic.quarterNumber,
+    type: epic.type,
+    hours: epic.hours ?? undefined,
+    productIds: epic.products.map(product => product.productId)
+  })
+}
+
+// A composite epic can become simple again only when it has no demands linked.
+function promptConvertEpicToSimple(epic: RoadmapDemand) {
+  openEditModal(epic, { forceSimpleEpic: true })
+}
+
+function startCreateDemandForEpic(epic: RoadmapDemand) {
+  if (epic.isSimple)
+    promptCreateDemandInSimpleEpic(epic)
+  else
+    openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })
 }
 
 function buildDemandFormData(item: RoadmapDemand, overrides?: Partial<DemandFormData>): DemandFormData {
@@ -2189,6 +2259,21 @@ async function handleSubmit(data: DemandFormData) {
     else {
       const created = await roadmapStore.createDemand(data)
       hierarchyDemands.value.push(created)
+
+      // The backend converts a simple epic to composite when its first demand is created.
+      // Mirror that locally so the parent epic stops rendering its own attributes.
+      if (created.itemType === 'Demand' && created.parentDemandId) {
+        const parentEpic = hierarchyDemands.value.find(item => item.id === created.parentDemandId)
+        if (parentEpic?.isSimple) {
+          parentEpic.isSimple = false
+          parentEpic.hours = undefined
+          parentEpic.hoursRed = false
+          parentEpic.products = []
+          parentEpic.quarterYear = BACKLOG_QUARTER.year
+          parentEpic.quarterNumber = BACKLOG_QUARTER.number
+        }
+      }
+
       toast.add({ title: 'Item criado', color: 'success' })
     }
 
@@ -2979,7 +3064,8 @@ void initializeHierarchyPage()
                         <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
                         <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                           <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epicEntry.epic)" />
-                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="openCreateModal('Demand', epicEntry.epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epicEntry.epic)) })" />
+                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epicEntry.epic)" />
+                          <UButton v-if="!epicEntry.epic.isSimple && !getDemandsForEpic(epicEntry.epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-shrink" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epicEntry.epic)" />
                           <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epicEntry.epic)" />
                           <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epicEntry.epic)" />
                         </div>
@@ -3469,7 +3555,8 @@ void initializeHierarchyPage()
                     <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
                     <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epic)" />
-                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="openCreateModal('Demand', epic.id, { projectId: pickDefaultProjectId(getItemProjectIds(epic)) })" />
+                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epic)" />
+                      <UButton v-if="!epic.isSimple && !getDemandsForEpic(epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-shrink" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epic)" />
                       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epic)" />
                       <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epic)" />
                     </div>
@@ -3737,6 +3824,12 @@ void initializeHierarchyPage()
       :default-parent-demand-id="defaultParentDemandId"
       :default-project-id="defaultProjectId ?? currentPrimaryProjectId ?? undefined"
       :default-project-ids="defaultProjectIds.length ? defaultProjectIds : selectedProjectIds"
+      :default-quarter-year="defaultQuarterYear"
+      :default-quarter-number="defaultQuarterNumber"
+      :default-type="defaultType"
+      :default-hours="defaultHours"
+      :default-product-ids="defaultProductIds"
+      :force-simple-epic="forceSimpleEpic"
       :roadmap-options="allRoadmapItems.map(item => ({ id: item.id, title: item.title, projectId: item.projectId, projectIds: item.projectIds }))"
       :epic-options="allEpicItems.map(item => ({
         id: item.id,
@@ -3821,6 +3914,29 @@ void initializeHierarchyPage()
           <UButton color="primary" @click="confirmHierarchyStatusModal">
             Confirmar
           </UButton>
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="confirmConvertToCompositeOpen"
+      title="Transformar em épico com demandas"
+      description="Ao criar uma demanda neste épico, ele passará a ser controlado por demandas. Os atributos do épico (produto, quarter, tipo e horas) serão removidos e deverão ser controlados em cada demanda. Esses valores serão migrados automaticamente para a primeira demanda."
+    >
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton
+            variant="outline"
+            color="neutral"
+            label="Cancelar"
+            @click="confirmConvertToCompositeOpen = false; convertSourceEpic = null"
+          />
+          <UButton
+            color="primary"
+            icon="i-lucide-list-todo"
+            label="Continuar e criar demanda"
+            @click="confirmCreateDemandInSimpleEpic"
+          />
         </div>
       </template>
     </UModal>

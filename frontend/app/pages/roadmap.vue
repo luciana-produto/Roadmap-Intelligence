@@ -382,8 +382,9 @@ function getEpicQuarterMoveScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 't
 }
 
 function getEpicHeaderMeta(anchorDemand?: RoadmapDemand) {
-  // Handle isSimple epics: the anchorDemand itself IS the epic
-  const resolvedEpic = (anchorDemand?.itemType === 'Epic' && anchorDemand.isSimple)
+  // Epic rows injected as their own row (simple epics and empty composite epics): the
+  // anchorDemand itself IS the epic. Otherwise resolve the parent epic from epicId.
+  const resolvedEpic = (anchorDemand?.itemType === 'Epic')
     ? anchorDemand
     : (anchorDemand?.epicId ? (itemsById.value.get(anchorDemand.epicId) ?? null) : null)
 
@@ -742,6 +743,11 @@ function getDemandGroupKey(demand: Pick<RoadmapDemand, 'quarterYear' | 'quarterN
 }
 
 function compareListDemandGroups(left: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>, right: Pick<RoadmapDemand, 'quarterYear' | 'quarterNumber' | 'type'>) {
+  // Inconsistent epics (composite without demands) always sort after everything else.
+  const leftInconsistent = emptyCompositeEpicIds.value.has((left as RoadmapDemand).id)
+  const rightInconsistent = emptyCompositeEpicIds.value.has((right as RoadmapDemand).id)
+  if (leftInconsistent !== rightInconsistent) return leftInconsistent ? 1 : -1
+
   const leftBacklog = isBacklogDemand(left as RoadmapDemand)
   const rightBacklog = isBacklogDemand(right as RoadmapDemand)
   if (leftBacklog !== rightBacklog) return leftBacklog ? 1 : -1
@@ -1061,6 +1067,20 @@ watch(filterListProjectIds, () => {
   setListMultiFilter('classification', [])
   setListMultiFilter('products', [])
 })
+
+// Composite epics that have no demands linked. The planning list is built from demands
+// (which carry the quarter), so these epics would otherwise disappear. We always surface
+// them at the end under an "inconsistent epics" group, regardless of the quarter filter.
+const emptyCompositeEpics = computed(() => {
+  const epicIdsWithDemands = new Set(
+    demandItems.value.map(demand => demand.epicId).filter((id): id is string => !!id)
+  )
+  let list = epicItems.value.filter(epic => !epic.isSimple && !epicIdsWithDemands.has(epic.id))
+  if (filterListProjectIds.value.length)
+    list = list.filter(epic => (epic.projectIds ?? []).some(pid => filterListProjectIds.value.includes(pid)))
+  return list
+})
+const emptyCompositeEpicIds = computed(() => new Set(emptyCompositeEpics.value.map(epic => epic.id)))
 
 const quarterFilteredDemands = computed(() => {
   const simpleEpics = epicItems.value.filter(e => e.isSimple)
@@ -1742,9 +1762,10 @@ function syncListSectionDividers() {
     }
 
     const isCollapsedRow = groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
-    // Simple epics in grouped mode are represented by their group header; hide the redundant table row.
-    const isSimpleEpicTableRow = groupDemandsByEpic.value && demand.itemType === 'Epic' && !!demand.isSimple
-    const isHiddenRow = isCollapsedRow || isSimpleEpicTableRow
+    // Epic rows (simple epics and empty composite epics) in grouped mode are represented by
+    // their group header; hide the redundant table row.
+    const isEpicHeaderRow = groupDemandsByEpic.value && demand.itemType === 'Epic'
+    const isHiddenRow = isCollapsedRow || isEpicHeaderRow
     row.dataset.demandId = demand.id
     row.dataset.dragScopeKey = getDemandDragScopeKey(demand)
     if (isHiddenRow)
@@ -1784,10 +1805,11 @@ function syncListSectionDividers() {
   const multipleQuarters = distinctQuarters.size > 1
 
   const dividerConfigs: Array<
-    { rowIndex: number, label: string, kind: 'quarter' | 'additional' }
+    { rowIndex: number, label: string, kind: 'quarter' | 'additional' | 'inconsistent' }
     | { rowIndex: number, kind: 'epic', count: number, epicId?: string, roadmapTitle?: string | null, epicTitle?: string | null, collapsed: boolean }
   > = []
   let prevQuarterKey = ''
+  let inconsistentSectionAdded = false
 
   for (let i = 0; i < visibleRows.length; i++) {
     const demand = visibleRows[i]!
@@ -1795,6 +1817,30 @@ function syncListSectionDividers() {
     const groupKey = getDemandGroupKey(demand)
     const isNewQuarter = quarterKey !== prevQuarterKey
     const epicHeader = visibleEpicHeaderByDemandId.value[demand.id]
+
+    // Empty composite epics form their own "inconsistent" group at the very end: emit a
+    // single section header before the first one, then their epic headers — skipping the
+    // quarter/additional dividers (their backlog quarter is irrelevant here).
+    if (emptyCompositeEpicIds.value.has(demand.id)) {
+      if (!inconsistentSectionAdded) {
+        dividerConfigs.push({ rowIndex: i, label: 'Épicos inconsistentes - sem demanda', kind: 'inconsistent' })
+        inconsistentSectionAdded = true
+      }
+
+      if (groupDemandsByEpic.value && epicHeader?.showHeader) {
+        dividerConfigs.push({
+          rowIndex: i,
+          kind: 'epic',
+          count: epicHeader.count,
+          epicId: epicHeader.epicId,
+          roadmapTitle: epicHeader.roadmapTitle,
+          epicTitle: epicHeader.epicTitle,
+          collapsed: epicHeader.collapsed
+        })
+      }
+
+      continue
+    }
 
     if (isNewQuarter) {
       prevQuarterKey = quarterKey
@@ -1853,6 +1899,10 @@ function syncListSectionDividers() {
     }
     else if (kind === 'additional') {
       dividerCell.className = 'border-y border-amber-200/50 bg-amber-50/40 px-3 py-1.5 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-amber-700/90 dark:border-amber-800/50 dark:bg-amber-900/10 dark:text-amber-300/90'
+      dividerCell.textContent = config.label
+    }
+    else if (kind === 'inconsistent') {
+      dividerCell.className = 'border-y-2 border-red-300/50 bg-red-50/60 px-3 py-2.5 text-center text-[11px] font-semibold uppercase tracking-[0.14em] text-red-700 shadow-sm dark:border-red-800/50 dark:bg-red-950/20 dark:text-red-300'
       dividerCell.textContent = config.label
     }
     else {
@@ -2869,7 +2919,7 @@ function syncListSectionDividers() {
             createButton.addEventListener('click', (event) => {
               event.preventDefault()
               event.stopPropagation()
-              openCreateModal('Demand', headerMeta.epic.id, { projectId: headerMeta.epic.projectId })
+              startCreateDemandForEpic(headerMeta.epic)
             })
             createButton.appendChild(createSvgIcon(['M12 5v14', 'M5 12h14'], 'h-3.5 w-3.5'))
             actions.appendChild(createButton)
@@ -2961,6 +3011,21 @@ function syncListSectionDividers() {
             colorPanel.appendChild(swatchRow)
             colorDetails.appendChild(colorPanel)
             actions.appendChild(colorDetails)
+
+            // Composite epic with no demands: allow converting it back to a simple epic.
+            if (emptyCompositeEpicIds.value.has(headerMeta.epic.id)) {
+              const convertButton = document.createElement('button')
+              convertButton.type = 'button'
+              convertButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-primary transition-colors hover:text-primary/80'
+              convertButton.title = 'Transformar em épico simples'
+              convertButton.addEventListener('click', (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                promptConvertEpicToSimple(headerMeta.epic)
+              })
+              convertButton.appendChild(createSvgIcon(['M15 3h6v6', 'M9 21H3v-6', 'M21 3l-7 7', 'M3 21l7-7'], 'h-3.5 w-3.5'))
+              actions.appendChild(convertButton)
+            }
 
             const editButton = document.createElement('button')
             editButton.type = 'button'
@@ -3070,6 +3135,14 @@ const createItemType = ref<RoadmapItemType | undefined>()
 const defaultParentDemandId = ref<string | undefined>()
 const defaultProjectId = ref<string | undefined>()
 const defaultProjectIds = ref<string[]>([])
+const createDefaultQuarterYear = ref<number | undefined>()
+const createDefaultQuarterNumber = ref<number | undefined>()
+const createDefaultType = ref<RoadmapDemand['type'] | undefined>()
+const createDefaultHours = ref<number | undefined>()
+const createDefaultProductIds = ref<string[]>([])
+const forceSimpleEpic = ref(false)
+const convertSourceEpic = ref<RoadmapDemand | null>(null)
+const confirmConvertToCompositeOpen = ref(false)
 const deleteId = ref<string | null>(null)
 const confirmDeleteOpen = ref(false)
 const roadmapParentOptions = computed(() =>
@@ -3108,17 +3181,74 @@ const createMenuItems = computed(() => [[
   }
 ]])
 
+function resetCreateModalDefaults() {
+  createDefaultQuarterYear.value = undefined
+  createDefaultQuarterNumber.value = undefined
+  createDefaultType.value = undefined
+  createDefaultHours.value = undefined
+  createDefaultProductIds.value = []
+}
+
 function openCreateModal(
   itemType?: RoadmapItemType,
   parentDemandId?: string,
-  defaults?: { projectId?: string, projectIds?: string[] }
+  defaults?: {
+    projectId?: string
+    projectIds?: string[]
+    quarterYear?: number
+    quarterNumber?: number
+    type?: RoadmapDemand['type']
+    hours?: number
+    productIds?: string[]
+  }
 ) {
   createItemType.value = itemType
   defaultParentDemandId.value = parentDemandId
   defaultProjectId.value = defaults?.projectId
   defaultProjectIds.value = defaults?.projectIds ?? []
+  createDefaultQuarterYear.value = defaults?.quarterYear
+  createDefaultQuarterNumber.value = defaults?.quarterNumber
+  createDefaultType.value = defaults?.type
+  createDefaultHours.value = defaults?.hours
+  createDefaultProductIds.value = defaults?.productIds ?? []
+  forceSimpleEpic.value = false
   editingDemand.value = null
   modalOpen.value = true
+}
+
+// Adding the first demand to a simple epic turns it into a composite epic: warn the user
+// (its quarter/type/hours/product will be lost) before opening the prefilled demand form.
+function startCreateDemandForEpic(epic: RoadmapDemand) {
+  if (epic.isSimple) {
+    convertSourceEpic.value = epic
+    confirmConvertToCompositeOpen.value = true
+    return
+  }
+
+  openCreateModal('Demand', epic.id, { projectId: epic.projectId ?? epic.projectIds?.[0] })
+}
+
+function confirmCreateDemandInSimpleEpic() {
+  const epic = convertSourceEpic.value
+  if (!epic)
+    return
+
+  confirmConvertToCompositeOpen.value = false
+  convertSourceEpic.value = null
+
+  openCreateModal('Demand', epic.id, {
+    projectId: epic.projectId,
+    quarterYear: epic.quarterYear,
+    quarterNumber: epic.quarterNumber,
+    type: epic.type,
+    hours: epic.hours ?? undefined,
+    productIds: epic.products.map(product => product.productId)
+  })
+}
+
+// A composite epic can become simple again only when it has no demands linked.
+function promptConvertEpicToSimple(epic: RoadmapDemand) {
+  openEditModal(epic, undefined, undefined, { forceSimpleEpic: true })
 }
 
 function openListView() {
@@ -3145,11 +3275,13 @@ function openCapacityModal() {
   capacityModalOpen.value = true
 }
 
-function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus, focusField?: string) {
+function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus, focusField?: string, options?: { forceSimpleEpic?: boolean }) {
   editingDemand.value = nextStatus ? { ...demand, status: nextStatus } : demand
   defaultParentDemandId.value = undefined
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
+  resetCreateModalDefaults()
+  forceSimpleEpic.value = options?.forceSimpleEpic ?? false
   modalEditFocusField.value = focusField
   modalOpen.value = true
 }
@@ -3444,7 +3576,18 @@ async function handleSubmit(data: DemandFormData) {
       toast.add({ title: 'Item atualizado', color: 'success' })
     }
     else {
+      // Detect whether the new demand's parent epic was a simple epic; creating the
+      // demand converts it to composite on the backend, so we must refetch to reflect it.
+      const parentEpic = data.itemType === 'Demand' && data.parentDemandId
+        ? demands.value.find(demand => demand.id === data.parentDemandId)
+        : undefined
+      const convertedSimpleEpic = !!parentEpic?.isSimple
+
       await roadmapStore.createDemand(data)
+
+      if (convertedSimpleEpic)
+        await roadmapStore.fetchDemands()
+
       toast.add({ title: 'Item criado', color: 'success' })
     }
     queueMicrotask(() => {
@@ -3614,15 +3757,21 @@ const tableDemands = computed(() => {
     })
   })()
 
-  if (!listProblemFilter.value.length)
-    return base
+  const filtered = !listProblemFilter.value.length
+    ? base
+    : base.filter((demand) => {
+        const problemKeys = getDemandProblemKeys(demand)
+        if (listProblemFilter.value.includes('__all__'))
+          return problemKeys.length > 0
+        return listProblemFilter.value.some(p => problemKeys.includes(p))
+      })
 
-  return base.filter((demand) => {
-    const problemKeys = getDemandProblemKeys(demand)
-    if (listProblemFilter.value.includes('__all__'))
-      return problemKeys.length > 0
-    return listProblemFilter.value.some(p => problemKeys.includes(p))
-  })
+  // Always append empty composite epics at the end so they remain findable regardless of
+  // the active quarter/filters. They render as their own "inconsistent" group header.
+  if (groupDemandsByEpic.value && emptyCompositeEpics.value.length)
+    return [...filtered, ...emptyCompositeEpics.value]
+
+  return filtered
 })
 
 // When grouping by epic, the minimum sortOrder of each epic's demands determines
@@ -3717,8 +3866,9 @@ const visibleEpicHeaderByDemandId = computed(() => {
     const demand = visibleListRows.value[index]!
     const epicId = demand.epicId
 
-    // Simple epics: in grouped mode show a header (no collapse); in flat mode no header.
-    if (demand.itemType === 'Epic' && demand.isSimple) {
+    // Epic rows injected as their own row (simple epics and empty composite epics):
+    // in grouped mode each one shows its own header (no collapse); in flat mode no header.
+    if (demand.itemType === 'Epic') {
       result[demand.id] = {
         showHeader: groupDemandsByEpic.value,
         count: 0,
@@ -5080,7 +5230,7 @@ function getListGridTemplateColumns() {
 const listTableWidth = computed(() => `${listBaseWidth.value + listTitleExtraWidth.value}px`)
 
 watch(
-  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
+  () => `${viewMode.value}|${quarterFilteredDemands.value.map(demand => `${demand.id}:${demand.parentDemandId ?? 'none'}:${demand.epicId ?? 'none'}:${demand.roadmapId ?? 'none'}:${demand.title}:${demand.quarterYear}:${demand.quarterNumber}:${demand.status}:${demand.sortOrder}:${demand.updatedAt ?? ''}`).join('|')}|${emptyCompositeEpics.value.map(epic => `${epic.id}:${epic.title}:${epic.status}:${epic.updatedAt ?? ''}`).join('|')}|${JSON.stringify(listSorting.value)}|${JSON.stringify(listColumnFilters.value)}|${groupDemandsByEpic.value}|${collapsedEpicIds.value.join('|')}`,
   async () => {
     await nextTick()
     syncListSectionDividers()
@@ -6898,8 +7048,12 @@ watch(activeDemandKpiId, async (value) => {
       :default-project-ids="defaultProjectIds"
       :roadmap-options="roadmapParentOptions"
       :epic-options="epicParentOptions"
-      :default-quarter-year="selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? undefined"
-      :default-quarter-number="selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? undefined"
+      :default-quarter-year="createDefaultQuarterYear ?? selectedDemandScope?.quarterYear ?? activeCapacityScope?.quarterYear ?? undefined"
+      :default-quarter-number="createDefaultQuarterNumber ?? selectedDemandScope?.quarterNumber ?? activeCapacityScope?.quarterNumber ?? undefined"
+      :default-type="createDefaultType"
+      :default-hours="createDefaultHours"
+      :default-product-ids="createDefaultProductIds"
+      :force-simple-epic="forceSimpleEpic"
       :is-saving="isSavingDemand"
       :focus-field="modalEditFocusField"
       @trade-off-deleted="handleTradeOffDeleted"
@@ -6914,6 +7068,30 @@ watch(activeDemandKpiId, async (value) => {
       :is-saving="isSavingCapacity"
       @submit="handleCapacitySubmit"
     />
+
+    <!-- Confirm convert simple epic to composite -->
+    <UModal
+      v-model:open="confirmConvertToCompositeOpen"
+      title="Transformar em épico com demandas"
+      description="Ao criar uma demanda neste épico, ele passará a ser controlado por demandas. Os atributos do épico (produto, quarter, tipo e horas) serão removidos e deverão ser controlados em cada demanda. Esses valores serão migrados automaticamente para a primeira demanda."
+    >
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton
+            variant="outline"
+            color="neutral"
+            label="Cancelar"
+            @click="confirmConvertToCompositeOpen = false; convertSourceEpic = null"
+          />
+          <UButton
+            color="primary"
+            icon="i-lucide-list-todo"
+            label="Continuar e criar demanda"
+            @click="confirmCreateDemandInSimpleEpic"
+          />
+        </div>
+      </template>
+    </UModal>
 
     <!-- Confirm delete modal -->
     <UModal
