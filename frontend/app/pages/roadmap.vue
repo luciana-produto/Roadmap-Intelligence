@@ -389,6 +389,13 @@ function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicI
   return demand.epicId ?? `no-epic:${demand.roadmapId ?? 'none'}:${demand.quarterYear}:${demand.quarterNumber}:${getDemandGroupKey(demand)}`
 }
 
+// Priority lives per Team + Quarter, so an epic's position must be computed per quarter. This
+// key buckets an epic's demands by the quarter they sit in (an epic with demands in Q1 and Q2
+// gets one bucket per quarter, prioritized independently).
+function getEpicQuarterOrderKey(demand: Pick<RoadmapDemand, 'epicId' | 'quarterYear' | 'quarterNumber'>) {
+  return `${demand.epicId}:${demand.quarterYear}:${demand.quarterNumber}`
+}
+
 function getDisplayIssueLinks(demand: Pick<RoadmapDemand, 'issueLinks' | 'jiraIssue'>) {
   if (demand.issueLinks?.length)
     return demand.issueLinks
@@ -416,6 +423,11 @@ function getVisibleEpicDemandCluster(anchorDemand?: RoadmapDemand) {
   for (let index = anchorIndex; index < visibleListRows.value.length; index++) {
     const demand = visibleListRows.value[index]!
     if (getEpicDisplayGroupKey(demand) !== groupKey)
+      break
+
+    // A cluster is one epic within ONE quarter. Stop if we cross into another quarter so an
+    // epic that spans quarters (last in Q1 / first in Q2) doesn't bleed its demands together.
+    if (demand.quarterYear !== anchorDemand.quarterYear || demand.quarterNumber !== anchorDemand.quarterNumber)
       break
 
     cluster.push(demand)
@@ -867,8 +879,10 @@ function withListGroupSorting(compareWithinGroup: (left: RoadmapDemand, right: R
       const epicA = rowA.original.epicId
       const epicB = rowB.original.epicId
       if (epicA && epicB && epicA !== epicB) {
-        const minA = epicMinSortOrderById.value[epicA] ?? rowA.original.sortOrder
-        const minB = epicMinSortOrderById.value[epicB] ?? rowB.original.sortOrder
+        // Use the epic's minimum sortOrder within THIS quarter (rows compared here are already
+        // in the same quarter), so a cross-quarter demand can't drag the epic's position.
+        const minA = epicMinSortOrderById.value[getEpicQuarterOrderKey(rowA.original)] ?? rowA.original.sortOrder
+        const minB = epicMinSortOrderById.value[getEpicQuarterOrderKey(rowB.original)] ?? rowB.original.sortOrder
         if (minA !== minB) return minA - minB
         // Tiebreaker: keep all demands of the same epic contiguous even when two
         // epics (from different projects) share the same minimum sortOrder.
@@ -1414,35 +1428,6 @@ async function persistDemandPriority(
   }
 }
 
-async function persistEpicClusterPriority(
-  anchorDemand: RoadmapDemand,
-  beforeId: string | null,
-  afterId: string | null
-) {
-  const currentCluster = getVisibleEpicDemandCluster(anchorDemand)
-  if (!currentCluster.length)
-    return
-
-  const scopedDemandIds = getScopedDemandIds(anchorDemand)
-  const movedIds = currentCluster.map(demand => demand.id)
-  const orderedDemandIds = moveDemandCluster(scopedDemandIds, movedIds, beforeId, afterId)
-  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
-  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
-
-  try {
-    await roadmapStore.reorderDemand(anchorDemand.id, anchorDemand.status, orderedDemandIds)
-    await nextTick()
-
-    if (listScrollContainerRef.value && listScrollTop != null) {
-      listScrollContainerRef.value.scrollTop = listScrollTop
-      listScrollContainerRef.value.scrollLeft = listScrollLeft ?? 0
-    }
-  }
-  catch {
-    // handled by useApi
-  }
-}
-
 // Resolves which quarter a dropped row now belongs to by walking up the DOM. The first
 // data row or quarter/additional divider carrying a quarterKey marks the row's section.
 // This disambiguates dropping at the end of a quarter (just above the next quarter's
@@ -1590,56 +1575,72 @@ async function handleEpicSortEnd(item: HTMLElement) {
     return
   }
 
-  // Same-quarter reorder for non-simple epic items: backend rejects, skip silently.
-  // Simple epics compete in the same ordering scope as demands and CAN be reordered.
+  // Empty composite epics (sem demanda) can't be reordered within a quarter: skip silently.
   if (anchorDemand.itemType === 'Epic' && !anchorDemand.isSimple)
     return
 
-  const epicRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLTableRowElement[]
-  const epicRowIndex = epicRows.indexOf(item as HTMLTableRowElement)
-  if (epicRowIndex < 0)
+  // Same-quarter reorder in grouped mode. Dragging an epic header only moves that header row in
+  // the DOM (its demand rows stay put), so we read the new position from the order of the epic
+  // headers (.list-epic-divider). The dragged "unit" (a simple epic = itself; a composite epic =
+  // its demand cluster) is moved within the authoritative scope list via moveDemandCluster, which
+  // preserves the set — so the backend never rejects on a scope mismatch.
+  const scopedIds = getScopedDemandIds(anchorDemand)
+  const scopedIdSet = new Set(scopedIds)
+
+  const unitScopedIds = (epicAnchor: RoadmapDemand) => {
+    const ids = (epicAnchor.itemType === 'Epic' && epicAnchor.isSimple)
+      ? [epicAnchor.id]
+      : getVisibleEpicDemandCluster(epicAnchor).map(demand => demand.id)
+    return ids.filter(id => scopedIdSet.has(id))
+  }
+
+  const headerUnitScopedIds = (headerRow: HTMLElement) => {
+    const headerAnchorId = headerRow.dataset.anchorDemandId
+    if (!headerAnchorId)
+      return []
+    const headerAnchor = visibleListRows.value.find(demand => demand.id === headerAnchorId)
+    return headerAnchor ? unitScopedIds(headerAnchor) : []
+  }
+
+  const draggedUnitIds = unitScopedIds(anchorDemand)
+  const headerRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLElement[]
+  const draggedHeaderIndex = headerRows.indexOf(item as HTMLElement)
+  if (draggedHeaderIndex < 0 || !draggedUnitIds.length)
     return
 
-  const nextAnchorDemand = epicRows.slice(epicRowIndex + 1)
-    .map(row => row.dataset.anchorDemandId)
-    .find((value): value is string => !!value)
-  const previousAnchorDemand = [...epicRows.slice(0, epicRowIndex)].reverse()
-    .map(row => row.dataset.anchorDemandId)
-    .find((value): value is string => !!value)
-
-  const scopeKey = item.dataset.scopeKey
-  if (!scopeKey)
-    return
-
-  const nextAnchorRow = epicRows.slice(epicRowIndex + 1).find(row =>
-    row.dataset.scopeKey === scopeKey
-    && row.dataset.anchorDemandId
-    && row.dataset.anchorDemandId !== anchorDemandId
-  )
-  const previousAnchorRow = [...epicRows.slice(0, epicRowIndex)].reverse().find(row =>
-    row.dataset.scopeKey === scopeKey
-    && row.dataset.anchorDemandId
-    && row.dataset.anchorDemandId !== anchorDemandId
-  )
+  const draggedUnitSet = new Set(draggedUnitIds)
 
   let beforeId: string | null = null
+  for (let index = draggedHeaderIndex + 1; index < headerRows.length && !beforeId; index++) {
+    const unit = headerUnitScopedIds(headerRows[index]!)
+    if (unit.length && !draggedUnitSet.has(unit[0]!))
+      beforeId = unit[0]!
+  }
+
   let afterId: string | null = null
-
-  if (nextAnchorRow?.dataset.anchorDemandId) {
-    const nextAnchorDemand = visibleListRows.value.find(demand => demand.id === nextAnchorRow.dataset.anchorDemandId)
-    beforeId = getVisibleEpicDemandCluster(nextAnchorDemand)[0]?.id ?? null
+  for (let index = draggedHeaderIndex - 1; index >= 0 && !afterId; index--) {
+    const unit = headerUnitScopedIds(headerRows[index]!)
+    if (unit.length && !draggedUnitSet.has(unit[unit.length - 1]!))
+      afterId = unit[unit.length - 1]!
   }
 
-  if (previousAnchorRow?.dataset.anchorDemandId) {
-    const previousAnchorDemand = visibleListRows.value.find(demand => demand.id === previousAnchorRow.dataset.anchorDemandId)
-    const previousCluster = getVisibleEpicDemandCluster(previousAnchorDemand)
-    afterId = previousCluster[previousCluster.length - 1]?.id ?? null
+  const orderedDemandIds = moveDemandCluster(scopedIds, draggedUnitIds, beforeId, afterId)
+
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+  try {
+    await roadmapStore.reorderDemand(anchorDemand.id, anchorDemand.status, orderedDemandIds)
+    await nextTick()
+
+    if (listScrollContainerRef.value && listScrollTop != null) {
+      listScrollContainerRef.value.scrollTop = listScrollTop
+      listScrollContainerRef.value.scrollLeft = listScrollLeft ?? 0
+    }
   }
-
-  if (!beforeId && !afterId)
-    return
-
-  await persistEpicClusterPriority(anchorDemand, beforeId, afterId)
+  catch {
+    // handled by useApi
+  }
 }
 
 function getEpicClusterAnchors(anchorDemand?: RoadmapDemand) {
@@ -3958,9 +3959,10 @@ const tableDemands = computed(() => {
     const epicMinOrder: Record<string, number> = {}
     for (const demand of quarterFilteredDemands.value) {
       if (!demand.epicId) continue
-      const current = epicMinOrder[demand.epicId]
+      const key = getEpicQuarterOrderKey(demand)
+      const current = epicMinOrder[key]
       if (current === undefined || demand.sortOrder < current)
-        epicMinOrder[demand.epicId] = demand.sortOrder
+        epicMinOrder[key] = demand.sortOrder
     }
 
     return [...quarterFilteredDemands.value].sort((left, right) => {
@@ -3970,8 +3972,10 @@ const tableDemands = computed(() => {
       const epicA = left.epicId
       const epicB = right.epicId
       if (epicA && epicB && epicA !== epicB) {
-        const minA = epicMinOrder[epicA] ?? left.sortOrder
-        const minB = epicMinOrder[epicB] ?? right.sortOrder
+        // Compare epics by their minimum sortOrder within this quarter (left/right are already
+        // in the same quarter here), so demands in other quarters don't skew the position.
+        const minA = epicMinOrder[getEpicQuarterOrderKey(left)] ?? left.sortOrder
+        const minB = epicMinOrder[getEpicQuarterOrderKey(right)] ?? right.sortOrder
         if (minA !== minB) return minA - minB
         // Tiebreaker: keep all demands of the same epic contiguous even when two
         // epics (from different projects) share the same minimum sortOrder.
@@ -4009,9 +4013,10 @@ const epicMinSortOrderById = computed(() => {
   const result: Record<string, number> = {}
   for (const demand of quarterFilteredDemands.value) {
     if (!demand.epicId) continue
-    const current = result[demand.epicId]
+    const key = getEpicQuarterOrderKey(demand)
+    const current = result[key]
     if (current === undefined || demand.sortOrder < current)
-      result[demand.epicId] = demand.sortOrder
+      result[key] = demand.sortOrder
   }
   return result
 })

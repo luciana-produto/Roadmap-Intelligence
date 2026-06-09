@@ -178,11 +178,15 @@ const showRestFields = computed(() => {
   if (!isEpic.value) return true
   if (isEdit.value) return true
   if (!epicModeDecided.value) return false
+  // Simple epics gain a progressive "Produto" step between the roadmap parent and the rest —
+  // this gate applies even when prefilled from a roadmap line (which doesn't fill the product).
+  if (isSimpleEpic.value)
+    return (form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId && form.productIds.length > 0
   if (epicPrefilledFromRoadmap.value) return true
   return (form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId
 })
 
-// Progressive disclosure for demand creation
+// Progressive disclosure for demand creation: Tipo+Time -> Épico pai -> Produto -> restante.
 const showDemandEpicPaiField = computed(() =>
   isDemand.value && (isEdit.value || !!form.projectId)
 )
@@ -192,6 +196,24 @@ const showDemandProductField = computed(() =>
 const showDemandRestAfterProduct = computed(() =>
   isDemand.value && (isEdit.value || form.productIds.length > 0)
 )
+
+// Progressive disclosure for simple epics: Time -> Roadmap pai -> Produto -> restante.
+const showSimpleEpicProductField = computed(() =>
+  isSimpleEpic.value
+  && (isEdit.value || ((form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId))
+)
+const showSimpleEpicRestAfterProduct = computed(() =>
+  // Always require a product before revealing the rest, even when prefilled from a roadmap line.
+  isSimpleEpic.value && (isEdit.value || form.productIds.length > 0)
+)
+
+// Whether the "rest" fields (and dependencies section) should be visible, accounting for the
+// per-item progressive disclosure. Composite epics / roadmaps rely on showRestFields alone.
+const showRestAfterProgressive = computed(() => {
+  if (isDemand.value) return showDemandRestAfterProduct.value
+  if (isSimpleEpic.value) return showSimpleEpicRestAfterProduct.value
+  return true
+})
 
 function setSingleEpicProject(projectId?: string) {
   form.projectIds = projectId ? [projectId] : []
@@ -1056,6 +1078,17 @@ const demandProductsLabel = computed(() => {
   return `${selected.length} produtos`
 })
 
+const simpleEpicProductsLabel = computed(() => {
+  const selected = productsForSimpleEpic.value.filter(product => form.productIds.includes(product.id))
+  if (!selected.length)
+    return productsForSimpleEpic.value.length ? 'Selecione os produtos' : 'Selecione um time primeiro'
+
+  if (selected.length === 1)
+    return selected[0]!.name
+
+  return `${selected.length} produtos`
+})
+
 function setCustomerTags(tags: string[]) {
   form.customers = [...new Set(tags.map(tag => tag.trim()).filter(Boolean))]
 }
@@ -1549,6 +1582,13 @@ const missingSubmitReason = computed(() => {
     return 'Selecione o épico pai'
   if (isDemand.value && form.productIds.length === 0)
     return 'Selecione ao menos um produto'
+  // For simple epics: validate in disclosure order (Time → Roadmap pai → Produto → restante)
+  if (isSimpleEpic.value && !(form.projectIds?.length ?? 0))
+    return 'Selecione o time'
+  if (isSimpleEpic.value && !form.parentDemandId)
+    return 'Selecione o roadmap pai'
+  if (isSimpleEpic.value && form.productIds.length === 0)
+    return 'Selecione ao menos um produto para o épico'
   if (!form.title)
     return `Informe o título ${isRoadmap.value ? 'do roadmap' : isEpic.value ? 'do épico' : 'da demanda'}`
   if (!isDemand.value && !(form.projectIds?.length ?? 0))
@@ -1561,8 +1601,6 @@ const missingSubmitReason = computed(() => {
     return 'Selecione o quarter do épico'
   if (isEpic.value && !form.classification)
     return 'Selecione a classificação'
-  if (isSimpleEpic.value && form.productIds.length === 0)
-    return 'Selecione ao menos um produto para o épico'
   if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
     return 'Selecione o motivo da despriorização'
   if (observationRequired.value && !form.observation)
@@ -1759,7 +1797,9 @@ async function handleSubmit() {
 
           </div>
 
-          <UFormField v-if="showRoadmapParentField" label="Roadmap pai" required>
+          <!-- Épicos: Roadmap pai e (para épico simples) Produto lado a lado, em sequência. -->
+          <div v-if="showRoadmapParentField" class="grid gap-3" :class="showSimpleEpicProductField ? 'md:grid-cols-2' : ''">
+          <UFormField label="Roadmap pai" required>
             <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
               <UButton
                 type="button"
@@ -1816,6 +1856,44 @@ async function handleSubmit() {
               </template>
             </UPopover>
           </UFormField>
+
+          <UFormField v-if="showSimpleEpicProductField" label="Produto" required>
+            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+              <UButton
+                type="button"
+                variant="outline"
+                color="neutral"
+                trailing-icon="i-lucide-chevron-down"
+                class="w-full justify-between"
+                :disabled="!productsForSimpleEpic.length"
+              >
+                <span class="truncate">{{ simpleEpicProductsLabel }}</span>
+              </UButton>
+
+              <template #content>
+                <div class="min-w-72 space-y-1 p-2">
+                  <label
+                    v-for="product in productsForSimpleEpic"
+                    :key="product.id"
+                    class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-highlighted transition-colors hover:bg-elevated"
+                  >
+                    <input
+                      type="checkbox"
+                      class="h-4 w-4 accent-primary"
+                      :checked="form.productIds.includes(product.id)"
+                      @change="(event) => toggleProduct(product.id, (event.target as HTMLInputElement).checked)"
+                    >
+                    <span class="truncate">{{ product.name }}</span>
+                  </label>
+
+                  <p v-if="!productsForSimpleEpic.length" class="px-2.5 py-3 text-xs italic text-muted">
+                    Selecione um time primeiro.
+                  </p>
+                </div>
+              </template>
+            </UPopover>
+          </UFormField>
+          </div>
 
           <div v-if="!hasSelectedItemType" class="rounded-xl border border-dashed border-default bg-elevated/40 px-4 py-6 text-sm text-muted">
             Selecione o tipo do item para carregar os campos de cadastro.
@@ -1946,7 +2024,7 @@ async function handleSubmit() {
             </UFormField>
           </div>
 
-          <template v-if="!isDemand || showDemandRestAfterProduct">
+          <template v-if="showRestAfterProgressive">
           <UFormField label="Título" required>
             <UInput
               v-model="form.title"
@@ -2042,34 +2120,6 @@ async function handleSubmit() {
               />
             </UFormField>
           </div>
-
-          <UFormField v-if="isSimpleEpic" label="Produto" required>
-            <div
-              v-if="productsForSimpleEpic.length"
-              class="flex flex-wrap gap-2 rounded-lg border border-default bg-elevated p-3"
-            >
-              <label
-                v-for="product in productsForSimpleEpic"
-                :key="product.id"
-                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors select-none hover:bg-default"
-                :class="form.productIds.includes(product.id)
-                  ? 'bg-primary/10 border border-primary/30'
-                  : 'border border-transparent'"
-              >
-                <input
-                  type="checkbox"
-                  :value="product.id"
-                  :checked="form.productIds.includes(product.id)"
-                  class="h-3.5 w-3.5 accent-primary"
-                  @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
-                >
-                <span class="text-sm">{{ product.name }}</span>
-              </label>
-            </div>
-            <p v-else class="text-xs italic text-muted">
-              Selecione ao menos um time primeiro.
-            </p>
-          </UFormField>
 
           <div v-if="isEpic && !isSimpleEpic" class="grid gap-3 md:grid-cols-2">
             <UFormField label="Classificação" required>
@@ -2221,7 +2271,7 @@ async function handleSubmit() {
           </div>
         </section>
 
-        <section v-if="showRestFields && !isRoadmap" class="space-y-4 border-t border-default pt-4">
+        <section v-if="showRestFields && !isRoadmap && showRestAfterProgressive" class="space-y-4 border-t border-default pt-4">
           <div>
             <h3 class="text-sm font-semibold text-highlighted">Dependências entre épicos e demandas</h3>
             <p class="mt-1 text-xs text-muted">

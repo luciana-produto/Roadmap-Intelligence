@@ -3,6 +3,7 @@ import type { ApiResponse } from '~/types/api'
 import type {
   RoadmapProject,
   RoadmapDemand,
+  DemandDependency,
   DemandDependencyOption,
   RoadmapCapacitySummary,
   CapacityFormData,
@@ -35,11 +36,17 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     projects.value.find(p => p.id === selectedProjectId.value) ?? null
   )
 
+  // Simple epics carry no projectId (they store their team in projectIds[0]); use the effective
+  // project id so they share the same reorder scope as the demands they compete with.
+  function effectiveProjectId(item: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple'>) {
+    return item.projectId ?? (item.isSimple ? item.projectIds?.[0] : undefined) ?? null
+  }
+
   function isSameDemandScope(
-    left: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>,
-    right: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>
+    left: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber'>,
+    right: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber'>
   ) {
-    return left.projectId === right.projectId
+    return effectiveProjectId(left) === effectiveProjectId(right)
       && left.quarterYear === right.quarterYear
       && left.quarterNumber === right.quarterNumber
   }
@@ -143,6 +150,44 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     }
   }
 
+  function buildDependencyFromDemand(demand: RoadmapDemand): DemandDependency {
+    const projectName = demand.projectId
+      ? projects.value.find(project => project.id === demand.projectId)?.name ?? ''
+      : ''
+
+    return {
+      demandId: demand.id,
+      itemType: demand.itemType,
+      projectId: demand.projectId,
+      projectName,
+      title: demand.title,
+      quarterLabel: demand.quarterLabel,
+      quarterYear: demand.quarterYear,
+      quarterNumber: demand.quarterNumber,
+      status: demand.status
+    }
+  }
+
+  // When demand A is saved with its dependsOn list, the demands it now blocks (B) must gain A
+  // in their dependedOnBy, and demands no longer blocked must lose it — so the lock icon and
+  // "dependência inconsistente" badge update on both sides without a page reload.
+  function reconcileReverseDependenciesForUpdatedDemand(updatedDemand: RoadmapDemand) {
+    const blockerIds = new Set(updatedDemand.dependsOn.map(dep => dep.demandId))
+    const selfAsDependency = buildDependencyFromDemand(updatedDemand)
+
+    for (const demand of demands.value) {
+      if (demand.id === updatedDemand.id) continue
+
+      const hasReverse = demand.dependedOnBy.some(dep => dep.demandId === updatedDemand.id)
+      const shouldHaveReverse = blockerIds.has(demand.id)
+
+      if (shouldHaveReverse && !hasReverse)
+        demand.dependedOnBy = [...demand.dependedOnBy, selfAsDependency]
+      else if (!shouldHaveReverse && hasReverse)
+        demand.dependedOnBy = demand.dependedOnBy.filter(dep => dep.demandId !== updatedDemand.id)
+    }
+  }
+
   function applyUpdatedDemandState(updatedDemand: RoadmapDemand) {
     const existingIndex = demands.value.findIndex(demand => demand.id === updatedDemand.id)
     const isVisible = isDemandVisibleInCurrentStoreScope(updatedDemand)
@@ -153,6 +198,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
 
       upsertDependencyOptionFromDemand(updatedDemand)
       refreshDependencySnapshotsFor(updatedDemand)
+      reconcileReverseDependenciesForUpdatedDemand(updatedDemand)
       sortDemandsInStore()
       return
     }
@@ -161,6 +207,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       demands.value.splice(existingIndex, 1, updatedDemand)
       upsertDependencyOptionFromDemand(updatedDemand)
       refreshDependencySnapshotsFor(updatedDemand)
+      reconcileReverseDependenciesForUpdatedDemand(updatedDemand)
       sortDemandsInStore()
       return
     }
@@ -168,6 +215,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     demands.value.push(updatedDemand)
     upsertDependencyOptionFromDemand(updatedDemand)
     refreshDependencySnapshotsFor(updatedDemand)
+    reconcileReverseDependenciesForUpdatedDemand(updatedDemand)
     sortDemandsInStore()
   }
 
