@@ -2421,6 +2421,61 @@ async function initializeHierarchyPage() {
 }
 
 void initializeHierarchyPage()
+
+// ─── Soft auto-refresh (hierarchy) ──────────────────────────────────────────────
+// Mirrors the planning view: refetch on returning to the tab and after 15 min of idle, but never
+// while the user is busy (form open, inline edit, staged edits awaiting confirmation, or a save in
+// progress) so unsaved work is preserved. Switching into the hierarchy already reloads on mount.
+const HIERARCHY_SOFT_REFRESH_IDLE_MS = 15 * 60 * 1000
+let lastHierarchyActivityAt = Date.now()
+let lastHierarchySoftRefreshAt = Date.now()
+let hierarchySoftRefreshIntervalId: ReturnType<typeof setInterval> | null = null
+
+const isHierarchyBusy = computed(() =>
+  modalOpen.value
+  || activeHierarchyCell.value != null
+  || hierarchyPendingEditCount.value > 0
+  || hierarchyInlineSavingIds.value.length > 0
+  || isSavingAllHierarchyEdits.value
+  || isSavingDemand.value
+  || isHierarchyLoading.value
+)
+
+watch(isHierarchyBusy, () => {
+  lastHierarchyActivityAt = Date.now()
+})
+
+async function softRefreshHierarchyData() {
+  if (isHierarchyBusy.value)
+    return
+  lastHierarchySoftRefreshAt = Date.now()
+  try {
+    await loadPageData()
+  }
+  catch {
+    // handled by useApi
+  }
+}
+
+function handleHierarchyVisibilityChange() {
+  if (document.visibilityState === 'visible')
+    void softRefreshHierarchyData()
+}
+
+onMounted(() => {
+  hierarchySoftRefreshIntervalId = setInterval(() => {
+    const idleSince = Math.max(lastHierarchyActivityAt, lastHierarchySoftRefreshAt)
+    if (Date.now() - idleSince >= HIERARCHY_SOFT_REFRESH_IDLE_MS)
+      void softRefreshHierarchyData()
+  }, 60 * 1000)
+  document.addEventListener('visibilitychange', handleHierarchyVisibilityChange)
+})
+
+onUnmounted(() => {
+  if (hierarchySoftRefreshIntervalId != null)
+    clearInterval(hierarchySoftRefreshIntervalId)
+  document.removeEventListener('visibilitychange', handleHierarchyVisibilityChange)
+})
 </script>
 
 <template>

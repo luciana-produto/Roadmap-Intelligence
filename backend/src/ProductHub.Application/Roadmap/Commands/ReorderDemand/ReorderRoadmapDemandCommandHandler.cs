@@ -39,41 +39,50 @@ public sealed class ReorderRoadmapDemandCommandHandler(
             demand.QuarterNumber,
             cancellationToken);
 
-        var demandIds = scopedDemands.Select(item => item.Id).ToHashSet();
-        var requestedIds = request.OrderedDemandIds.ToHashSet();
-        if (demandIds.Count != requestedIds.Count || !demandIds.SetEquals(requestedIds))
-        {
-            throw new ValidationException([
-                new ValidationFailure(nameof(request.OrderedDemandIds), "OrderedDemandIds must match the current demand scope.")
-            ]);
-        }
-
-        var targetDemand = scopedDemands.First(item => item.Id == request.DemandId);
-        Enum.TryParse<DemandStatus>(request.Status, true, out var status);
-
-        if (status == DemandStatus.Done && targetDemand.DeliveryDate is null)
-        {
-            throw new ValidationException([
-                new ValidationFailure(nameof(request.Status), "Delivery date is required when status is Done.")
-            ]);
-        }
-
-        if (status == DemandStatus.Deprioritized
-            && (string.IsNullOrWhiteSpace(targetDemand.Observation) || !targetDemand.DeprioritizationReason.HasValue))
-        {
-            throw new ValidationException([
-                new ValidationFailure(nameof(request.Status), "Deprioritization reason and observation are required when status is Deprioritized.")
-            ]);
-        }
-
-        targetDemand.SetStatus(status);
-
         var scopedDemandMap = scopedDemands.ToDictionary(item => item.Id);
-        for (var index = 0; index < request.OrderedDemandIds.Count; index++)
+
+        // Tolerant reconciliation: apply the requested order to the items we recognize, then keep
+        // any remaining scoped items (in their current order) right after. This keeps prioritizing
+        // working even if the client's view of the scope drifted slightly — for example a concurrent
+        // edit, or extra/missing items — instead of rejecting the whole operation.
+        var orderedIds = new List<Guid>();
+        var seen = new HashSet<Guid>();
+        foreach (var demandId in request.OrderedDemandIds)
         {
-            var demandId = request.OrderedDemandIds[index];
-            scopedDemandMap[demandId].SetSortOrder((index + 1) * 10);
+            if (scopedDemandMap.ContainsKey(demandId) && seen.Add(demandId))
+                orderedIds.Add(demandId);
         }
+        foreach (var scopedDemand in scopedDemands)
+        {
+            if (seen.Add(scopedDemand.Id))
+                orderedIds.Add(scopedDemand.Id);
+        }
+
+        // Status changes still apply to the moved item, with the same guards.
+        if (scopedDemandMap.TryGetValue(request.DemandId, out var targetDemand))
+        {
+            Enum.TryParse<DemandStatus>(request.Status, true, out var status);
+
+            if (status == DemandStatus.Done && targetDemand.DeliveryDate is null)
+            {
+                throw new ValidationException([
+                    new ValidationFailure(nameof(request.Status), "Delivery date is required when status is Done.")
+                ]);
+            }
+
+            if (status == DemandStatus.Deprioritized
+                && (string.IsNullOrWhiteSpace(targetDemand.Observation) || !targetDemand.DeprioritizationReason.HasValue))
+            {
+                throw new ValidationException([
+                    new ValidationFailure(nameof(request.Status), "Deprioritization reason and observation are required when status is Deprioritized.")
+                ]);
+            }
+
+            targetDemand.SetStatus(status);
+        }
+
+        for (var index = 0; index < orderedIds.Count; index++)
+            scopedDemandMap[orderedIds[index]].SetSortOrder((index + 1) * 10);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return Unit.Value;

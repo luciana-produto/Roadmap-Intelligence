@@ -1258,6 +1258,8 @@ const listViewportWidth = ref(0)
 const listHeaderScrollLeft = ref(0)
 let listBodySortable: Sortable | null = null
 let listWidthObserver: ResizeObserver | null = null
+// True while a priority drag is in progress — used to defer the idle/soft refresh.
+const isListDragging = ref(false)
 
 function updateListViewportWidth() {
   listViewportWidth.value = listScrollContainerRef.value?.clientWidth ?? 0
@@ -1822,6 +1824,9 @@ function initListSortable() {
     fallbackTolerance: 4,
     filter: 'a,input,textarea,[role="button"]',
     preventOnFilter: false,
+    onStart: () => {
+      isListDragging.value = true
+    },
     onMove: (event) => {
       const dragged = event.dragged as HTMLElement | null
       const related = event.related as HTMLElement | null
@@ -1891,6 +1896,7 @@ function initListSortable() {
           await handleListSortEnd(draggedItem)
       }
       finally {
+        isListDragging.value = false
         // Always rebuild the DOM from the model after a drop. Successful reorders self-heal
         // via the data-hash watcher, but no-op drops and early returns would otherwise leave
         // SortableJS's DOM mutation stuck on screen.
@@ -4356,6 +4362,7 @@ const listQuarterFilterOptions = computed(() => {
 
 onMounted(() => {
   updateListViewportWidth()
+  startSoftRefreshWatchers()
 
   if (listHeaderRowRef.value) {
     Sortable.create(listHeaderRowRef.value, {
@@ -5155,6 +5162,78 @@ async function forceListRerender(scrollTop?: number | null, scrollLeft?: number 
   planningGroupedRenderNonce.value++
   await refreshListPresentation(scrollTop, scrollLeft)
 }
+
+// ─── Soft auto-refresh ──────────────────────────────────────────────────────────
+// Re-fetches the planning data (without a full page reload) to reduce stale views when
+// another tab/view changed the data. Triggers: 15 min of idle, returning to the tab, and
+// switching back into the planning view. Always deferred while the user is "busy" so we never
+// discard unsaved work (open form, inline edit, drag, or save in progress).
+const SOFT_REFRESH_IDLE_MS = 15 * 60 * 1000
+let lastPlanningActivityAt = Date.now()
+let lastPlanningSoftRefreshAt = Date.now()
+let softRefreshIntervalId: ReturnType<typeof setInterval> | null = null
+
+const isPlanningBusy = computed(() =>
+  modalOpen.value
+  || activePlanningCell.value != null
+  || isBulkPlanning.value
+  || isSavingAllPlanningInlineEdits.value
+  || isListDragging.value
+  || roadmapStore.isLoading
+)
+
+// Any "real work" (open form, inline edit, drag, save) counts as activity and pushes back the
+// idle timer — and finishing it too, so we don't refresh the instant a modal closes.
+watch(isPlanningBusy, () => {
+  lastPlanningActivityAt = Date.now()
+})
+
+async function softRefreshPlanningData() {
+  if (viewMode.value !== 'list' || isPlanningBusy.value)
+    return
+
+  lastPlanningSoftRefreshAt = Date.now()
+  const scrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const scrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+  try {
+    await roadmapStore.fetchDemands()
+    await refreshListPresentation(scrollTop, scrollLeft)
+  }
+  catch {
+    // handled by useApi
+  }
+}
+
+function handlePlanningVisibilityChange() {
+  if (document.visibilityState === 'visible')
+    void softRefreshPlanningData()
+}
+
+function startSoftRefreshWatchers() {
+  softRefreshIntervalId = setInterval(() => {
+    const idleSince = Math.max(lastPlanningActivityAt, lastPlanningSoftRefreshAt)
+    if (Date.now() - idleSince >= SOFT_REFRESH_IDLE_MS)
+      void softRefreshPlanningData()
+  }, 60 * 1000)
+
+  document.addEventListener('visibilitychange', handlePlanningVisibilityChange)
+}
+
+function stopSoftRefreshWatchers() {
+  if (softRefreshIntervalId != null) {
+    clearInterval(softRefreshIntervalId)
+    softRefreshIntervalId = null
+  }
+  document.removeEventListener('visibilitychange', handlePlanningVisibilityChange)
+}
+
+// Switching back into the planning view refreshes its (otherwise frozen) data. Not immediate, so
+// it never double-fetches on initial mount (initializeRoadmapPage already loads the data once).
+watch(viewMode, (mode) => {
+  if (mode === 'list')
+    void softRefreshPlanningData()
+})
 
 async function planSelectedDemandsToQuarter(quarterValue: string) {
   if (!movablePlanningItems.value.length || isBulkPlanning.value)
@@ -6276,6 +6355,7 @@ function closeListExportMenu() { listExportMenuOpen.value = false }
 
 onUnmounted(() => {
   destroyListSortable()
+  stopSoftRefreshWatchers()
   listWidthObserver?.disconnect()
   if (listExportUrlVisible.value) URL.revokeObjectURL(listExportUrlVisible.value)
   if (listExportUrlFull.value) URL.revokeObjectURL(listExportUrlFull.value)
@@ -6670,56 +6750,6 @@ watch(activeDemandKpiId, async (value) => {
             @click="openCapacityModal"
           />
         </div>
-      </div>
-
-      <div class="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-default pt-3">
-        <UPopover v-if="movablePlanningItems.length">
-          <UButton
-            size="xs"
-            color="primary"
-            variant="soft"
-            trailing-icon="i-lucide-chevron-down"
-            leading-icon="i-lucide-calendar-range"
-            :loading="isBulkPlanning"
-          >
-            Mover {{ movablePlanningItems.length.toLocaleString('pt-BR') }} {{ movablePlanningItems.length === 1 ? 'item' : 'itens' }}
-          </UButton>
-          <template #content>
-            <div class="max-h-72 w-64 overflow-y-auto py-1">
-              <button
-                v-for="option in bulkMoveQuarterOptions"
-                :key="option.value"
-                class="w-full truncate px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
-                @click="planSelectedDemandsToQuarter(option.value)"
-              >
-                {{ option.label }}
-              </button>
-            </div>
-          </template>
-        </UPopover>
-
-        <UButton
-          v-if="selectedPlanningItemCount"
-          size="xs"
-          color="neutral"
-          variant="soft"
-          icon="i-lucide-pencil-ruler"
-          :loading="isBulkPlanning"
-          @click="planningBulkEditModalOpen = true"
-        >
-          Editar {{ selectedPlanningItemCount.toLocaleString('pt-BR') }} itens
-        </UButton>
-
-        <UButton
-          v-if="selectedPlanningItemCount"
-          size="xs"
-          color="neutral"
-          variant="ghost"
-          leading-icon="i-lucide-square-minus"
-          @click="clearSelectedDemands"
-        >
-          Desmarcar todos
-        </UButton>
       </div>
 
       <div class="mt-3 overflow-visible rounded-xl border border-default bg-default shadow-sm">
@@ -7302,6 +7332,77 @@ watch(activeDemandKpiId, async (value) => {
     <template v-else>
       <RoadmapHierarchyPage v-model:project-ids="filterListProjectIds" />
     </template>
+
+    <!-- Floating bulk-actions bar: overlays the bottom of the viewport so selecting items
+         never pushes the grid down. -->
+    <Transition
+      enter-active-class="transition duration-150 ease-out"
+      enter-from-class="translate-y-3 opacity-0"
+      enter-to-class="translate-y-0 opacity-100"
+      leave-active-class="transition duration-100 ease-in"
+      leave-from-class="translate-y-0 opacity-100"
+      leave-to-class="translate-y-3 opacity-0"
+    >
+      <div
+        v-if="viewMode === 'list' && (selectedPlanningItemCount || movablePlanningItems.length)"
+        class="pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4"
+        :class="planningPendingEditCount ? 'bottom-28' : 'bottom-6'"
+      >
+        <div class="pointer-events-auto flex flex-wrap items-center gap-2 rounded-full border border-default bg-default/95 px-3 py-2 shadow-lg ring-1 ring-black/5 backdrop-blur supports-[backdrop-filter]:bg-default/85">
+          <span v-if="selectedPlanningItemCount" class="px-2 text-sm font-medium text-highlighted">
+            {{ selectedPlanningItemCount.toLocaleString('pt-BR') }} {{ selectedPlanningItemCount === 1 ? 'selecionado' : 'selecionados' }}
+          </span>
+
+          <UPopover v-if="movablePlanningItems.length">
+            <UButton
+              size="xs"
+              color="primary"
+              variant="soft"
+              trailing-icon="i-lucide-chevron-down"
+              leading-icon="i-lucide-calendar-range"
+              :loading="isBulkPlanning"
+            >
+              Mover {{ movablePlanningItems.length.toLocaleString('pt-BR') }} {{ movablePlanningItems.length === 1 ? 'item' : 'itens' }}
+            </UButton>
+            <template #content>
+              <div class="max-h-72 w-64 overflow-y-auto py-1">
+                <button
+                  v-for="option in bulkMoveQuarterOptions"
+                  :key="option.value"
+                  class="w-full truncate px-3 py-2 text-left text-sm text-highlighted transition-colors hover:bg-elevated"
+                  @click="planSelectedDemandsToQuarter(option.value)"
+                >
+                  {{ option.label }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
+
+          <UButton
+            v-if="selectedPlanningItemCount"
+            size="xs"
+            color="neutral"
+            variant="soft"
+            icon="i-lucide-pencil-ruler"
+            :loading="isBulkPlanning"
+            @click="planningBulkEditModalOpen = true"
+          >
+            Editar {{ selectedPlanningItemCount.toLocaleString('pt-BR') }} itens
+          </UButton>
+
+          <UButton
+            v-if="selectedPlanningItemCount"
+            size="xs"
+            color="neutral"
+            variant="ghost"
+            leading-icon="i-lucide-square-minus"
+            @click="clearSelectedDemands"
+          >
+            Desmarcar todos
+          </UButton>
+        </div>
+      </div>
+    </Transition>
 
     <BulkEditRoadmapItemsModal
       v-model:open="planningBulkEditModalOpen"
