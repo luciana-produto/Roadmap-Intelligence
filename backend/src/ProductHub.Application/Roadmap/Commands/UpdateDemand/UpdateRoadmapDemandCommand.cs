@@ -18,6 +18,7 @@ public sealed record UpdateRoadmapDemandCommand(
     string Classification,
     IReadOnlyList<Guid> ProductIds,
     IReadOnlyList<Guid>? DependencyDemandIds = null,
+    IReadOnlyList<Guid>? RemovedDependedOnByIds = null,
     string? Observation = null,
         IReadOnlyList<IssueLinkInput>? IssueLinks = null,
     string? DeprioritizationReason = null,

@@ -219,6 +219,16 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         await demandRepository.ReplaceProductsAsync(demand.Id, request.ProductIds, cancellationToken);
         await demandRepository.ReplaceProjectLinksAsync(demand.Id, request.ProjectIds ?? [], cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);
+
+        // Allow removing "this item blocks X" links directly from the blocker's form: each id here
+        // is a dependent demand (A) whose dependency on the current demand (B) should be dropped.
+        var removedDependedOnByIds = (request.RemovedDependedOnByIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToArray();
+        if (removedDependedOnByIds.Length > 0)
+            await demandRepository.RemoveDependenciesPointingToAsync(demand.Id, removedDependedOnByIds, cancellationToken);
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         var currentDemand = await demandRepository.GetByIdWithProductsAsync(demand.Id, cancellationToken)
@@ -246,6 +256,17 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         var projectNamesById = (await projectRepository.GetAllAsync(cancellationToken))
             .ToDictionary(projectItem => projectItem.Id, projectItem => projectItem.Name);
         var dependencyLinks = await demandRepository.GetDependenciesByDemandIdsAsync([currentDemand.Id, .. dependencyDemandIds], cancellationToken);
+
+        // Demands on the other side of each dependency link must be loaded so both
+        // "dependsOn" and "dependedOnBy" can be mapped. Without this, editing a blocker (B)
+        // returns an empty "dependedOnBy" because the dependent demand (A) is not in demandsById.
+        var dependencyLinkDemands = await demandRepository.GetByIdsAsync(
+            dependencyLinks
+                .SelectMany(link => new[] { link.DemandId, link.DependsOnDemandId })
+                .Distinct()
+                .Where(id => id != currentDemand.Id),
+            cancellationToken);
+
         var tradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(currentDemand.Id, cancellationToken);
         var tradeOffRelatedDemandIds = tradeOffs
             .Where(tradeOff => tradeOff.ReplacementDemandId.HasValue)
@@ -257,6 +278,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         var demandsById = dependencyDemands
             .Concat(hierarchyDemands)
             .Concat(tradeOffRelatedDemands)
+            .Concat(dependencyLinkDemands)
             .Concat([currentDemand])
             .GroupBy(item => item.Id)
             .ToDictionary(group => group.Key, group => group.First());

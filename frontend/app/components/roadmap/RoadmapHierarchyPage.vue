@@ -21,6 +21,20 @@ type DisplayRoadmapGroup = {
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
 
+const props = defineProps<{
+  projectIds?: string[]
+}>()
+const emit = defineEmits<{
+  'update:projectIds': [value: string[]]
+}>()
+
+const CACHE_KEY_HIERARCHY_PROJECTS = 'roadmap:hierarchy:projectIds'
+
+function readHierarchyCacheJson<T>(key: string): T | null {
+  try { return JSON.parse(localStorage.getItem(key) ?? 'null') as T }
+  catch { return null }
+}
+
 const route = useRoute()
 const toast = useToast()
 const api = useApi()
@@ -89,6 +103,9 @@ const hierarchyStatusModalOpen = ref(false)
 const hierarchyStatusModalItemId = ref<string | null>(null)
 const hierarchyStatusModalSnapshot = ref<HierarchyInlineDraft | null>(null)
 const selectedProjectIds = ref<string[]>([])
+watch(selectedProjectIds, (val) => {
+  localStorage.setItem(CACHE_KEY_HIERARCHY_PROJECTS, JSON.stringify(val))
+})
 const hierarchyItemFilter = ref('')
 const hierarchyStatusFilter = ref<string[]>([])
 const hierarchyClassificationFilter = ref<string[]>([])
@@ -116,6 +133,13 @@ const hierarchyColumnDefaults: Record<HierarchyColumnId, number> = {
   actions: 28
 }
 const hierarchyColumnSizing = ref<Partial<Record<HierarchyColumnId, number>>>({})
+
+// The "Item" column absorbs the free horizontal space so it starts expanded without creating a
+// horizontal scrollbar (the other columns keep their widths and everything stays resizable).
+const hierarchyItemExtraWidth = computed(() => {
+  const total = hierarchyColumnOrder.reduce((sum, columnId) => sum + getHierarchyColSize(columnId), 0)
+  return Math.max(0, hierarchyContainerWidth.value - total)
+})
 
 const deprioritizationReasonOptions = [
   { value: 'Strategic', label: 'Estratégico' },
@@ -148,7 +172,8 @@ function getHierarchyColSize(columnId: HierarchyColumnId) {
 }
 
 function getHierarchyColWidth(columnId: HierarchyColumnId) {
-  return `${getHierarchyColSize(columnId)}px`
+  const base = getHierarchyColSize(columnId)
+  return `${columnId === 'item' ? base + hierarchyItemExtraWidth.value : base}px`
 }
 
 function startHierarchyResize(columnId: HierarchyColumnId, event: MouseEvent) {
@@ -290,12 +315,12 @@ const epicById = computed(() =>
 
 const projectFilterLabel = computed(() => {
   if (!selectedProjectIds.value.length)
-    return 'Todos os projetos'
+    return 'Todos os times'
 
   if (selectedProjectIds.value.length === 1)
-    return projectNameById.value.get(selectedProjectIds.value[0]!) ?? '1 projeto'
+    return projectNameById.value.get(selectedProjectIds.value[0]!) ?? '1 time'
 
-  return `${selectedProjectIds.value.length} projetos`
+  return `${selectedProjectIds.value.length} times`
 })
 
 const classificationFilterOptions = computed(() =>
@@ -1403,14 +1428,16 @@ function pickDefaultProjectId(projectIds: string[]) {
 function toggleProjectFilter(projectId: string) {
   if (selectedProjectIds.value.includes(projectId)) {
     selectedProjectIds.value = selectedProjectIds.value.filter(id => id !== projectId)
-    return
   }
-
-  selectedProjectIds.value = [...selectedProjectIds.value, projectId]
+  else {
+    selectedProjectIds.value = [...selectedProjectIds.value, projectId]
+  }
+  emit('update:projectIds', selectedProjectIds.value)
 }
 
 function clearProjectFilter() {
   selectedProjectIds.value = []
+  emit('update:projectIds', selectedProjectIds.value)
 }
 
 function toggleHierarchyStatusFilter(status: string) {
@@ -2019,13 +2046,16 @@ function openCreateModal(
   modalOpen.value = true
 }
 
-function openEditModal(item: RoadmapDemand, options?: { forceSimpleEpic?: boolean }) {
+const modalEditFocusField = ref<string | undefined>()
+
+function openEditModal(item: RoadmapDemand, options?: { forceSimpleEpic?: boolean, focusField?: string }) {
   editingDemand.value = item
   defaultParentDemandId.value = undefined
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
   resetCreateModalDefaults()
   forceSimpleEpic.value = options?.forceSimpleEpic ?? false
+  modalEditFocusField.value = options?.focusField
   modalOpen.value = true
 }
 
@@ -2362,17 +2392,30 @@ async function confirmDelete() {
 async function initializeHierarchyPage() {
   await roadmapStore.fetchProjects()
 
-  const initialProjectIds = [
-    ...(typeof route.query.projectIds === 'string'
-      ? route.query.projectIds.split(',')
-      : []),
-    ...(typeof route.query.projectId === 'string'
-      ? [route.query.projectId]
-      : [])
-  ]
-
-  selectedProjectIds.value = [...new Set(initialProjectIds)]
-    .filter(projectId => projects.value.some(project => project.id === projectId))
+  // Priority: prop from planning view > URL query > localStorage cache.
+  if (props.projectIds?.length) {
+    selectedProjectIds.value = props.projectIds
+      .filter(projectId => projects.value.some(project => project.id === projectId))
+  }
+  else {
+    const fromUrl = [
+      ...(typeof route.query.projectIds === 'string'
+        ? route.query.projectIds.split(',')
+        : []),
+      ...(typeof route.query.projectId === 'string'
+        ? [route.query.projectId]
+        : [])
+    ]
+    if (fromUrl.length) {
+      selectedProjectIds.value = [...new Set(fromUrl)]
+        .filter(projectId => projects.value.some(project => project.id === projectId))
+    }
+    else {
+      const cached = readHierarchyCacheJson<string[]>(CACHE_KEY_HIERARCHY_PROJECTS)
+      selectedProjectIds.value = (cached ?? [])
+        .filter(projectId => projects.value.some(project => project.id === projectId))
+    }
+  }
 
   await loadPageData()
 }
@@ -2421,7 +2464,7 @@ void initializeHierarchyPage()
     <UCard :ui="{ body: 'p-3 sm:p-3' }">
       <div class="flex flex-col gap-2 lg:flex-row lg:items-end lg:justify-between">
         <div class="flex w-full flex-col gap-2 lg:flex-1 lg:flex-row lg:items-end">
-          <UFormField label="Projeto" class="w-full lg:max-w-sm">
+          <UFormField label="Time" class="w-full lg:max-w-sm">
             <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
               <UButton
                 type="button"
@@ -2443,7 +2486,7 @@ void initializeHierarchyPage()
                   >
                     <UIcon v-if="selectedProjectIds.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
                     <span v-else class="inline-block h-4 w-4 shrink-0" />
-                    Todos os projetos
+                    Todos os times
                   </button>
 
                   <button
@@ -2848,7 +2891,7 @@ void initializeHierarchyPage()
                         <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(epicEntry.epic)">
                           <div class="flex flex-wrap items-center gap-1">
                             <span v-if="isOutsideSelectedProject(epicEntry.epic)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-warning">
-                              Outro projeto
+                              Outro time
                             </span>
                           </div>
                           <div class="mt-0.5 flex items-start gap-1">
@@ -2896,7 +2939,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
-                              <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epicEntry.epic)"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
+                              <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epicEntry.epic, { focusField: 'jiraIssue' })"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
                             </div>
                           </div>
                         </div>
@@ -3133,7 +3176,7 @@ void initializeHierarchyPage()
                         <div class="min-w-0 flex-1" :class="getCrossProjectWatermarkClass(demand)">
                           <div class="flex flex-wrap items-center gap-1">
                             <span v-if="isOutsideSelectedProject(demand)" class="inline-flex items-center rounded-md border border-warning/40 bg-warning/10 px-1 py-0 text-[8px] font-semibold uppercase tracking-[0.06em] text-warning">
-                              Outro projeto
+                              Outro time
                             </span>
                             <span v-if="demand.type === 'Spillover'" class="inline-flex items-center gap-0.5 rounded-md border border-amber-200 bg-amber-50 px-1 py-0 text-[8px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
                               <UIcon name="i-lucide-forward" class="h-2.5 w-2.5" />
@@ -3185,7 +3228,7 @@ void initializeHierarchyPage()
                                   </div>
                                 </template>
                               </UPopover>
-                              <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(demand)"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
+                              <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(demand, { focusField: 'jiraIssue' })"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
                             </div>
                           </div>
                         </div>
@@ -3398,7 +3441,7 @@ void initializeHierarchyPage()
                             </div>
                           </template>
                         </UPopover>
-                        <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epic)"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
+                        <button v-else type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md border border-red-200 bg-default px-1 text-[9px] font-medium text-red-500 transition-colors hover:border-red-400 dark:border-red-800 dark:text-red-400" title="Sem issue Jira — clique para adicionar" @click="openEditModal(epic, { focusField: 'jiraIssue' })"><UIcon name="i-simple-icons-jira" class="h-3 w-3" /></button>
                       </div>
                     </div>
                   </div>
@@ -3852,6 +3895,7 @@ void initializeHierarchyPage()
       :selected-items="selectedHierarchyItems"
       :dependency-options="dependencyOptions"
       :is-saving="isBulkEditing"
+      :hide-row-color="true"
       @submit="handleBulkEditSubmit"
     />
 
@@ -3882,6 +3926,7 @@ void initializeHierarchyPage()
       }))"
       :available-kpis="availableKpis"
       :is-saving="isSavingDemand"
+      :focus-field="modalEditFocusField"
       @trade-off-deleted="handleTradeOffDeleted"
       @submit="handleSubmit"
     />

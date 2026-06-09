@@ -45,7 +45,9 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
         await context.RoadmapDemands
             .Include(d => d.Products)
             .Include(d => d.ProjectLinks)
-            .Where(d => d.ProjectId == projectId && d.QuarterYear == quarterYear && d.QuarterNumber == quarterNumber)
+            .Where(d => d.QuarterYear == quarterYear && d.QuarterNumber == quarterNumber
+                && (d.ProjectId == projectId
+                    || (d.IsSimple && d.ProjectLinks.Any(link => link.ProjectId == projectId))))
             .OrderBy(d => d.SortOrder)
             .ThenBy(d => d.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -170,6 +172,22 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
                 RoadmapDemandDependency.FromRepository(demandId, dependsOnDemandId),
                 cancellationToken);
         }
+    }
+
+    public async Task RemoveDependenciesPointingToAsync(
+        Guid blockerDemandId,
+        IEnumerable<Guid> dependentDemandIds,
+        CancellationToken cancellationToken = default)
+    {
+        var dependentIds = dependentDemandIds.Distinct().ToArray();
+        if (dependentIds.Length == 0)
+            return;
+
+        var links = await context.RoadmapDemandDependencies
+            .Where(link => link.DependsOnDemandId == blockerDemandId && dependentIds.Contains(link.DemandId))
+            .ToListAsync(cancellationToken);
+
+        context.RoadmapDemandDependencies.RemoveRange(links);
     }
 
     public async Task<RoadmapDemand?> GetOriginalBySuccessorIdAsync(

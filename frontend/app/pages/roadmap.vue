@@ -91,6 +91,15 @@ const deprioritizationReasonOptions = [
   { value: 'Customizacao', label: 'Customização' }
 ] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
 
+const CACHE_KEY_PLANNING_PROJECTS = 'roadmap:planning:projectIds'
+const CACHE_KEY_PLANNING_QUARTERS = 'roadmap:planning:quarters'
+const CACHE_KEY_PLANNING_GROUP_BY_EPIC = 'roadmap:planning:groupByEpic'
+
+function readCacheJson<T>(key: string): T | null {
+  try { return JSON.parse(localStorage.getItem(key) ?? 'null') as T }
+  catch { return null }
+}
+
 const filterQuarters = ref<string[]>([])
 const filterListProjectIds = ref<string[]>([])
 
@@ -113,10 +122,10 @@ const quarterFilterLabel = computed(() => {
 })
 
 const filterListProjectsLabel = computed(() => {
-  if (!filterListProjectIds.value.length) return 'Todos os projetos'
+  if (!filterListProjectIds.value.length) return 'Todos os times'
   if (filterListProjectIds.value.length === 1)
-    return projects.value.find(p => p.id === filterListProjectIds.value[0])?.name ?? '1 projeto'
-  return `${filterListProjectIds.value.length} projetos`
+    return projects.value.find(p => p.id === filterListProjectIds.value[0])?.name ?? '1 time'
+  return `${filterListProjectIds.value.length} times`
 })
 
 function formatDemandCustomers(customers?: string[]): string {
@@ -264,6 +273,7 @@ const listProblemOptions = [
   { value: 'doneNoKpi', label: 'Concluídos sem KPI apurado' },
   { value: 'noJira', label: 'Itens sem issue Jira' },
   { value: 'noHours', label: 'Itens sem horas' },
+  { value: 'crossTeamInconsistentDep', label: 'Dependência entre times inconsistente' },
 ] as const
 
 const listProblemLabels: Record<string, string> = {
@@ -273,6 +283,7 @@ const listProblemLabels: Record<string, string> = {
   doneNoKpi: 'Concluído sem KPI apurado',
   noJira: 'Sem issue Jira associada',
   noHours: 'Sem horas estimadas',
+  crossTeamInconsistentDep: 'Dependência entre times inconsistente',
 }
 
 const listProblemFilter = ref<string[]>([])
@@ -312,6 +323,10 @@ function getDemandProblemKeys(demand: RoadmapDemand) {
       && (demand.kpiMeasurements?.length ?? 0) === 0)
       epicKeys.push('doneNoKpi')
 
+    const effectivePid = getEffectiveProjectId(demand)
+    if (demand.dependsOn.some(dep => isDependencyInconsistent(demand, dep) && dep.projectId !== effectivePid))
+      epicKeys.push('crossTeamInconsistentDep')
+
     return epicKeys
   }
 
@@ -341,6 +356,9 @@ function getDemandProblemKeys(demand: RoadmapDemand) {
     if (!hasApuratedKpi)
       keys.push('doneNoKpi')
   }
+
+  if (demand.dependsOn.some(dep => isDependencyInconsistent(demand, dep) && dep.projectId !== demand.projectId))
+    keys.push('crossTeamInconsistentDep')
 
   return keys
 }
@@ -413,8 +431,9 @@ function getVisibleEpicDemands(epicId?: string) {
   return visibleListRows.value.filter(demand => demand.epicId === epicId)
 }
 
-function getEpicQuarterMoveScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'type'>) {
-  return `${demand.projectId}:${getDemandGroupKey(demand)}`
+function getEpicQuarterMoveScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'type'>) {
+  const pid = demand.isSimple ? (demand.projectIds?.[0] ?? demand.projectId) : demand.projectId
+  return `${pid}:${getDemandGroupKey(demand)}`
 }
 
 function getEpicHeaderMeta(anchorDemand?: RoadmapDemand) {
@@ -573,8 +592,18 @@ function isDependencyInconsistent(demand: RoadmapDemand, dependency: DemandDepen
   return compareQuarterPosition(demand, dependency) < 0
 }
 
+function isReverseDependencyInconsistent(demand: RoadmapDemand, dep: DemandDependency) {
+  // dep = demand A that depends on this demand (B); inconsistent if A is planned before B finishes
+  const isABacklog = isSpecialBacklogQuarter(dep.quarterYear, dep.quarterNumber)
+  if (isABacklog) return false
+  const isBBacklog = isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
+  if (isBBacklog) return true
+  return (dep.quarterYear * 4 + dep.quarterNumber) < (demand.quarterYear * 4 + demand.quarterNumber)
+}
+
 function hasInconsistentDependency(demand: RoadmapDemand) {
   return demand.dependsOn.some(dependency => isDependencyInconsistent(demand, dependency))
+    || (demand.dependedOnBy ?? []).some(dep => isReverseDependencyInconsistent(demand, dep))
 }
 
 function getEpicTypeLabel(epicId?: string): string {
@@ -1125,12 +1154,17 @@ watch(selectedProjectId, () => {
   setListMultiFilter('products', [])
 })
 
-watch(filterListProjectIds, () => {
+watch(filterListProjectIds, (val) => {
   filterProducts.value = []
   setListMultiFilter('status', [])
   setListMultiFilter('type', [])
   setListMultiFilter('classification', [])
   setListMultiFilter('products', [])
+  localStorage.setItem(CACHE_KEY_PLANNING_PROJECTS, JSON.stringify(val))
+})
+
+watch(filterQuarters, (val) => {
+  localStorage.setItem(CACHE_KEY_PLANNING_QUARTERS, JSON.stringify(val))
 })
 
 // Composite epics that have no demands linked. The planning list is built from demands
@@ -1172,8 +1206,10 @@ const quarterFilteredDemands = computed(() => {
       })
     : orderedItems
   if (!filterQuarters.value.length) return projectFiltered
+  // Use buildQuarterValue so the special Backlog quarters ('backlog' / 'backlog-prioritario')
+  // match the filter option values — a raw `${number}-${year}` would never match them.
   return projectFiltered.filter(d =>
-    filterQuarters.value.includes(`${d.quarterNumber}-${d.quarterYear}`)
+    filterQuarters.value.includes(buildQuarterValue(d.quarterYear, d.quarterNumber))
   )
 })
 
@@ -1274,29 +1310,37 @@ function moveDemandCluster(
   return nextIds
 }
 
-function isSameDemandScope(left: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>, right: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber'>) {
-  return left.projectId === right.projectId
+function getEffectiveProjectId(item: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple'>) {
+  return item.projectId ?? (item.isSimple ? item.projectIds?.[0] : undefined) ?? null
+}
+
+function isSameDemandScope(
+  left: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber'>,
+  right: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber'>
+) {
+  return getEffectiveProjectId(left) === getEffectiveProjectId(right)
     && left.quarterYear === right.quarterYear
     && left.quarterNumber === right.quarterNumber
 }
 
 function isSameDemandGroup(
-  left: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>,
-  right: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>
+  left: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber' | 'type'>,
+  right: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber' | 'type'>
 ) {
   return isSameDemandScope(left, right)
     && getDemandGroupKey(left) === getDemandGroupKey(right)
 }
 
 function getScopedDemandIds(demand: RoadmapDemand) {
-  return demandItems.value
+  const simpleEpics = epicItems.value.filter(e => e.isSimple)
+  return [...demandItems.value, ...simpleEpics]
     .filter(item => isSameDemandScope(item, demand))
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .map(item => item.id)
 }
 
-function getDemandScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
-  return `${demand.projectId}:${demand.quarterYear}:${demand.quarterNumber}:${getDemandGroupKey(demand)}`
+function getDemandScopeKey(demand: Pick<RoadmapDemand, 'projectId' | 'projectIds' | 'isSimple' | 'quarterYear' | 'quarterNumber' | 'type'>) {
+  return `${getEffectiveProjectId(demand)}:${demand.quarterYear}:${demand.quarterNumber}:${getDemandGroupKey(demand)}`
 }
 
 function getDemandDragScopeKey(demand: RoadmapDemand) {
@@ -1399,6 +1443,39 @@ async function persistEpicClusterPriority(
   }
 }
 
+// Resolves which quarter a dropped row now belongs to by walking up the DOM. The first
+// data row or quarter/additional divider carrying a quarterKey marks the row's section.
+// This disambiguates dropping at the end of a quarter (just above the next quarter's
+// divider) from dropping as the first item of the next quarter — flat index math can't.
+function resolveDropQuarterKey(item: HTMLElement): string | null {
+  let el = item.previousElementSibling as HTMLElement | null
+  while (el) {
+    if ((el.classList.contains('list-demand-row') || el.classList.contains('list-section-divider'))
+      && el.dataset.quarterKey)
+      return el.dataset.quarterKey
+    el = el.previousElementSibling as HTMLElement | null
+  }
+
+  // Top of the list: fall back to the nearest following data row.
+  el = item.nextElementSibling as HTMLElement | null
+  while (el) {
+    if (el.classList.contains('list-demand-row') && el.dataset.quarterKey)
+      return el.dataset.quarterKey
+    el = el.nextElementSibling as HTMLElement | null
+  }
+
+  return null
+}
+
+function parseQuarterKey(quarterKey: string | null): { quarterYear: number, quarterNumber: number } | null {
+  if (!quarterKey)
+    return null
+  const [quarterYear, quarterNumber] = quarterKey.split(':').map(Number)
+  return Number.isFinite(quarterYear) && Number.isFinite(quarterNumber)
+    ? { quarterYear: quarterYear!, quarterNumber: quarterNumber! }
+    : null
+}
+
 async function handleEpicSortEnd(item: HTMLElement) {
   const anchorDemandId = item.dataset.anchorDemandId
   if (!anchorDemandId)
@@ -1458,6 +1535,29 @@ async function handleEpicSortEnd(item: HTMLElement) {
 
   const quarterChanged = anchorDemand.quarterYear !== targetQuarterRef.quarterYear || anchorDemand.quarterNumber !== targetQuarterRef.quarterNumber
   if (quarterChanged) {
+    // Simple epics have their own quarter — move them directly via updateDemand.
+    // Empty composite epics (sem demanda) don't have demands to move, so skip.
+    if (anchorDemand.itemType === 'Epic') {
+      if (anchorDemand.isSimple) {
+        const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+        const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+        isBulkPlanning.value = true
+        try {
+          await roadmapStore.updateDemand(
+            anchorDemand.id,
+            buildDemandFormData(anchorDemand, {
+              quarterYear: targetQuarterRef.quarterYear,
+              quarterNumber: targetQuarterRef.quarterNumber
+            })
+          )
+          await refreshListPresentation(listScrollTop, listScrollLeft)
+        }
+        catch { /* handled by useApi */ }
+        finally { isBulkPlanning.value = false }
+      }
+      return
+    }
+
     const sameGroupInTarget = (row: RoadmapDemand) =>
       row.id !== anchorDemand.id
       && !currentCluster.some(clusterDemand => clusterDemand.id === row.id)
@@ -1485,6 +1585,11 @@ async function handleEpicSortEnd(item: HTMLElement) {
     )
     return
   }
+
+  // Same-quarter reorder for non-simple epic items: backend rejects, skip silently.
+  // Simple epics compete in the same ordering scope as demands and CAN be reordered.
+  if (anchorDemand.itemType === 'Epic' && !anchorDemand.isSimple)
+    return
 
   const epicRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLTableRowElement[]
   const epicRowIndex = epicRows.indexOf(item as HTMLTableRowElement)
@@ -1962,6 +2067,12 @@ function syncListSectionDividers() {
     const dividerRow = document.createElement('tr')
     dividerRow.className = 'list-section-divider'
 
+    // Carry the section's quarter so drop-target resolution can tell which quarter a row
+    // dropped against a divider belongs to (fixes dropping at the end of a quarter).
+    const dividerDemandRef = visibleRows[config.rowIndex]
+    if (dividerDemandRef && (kind === 'quarter' || kind === 'additional'))
+      dividerRow.dataset.quarterKey = `${dividerDemandRef.quarterYear}:${dividerDemandRef.quarterNumber}`
+
     const dividerCell = document.createElement('td')
     dividerCell.colSpan = listOrderedCols.value.length
 
@@ -1985,9 +2096,16 @@ function syncListSectionDividers() {
     else {
       const headerMeta = getEpicHeaderMeta(visibleRows[config.rowIndex])
       const anchorDemand = visibleRows[config.rowIndex]
+      // Distinguishes this header instance when the same epic shows in multiple quarter sections,
+      // so inline editing activates only on the clicked instance (not all of them).
+      const epicScopeKey = anchorDemand ? `${anchorDemand.quarterYear}:${anchorDemand.quarterNumber}` : ''
       dividerRow.className = 'list-section-divider list-epic-divider border-y border-default bg-default'
       dividerRow.dataset.anchorDemandId = anchorDemand?.id ?? ''
-      dividerRow.dataset.scopeKey = anchorDemand ? getDemandScopeKey(anchorDemand) : ''
+      dividerRow.dataset.scopeKey = anchorDemand
+        ? (anchorDemand.itemType === 'Epic' && anchorDemand.isSimple
+          ? `${anchorDemand.projectIds?.[0] ?? anchorDemand.projectId}:${anchorDemand.quarterYear}:${anchorDemand.quarterNumber}:${getDemandGroupKey(anchorDemand)}`
+          : getDemandScopeKey(anchorDemand))
+        : ''
       dividerRow.dataset.dragScopeKey = anchorDemand ? getDemandDragScopeKey(anchorDemand) : ''
       dividerRow.dataset.quarterKey = anchorDemand ? `${anchorDemand.quarterYear}:${anchorDemand.quarterNumber}` : ''
 
@@ -2063,7 +2181,7 @@ function syncListSectionDividers() {
             const isSimpleEpicHeader = anchorDemand.itemType === 'Epic' && anchorDemand.isSimple
             const epic = isSimpleEpicHeader ? anchorDemand : null
 
-            if (isSimpleEpicHeader && epic && isPlanningCellEditing(epic, 'quarterType')) {
+            if (isSimpleEpicHeader && epic && isPlanningCellEditing(epic, 'quarterType', epicScopeKey)) {
               const container = document.createElement('div')
               container.className = 'relative z-20 flex min-w-0 flex-col gap-1'
               container.style.width = '18rem'
@@ -2138,7 +2256,7 @@ function syncListSectionDividers() {
                 wrap.addEventListener('click', (event) => {
                   event.preventDefault()
                   event.stopPropagation()
-                  activatePlanningCell(epic, 'quarterType')
+                  activatePlanningCell(epic, 'quarterType', epicScopeKey)
                   schedulePlanningGroupedHeaderSync()
                 })
               }
@@ -2210,7 +2328,7 @@ function syncListSectionDividers() {
           // Editable classification badge for the epic (inline, inside the title meta row).
           if (headerMeta && displayEpic) {
             const epic = headerMeta.epic
-            if (isPlanningCellEditing(epic, 'classification')) {
+            if (isPlanningCellEditing(epic, 'classification', epicScopeKey)) {
               const select = document.createElement('select')
               select.className = 'ml-auto min-w-0 shrink-0 rounded-md border border-default bg-default px-1.5 py-0.5 text-[10px] text-highlighted outline-none transition-colors focus:border-primary/40'
               select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
@@ -2241,7 +2359,7 @@ function syncListSectionDividers() {
               classificationBadge.addEventListener('click', (event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                activatePlanningCell(epic, 'classification')
+                activatePlanningCell(epic, 'classification', epicScopeKey)
                 schedulePlanningGroupedHeaderSync()
               })
               metaRow.appendChild(classificationBadge)
@@ -2259,7 +2377,7 @@ function syncListSectionDividers() {
           epicIcon.textContent = '★'
           epicTitleRow.appendChild(epicIcon)
 
-          if (headerMeta && isPlanningCellEditing(headerMeta.epic, 'title')) {
+          if (headerMeta && isPlanningCellEditing(headerMeta.epic, 'title', epicScopeKey)) {
             const epicTitleInput = document.createElement('input')
             epicTitleInput.type = 'text'
             epicTitleInput.value = getPlanningInlineDraft(headerMeta.epic).title
@@ -2296,7 +2414,7 @@ function syncListSectionDividers() {
               if (!headerMeta)
                 return
 
-              activatePlanningCell(headerMeta.epic, 'title')
+              activatePlanningCell(headerMeta.epic, 'title', epicScopeKey)
               schedulePlanningGroupedHeaderSync()
             })
             epicTitleRow.appendChild(epicTitle)
@@ -2362,13 +2480,20 @@ function syncListSectionDividers() {
               epicTitleRow.appendChild(createDepIcon(dep, 'dependedOnBy'))
 
             const epicInconsistentDeps = headerMeta.epic.dependsOn.filter(dep => isDependencyInconsistent(headerMeta.epic, dep))
-            if (epicInconsistentDeps.length > 0) {
-              const epicInconsistencyTooltip = epicInconsistentDeps.map(dep =>
-                `${getDependencyTooltip('É bloqueado por', dep)}\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${headerMeta.epic.quarterLabel}, ou sem priorização.`
-              ).join('\n\n')
+            const epicInconsistentReverseDeps = (headerMeta.epic.dependedOnBy ?? []).filter(dep => isReverseDependencyInconsistent(headerMeta.epic, dep))
+            const totalEpicInconsistentCount = epicInconsistentDeps.length + epicInconsistentReverseDeps.length
+            if (totalEpicInconsistentCount > 0) {
+              const epicInconsistencyTooltip = [
+                ...epicInconsistentDeps.map(dep =>
+                  `${getDependencyTooltip('É bloqueado por', dep)}\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${headerMeta.epic.quarterLabel}, ou sem priorização.`
+                ),
+                ...epicInconsistentReverseDeps.map(dep =>
+                  `${getDependencyTooltip('Bloqueia', dep)}\n\nInconsistência: ${dep.title} está em ${dep.quarterLabel}, antes de ${headerMeta.epic.quarterLabel}.`
+                ),
+              ].join('\n\n')
 
               const inconsistencyBanner = document.createElement('div')
-              inconsistencyBanner.className = 'mt-0.5 flex items-center gap-1 rounded border border-amber-200/70 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/15 dark:text-amber-300/90'
+              inconsistencyBanner.className = 'mt-0.5 flex items-center gap-1 rounded border border-red-300/70 bg-red-50/60 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:border-red-800/50 dark:bg-red-900/15 dark:text-red-300/90'
               inconsistencyBanner.title = epicInconsistencyTooltip
 
               const warnSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
@@ -2399,7 +2524,7 @@ function syncListSectionDividers() {
               inconsistencyBanner.appendChild(bannerText)
 
               const bannerCount = document.createElement('span')
-              bannerCount.textContent = `(${epicInconsistentDeps.length})`
+              bannerCount.textContent = `(${totalEpicInconsistentCount})`
               inconsistencyBanner.appendChild(bannerCount)
 
               titleBlock.appendChild(inconsistencyBanner)
@@ -2483,12 +2608,12 @@ function syncListSectionDividers() {
               triggerBtn.addEventListener('click', (event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                activatePlanningCell(epic, 'products')
+                activatePlanningCell(epic, 'products', epicScopeKey)
                 schedulePlanningGroupedHeaderSync()
               })
               wrapper.appendChild(triggerBtn)
 
-              if (isPlanningCellEditing(epic, 'products')) {
+              if (isPlanningCellEditing(epic, 'products', epicScopeKey)) {
                 const panel = document.createElement('div')
                 panel.className = 'absolute left-0 top-full z-30 mt-1 flex min-w-[14rem] flex-col gap-2 rounded-lg border border-default bg-default p-3 shadow-xl'
                 panel.addEventListener('click', event => event.stopPropagation())
@@ -2597,7 +2722,7 @@ function syncListSectionDividers() {
           if (headerMeta) {
             const epic = headerMeta.epic
             if (epic.isSimple) {
-              if (isPlanningCellEditing(epic, 'hours')) {
+              if (isPlanningCellEditing(epic, 'hours', epicScopeKey)) {
                 const input = document.createElement('input')
                 input.type = 'text'
                 input.inputMode = 'decimal'
@@ -2633,7 +2758,7 @@ function syncListSectionDividers() {
                 btn.addEventListener('click', (event) => {
                   event.preventDefault()
                   event.stopPropagation()
-                  activatePlanningCell(epic, 'hours')
+                  activatePlanningCell(epic, 'hours', epicScopeKey)
                   schedulePlanningGroupedHeaderSync()
                 })
                 cell.appendChild(btn)
@@ -2663,7 +2788,7 @@ function syncListSectionDividers() {
             const statusRow = document.createElement('div')
             statusRow.className = 'flex items-center gap-1.5'
 
-            if (isPlanningCellEditing(epic, 'status')) {
+            if (isPlanningCellEditing(epic, 'status', epicScopeKey)) {
               const select = document.createElement('select')
               select.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
               select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
@@ -2697,7 +2822,7 @@ function syncListSectionDividers() {
               badge.addEventListener('click', (event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                activatePlanningCell(epic, 'status')
+                activatePlanningCell(epic, 'status', epicScopeKey)
                 schedulePlanningGroupedHeaderSync()
               })
               statusRow.appendChild(badge)
@@ -2732,7 +2857,7 @@ function syncListSectionDividers() {
             const container = document.createElement('div')
             container.className = 'flex flex-col gap-1'
 
-            if (isPlanningCellEditing(epic, 'dueDate')) {
+            if (isPlanningCellEditing(epic, 'dueDate', epicScopeKey)) {
               const input = document.createElement('input')
               input.type = 'date'
               input.value = getPlanningInlineDraft(epic).dueDate
@@ -2764,7 +2889,7 @@ function syncListSectionDividers() {
               dueButton.addEventListener('click', (event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                activatePlanningCell(epic, 'dueDate')
+                activatePlanningCell(epic, 'dueDate', epicScopeKey)
                 schedulePlanningGroupedHeaderSync()
               })
 
@@ -2810,7 +2935,7 @@ function syncListSectionDividers() {
             const epic = headerMeta.epic
             const customerDisplay = getPlanningDraftCustomerDisplay(epic)
 
-            if (isPlanningCellEditing(epic, 'customers')) {
+            if (isPlanningCellEditing(epic, 'customers', epicScopeKey)) {
               const wrapper = document.createElement('div')
               wrapper.className = 'relative inline-flex max-w-full'
 
@@ -2955,7 +3080,7 @@ function syncListSectionDividers() {
               trigger.addEventListener('click', (event) => {
                 event.preventDefault()
                 event.stopPropagation()
-                activatePlanningCell(epic, 'customers')
+                activatePlanningCell(epic, 'customers', epicScopeKey)
                 schedulePlanningGroupedHeaderSync()
               })
 
@@ -3776,6 +3901,10 @@ const listColumnSizing = ref<ColumnSizingState>({})
 const listColumnOrder = ref<string[]>([])
 const groupDemandsByEpic = ref(true)
 
+watch(groupDemandsByEpic, (val) => {
+  localStorage.setItem(CACHE_KEY_PLANNING_GROUP_BY_EPIC, JSON.stringify(val))
+})
+
 const listTableRef = useTemplateRef<{
   tableApi: {
     getFilteredRowModel: () => { rows: { original: RoadmapDemand }[] }
@@ -3834,19 +3963,23 @@ const tableDemands = computed(() => {
     })
   })()
 
-  const filtered = !listProblemFilter.value.length
-    ? base
-    : base.filter((demand) => {
-        const problemKeys = getDemandProblemKeys(demand)
-        if (listProblemFilter.value.includes('__all__'))
-          return problemKeys.length > 0
-        return listProblemFilter.value.some(p => problemKeys.includes(p))
-      })
+  const matchesProblemFilter = (item: RoadmapDemand) => {
+    if (!listProblemFilter.value.length)
+      return true
+    const problemKeys = getDemandProblemKeys(item)
+    if (listProblemFilter.value.includes('__all__'))
+      return problemKeys.length > 0
+    return listProblemFilter.value.some(p => problemKeys.includes(p))
+  }
+
+  const filtered = base.filter(matchesProblemFilter)
 
   // Append empty composite epics at the end (in both grouped and non-grouped modes) so they
-  // remain findable. They render under the "Épicos inconsistentes - sem demanda" section.
-  if (emptyCompositeEpics.value.length)
-    return [...filtered, ...emptyCompositeEpics.value]
+  // remain findable. They render under the "Épicos inconsistentes - sem demanda" section,
+  // but still respect the active problem filter.
+  const inconsistentEpics = emptyCompositeEpics.value.filter(matchesProblemFilter)
+  if (inconsistentEpics.length)
+    return [...filtered, ...inconsistentEpics]
 
   return filtered
 })
@@ -4036,6 +4169,9 @@ type PlanningEditableField = 'title' | 'status' | 'classification' | 'quarterTyp
 type PlanningActiveCell = {
   itemId: string
   field: PlanningEditableField
+  // Disambiguates the same epic rendered in more than one quarter section (grouped mode):
+  // only the header instance whose scopeKey matches becomes editable.
+  scopeKey?: string
 }
 const planningInlineDrafts = ref<Record<string, PlanningInlineDraft>>({})
 const planningInlineSavingIds = ref<string[]>([])
@@ -4047,34 +4183,34 @@ const planningStatusModalSnapshot = ref<PlanningInlineDraft | null>(null)
 const visibleListDemandIds = computed(() => visibleListRows.value.map(demand => demand.id))
 const selectedDemands = computed(() => {
   const selectedIds = new Set(selectedDemandIds.value)
-  return demandItems.value.filter(demand => selectedIds.has(demand.id))
+  // In non-grouped mode, simple epics appear as regular rows and get added to selectedDemandIds
+  return demands.value.filter(item =>
+    selectedIds.has(item.id) &&
+    (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple))
+  )
 })
 const selectedPlanningEpics = computed(() => {
   const selectedIds = new Set(selectedEpicIds.value)
   return epicItems.value.filter(epic => selectedIds.has(epic.id))
 })
-const selectedEpicDemands = computed(() => {
-  if (!groupDemandsByEpic.value || !selectedEpicIds.value.length)
-    return []
-
+const selectedSimpleEpics = computed(() => {
+  // Simple epics selected via the epic checkbox (grouped mode)
   const selectedIds = new Set(selectedEpicIds.value)
-  return visibleListRows.value.filter(demand => demand.epicId && selectedIds.has(demand.epicId))
+  return epicItems.value.filter(epic => selectedIds.has(epic.id) && epic.isSimple)
 })
-const selectedPlanningDemands = computed(() => {
+// Items that can be moved to a different quarter: individually selected demands + selected simple epics
+const movablePlanningItems = computed(() => {
   const selectedById = new Map<string, RoadmapDemand>()
-
-  selectedDemands.value.forEach(demand => selectedById.set(demand.id, demand))
-  selectedEpicDemands.value.forEach(demand => selectedById.set(demand.id, demand))
-
+  selectedDemands.value.forEach(item => selectedById.set(item.id, item))
+  selectedSimpleEpics.value.forEach(epic => selectedById.set(epic.id, epic))
   return Array.from(selectedById.values())
 })
-const selectedDemandCount = computed(() => selectedPlanningDemands.value.length)
 const selectedPlanningItems = computed(() => {
   const selectedById = new Map<string, RoadmapDemand>()
-
+  // Epics selected via the epic checkbox (grouped mode headers)
   selectedPlanningEpics.value.forEach(epic => selectedById.set(epic.id, epic))
-  selectedPlanningDemands.value.forEach(demand => selectedById.set(demand.id, demand))
-
+  // Individual demands + simple epics in non-grouped mode
+  selectedDemands.value.forEach(demand => selectedById.set(demand.id, demand))
   return Array.from(selectedById.values())
 })
 const selectedPlanningItemCount = computed(() => selectedPlanningItems.value.length)
@@ -4263,7 +4399,10 @@ function clearListFilters() {
   listColumnFilters.value = []
 }
 function sanitizeSelectedDemands() {
-  const availableIds = new Set(demandItems.value.map(demand => demand.id))
+  const availableIds = new Set([
+    ...demandItems.value.map(demand => demand.id),
+    ...epicItems.value.filter(e => e.isSimple).map(e => e.id)
+  ])
   selectedDemandIds.value = selectedDemandIds.value.filter(id => availableIds.has(id))
 
   const availableEpicIds = new Set(visibleListRows.value.map(demand => demand.epicId).filter((value): value is string => !!value))
@@ -4408,7 +4547,7 @@ function clearAllPlanningInlineDrafts() {
     schedulePlanningGroupedHeaderSync()
 }
 
-function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField) {
+function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField, scopeKey?: string) {
   const epicEditableFields: PlanningEditableField[] = ['title', 'status', 'classification', 'products', 'customers', 'dueDate']
   const simpleEpicEditableFields: PlanningEditableField[] = [...epicEditableFields, 'hours', 'quarterType']
 
@@ -4418,7 +4557,7 @@ function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField)
       [item.id]: ''
     }
 
-    activePlanningCell.value = { itemId: item.id, field }
+    activePlanningCell.value = { itemId: item.id, field, scopeKey }
     return
   }
 
@@ -4427,7 +4566,7 @@ function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField)
     if (!allowedFields.includes(field))
       return
 
-    activePlanningCell.value = { itemId: item.id, field }
+    activePlanningCell.value = { itemId: item.id, field, scopeKey }
     return
   }
 
@@ -4441,7 +4580,7 @@ function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField)
     }
   }
 
-  activePlanningCell.value = { itemId: item.id, field }
+  activePlanningCell.value = { itemId: item.id, field, scopeKey }
 }
 
 function deactivatePlanningCell(itemId?: string, field?: PlanningEditableField) {
@@ -4472,8 +4611,10 @@ function handlePlanningPopoverOpenChange(item: RoadmapDemand, field: Extract<Pla
   deactivatePlanningCell(item.id, field)
 }
 
-function isPlanningCellEditing(item: RoadmapDemand, field: PlanningEditableField) {
-  return activePlanningCell.value?.itemId === item.id && activePlanningCell.value?.field === field
+function isPlanningCellEditing(item: RoadmapDemand, field: PlanningEditableField, scopeKey?: string) {
+  return activePlanningCell.value?.itemId === item.id
+    && activePlanningCell.value?.field === field
+    && (activePlanningCell.value?.scopeKey ?? undefined) === (scopeKey ?? undefined)
 }
 
 function parsePlanningInlineHours(item: RoadmapDemand) {
@@ -4918,7 +5059,7 @@ function buildBulkEditOverrides(demand: RoadmapDemand, changes: BulkEditRoadmapI
   if (Object.prototype.hasOwnProperty.call(changes, 'promisedDate'))
     overrides.promisedDate = changes.promisedDate
 
-  if (demand.itemType === 'Demand') {
+  if (demand.itemType === 'Demand' || (demand.itemType === 'Epic' && demand.isSimple)) {
     if (changes.type)
       overrides.type = changes.type
 
@@ -4984,17 +5125,17 @@ async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: n
 }
 
 async function planSelectedDemandsToQuarter(quarterValue: string) {
-  if (!selectedPlanningDemands.value.length || isBulkPlanning.value)
+  if (!movablePlanningItems.value.length || isBulkPlanning.value)
     return
 
   const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
-  const movedCount = selectedPlanningDemands.value.length
+  const movedCount = movablePlanningItems.value.length
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
   isBulkPlanning.value = true
 
   try {
-    for (const demand of selectedPlanningDemands.value) {
+    for (const demand of movablePlanningItems.value) {
       await roadmapStore.updateDemand(
         demand.id,
         buildDemandFormData(demand, {
@@ -5010,8 +5151,8 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
     selectedDemandIds.value = []
     selectedEpicIds.value = []
     toast.add({
-      title: 'Demandas planejadas no quarter',
-      description: `${movedCount.toLocaleString('pt-BR')} demandas movidas para ${quarterShortLabel(quarterValue)}`,
+      title: 'Itens planejados no quarter',
+      description: `${movedCount.toLocaleString('pt-BR')} ${movedCount === 1 ? 'item movido' : 'itens movidos'} para ${quarterShortLabel(quarterValue)}`,
       color: 'success'
     })
   }
@@ -5646,18 +5787,25 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       }
 
       const inconsistentDeps = d.dependsOn.filter(dep => isDependencyInconsistent(d, dep))
-      if (inconsistentDeps.length > 0) {
-        const tooltipText = inconsistentDeps.map(dep =>
-          `${getDependencyTooltip('É bloqueado por', dep)}\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${d.quarterLabel}, ou sem priorização.`
-        ).join('\n\n')
+      const inconsistentReverseDeps = (d.dependedOnBy ?? []).filter(dep => isReverseDependencyInconsistent(d, dep))
+      const totalInconsistentCount = inconsistentDeps.length + inconsistentReverseDeps.length
+      if (totalInconsistentCount > 0) {
+        const tooltipText = [
+          ...inconsistentDeps.map(dep =>
+            `${getDependencyTooltip('É bloqueado por', dep)}\n\nInconsistência: a demanda vinculada está em ${dep.quarterLabel}, depois de ${d.quarterLabel}, ou sem priorização.`
+          ),
+          ...inconsistentReverseDeps.map(dep =>
+            `${getDependencyTooltip('Bloqueia', dep)}\n\nInconsistência: ${dep.title} está em ${dep.quarterLabel}, antes de ${d.quarterLabel}.`
+          ),
+        ].join('\n\n')
         textNodes.push(
           h('div', {
-            class: 'mt-0.5 flex items-center gap-1 rounded border border-amber-200/70 bg-amber-50/60 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:border-amber-800/50 dark:bg-amber-900/15 dark:text-amber-300/90',
+            class: 'mt-0.5 flex items-center gap-1 rounded border border-red-300/70 bg-red-50/60 px-1.5 py-0.5 text-[10px] font-medium text-red-700 dark:border-red-800/50 dark:bg-red-900/15 dark:text-red-300/90',
             title: tooltipText
           }, [
             h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3 w-3 shrink-0' }),
             h('span', {}, 'Dependência inconsistente'),
-            h('span', {}, `(${inconsistentDeps.length})`)
+            h('span', {}, `(${totalInconsistentCount})`)
           ])
         )
       }
@@ -5674,14 +5822,21 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         const epicForJira = isSimpleEpic ? d : (d.epicId ? itemsById.value.get(d.epicId) ?? null : null)
         const epicJiraNode = epicForJira ? makeJiraNode(epicForJira, 'Épico sem issue Jira — clique para adicionar') : null
 
-        // Demand-level indicators (only when the row is a demand).
-        const problemNode = (!isSimpleEpic && getDemandProblemKeys(d).length)
+        // Problem indicator applies to demands and simple epics; the demand-level jira only to demands.
+        const problemNode = getDemandProblemKeys(d).length
           ? h(UIconComp, { name: 'i-lucide-triangle-alert', class: 'h-3.5 w-3.5 shrink-0 text-warning', title: getDemandProblemTooltip(d) })
           : null
         const demandJiraNode = !isSimpleEpic ? makeJiraNode(d, 'Sem issue Jira — clique para adicionar') : null
 
+        // Simple epics have no demand-level jira; reserve an invisible slot (same size as the
+        // jira button) so the problem icon stays aligned with the rows that DO have one.
+        const jiraSlot = demandJiraNode
+          ?? (isSimpleEpic && problemNode
+            ? h('span', { 'class': 'invisible inline-flex h-5 shrink-0 items-center gap-1 rounded-md border px-1.5', 'aria-hidden': 'true' }, [h(UIconComp, { name: 'i-simple-icons-jira', class: 'h-3 w-3' })])
+            : null)
+
         const topRow = [renderPlanningClassificationBadge(d), epicJiraNode].filter(Boolean)
-        const bottomRow = [problemNode, demandJiraNode].filter(Boolean)
+        const bottomRow = [problemNode, jiraSlot].filter(Boolean)
 
         return h('div', { class: 'flex min-w-0 items-start justify-between gap-2' }, [
           h('div', { class: 'min-w-0 flex-1' }, textNodes),
@@ -6095,9 +6250,18 @@ onUnmounted(() => {
 })
 
 async function initializeRoadmapPage() {
-  filterQuarters.value = [`${currentQuarterNumber}-${currentYear}`]
+  // Restore filters that don't require loaded data first (quarter + display mode).
+  const cachedQuarters = readCacheJson<string[]>(CACHE_KEY_PLANNING_QUARTERS)
+  filterQuarters.value = cachedQuarters?.length ? cachedQuarters : [`${currentQuarterNumber}-${currentYear}`]
+
+  const cachedGroupByEpic = readCacheJson<boolean>(CACHE_KEY_PLANNING_GROUP_BY_EPIC)
+  if (cachedGroupByEpic !== null) groupDemandsByEpic.value = cachedGroupByEpic
 
   await roadmapStore.fetchProjects()
+
+  // Validate cached project IDs against loaded projects.
+  const cachedProjectIds = readCacheJson<string[]>(CACHE_KEY_PLANNING_PROJECTS)
+  filterListProjectIds.value = (cachedProjectIds ?? []).filter(id => projects.value.some(p => p.id === id))
 
   const queryProjectId = typeof route.query.projectId === 'string'
     ? route.query.projectId
@@ -6126,6 +6290,9 @@ watch(() => route.query.view, (value) => {
 
 watch(activeDemandKpiId, async (value) => {
   if (!value) {
+    // Returning from the KPI workspace: refetch so KPI links/measurements (and the resulting
+    // problem flags, e.g. "Concluído sem KPI apurado") are fresh in the planning list.
+    await roadmapStore.fetchDemands()
     collapseAllEpicGroups()
     await nextTick()
     syncListSectionDividers()
@@ -6277,7 +6444,7 @@ watch(activeDemandKpiId, async (value) => {
         </template>
 
         <template v-else>
-          <!-- Projeto -->
+          <!-- Time -->
           <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
             <button class="flex items-center gap-1.5 rounded-lg border border-default bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40">
               <UIcon name="i-lucide-folder-kanban" class="w-3.5 h-3.5 shrink-0 text-muted" />
@@ -6294,7 +6461,7 @@ watch(activeDemandKpiId, async (value) => {
                 >
                   <UIcon v-if="filterListProjectIds.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
                   <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
-                  Todos os projetos
+                  Todos os times
                 </button>
                 <button
                   v-for="project in sortedProjects"
@@ -6474,7 +6641,7 @@ watch(activeDemandKpiId, async (value) => {
       </div>
 
       <div class="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-default pt-3">
-        <UPopover v-if="selectedDemandCount">
+        <UPopover v-if="movablePlanningItems.length">
           <UButton
             size="xs"
             color="primary"
@@ -6483,7 +6650,7 @@ watch(activeDemandKpiId, async (value) => {
             leading-icon="i-lucide-calendar-range"
             :loading="isBulkPlanning"
           >
-            Mover {{ selectedDemandCount.toLocaleString('pt-BR') }} demandas
+            Mover {{ movablePlanningItems.length.toLocaleString('pt-BR') }} {{ movablePlanningItems.length === 1 ? 'item' : 'itens' }}
           </UButton>
           <template #content>
             <div class="max-h-72 w-64 overflow-y-auto py-1">
@@ -7101,7 +7268,7 @@ watch(activeDemandKpiId, async (value) => {
     </template>
 
     <template v-else>
-      <RoadmapHierarchyPage />
+      <RoadmapHierarchyPage v-model:project-ids="filterListProjectIds" />
     </template>
 
     <BulkEditRoadmapItemsModal

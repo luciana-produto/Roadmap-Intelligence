@@ -25,6 +25,7 @@ const props = defineProps<{
   isSaving?: boolean
   selectedItems: RoadmapDemand[]
   dependencyOptions?: DemandDependencyOption[]
+  hideRowColor?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -87,7 +88,9 @@ const selectedQuarter = ref('')
 
 const selectedDemandCount = computed(() => props.selectedItems.filter(item => item.itemType === 'Demand').length)
 const selectedEpicCount = computed(() => props.selectedItems.filter(item => item.itemType === 'Epic').length)
+const selectedSimpleEpicCount = computed(() => props.selectedItems.filter(item => item.itemType === 'Epic' && item.isSimple).length)
 const hasSelectedDemands = computed(() => selectedDemandCount.value > 0)
+const hasTypeQuarterEditable = computed(() => selectedDemandCount.value > 0 || selectedSimpleEpicCount.value > 0)
 const replacementDemandOptions = computed(() => {
   const selectedItemIds = new Set(props.selectedItems.map(item => item.id))
 
@@ -115,7 +118,8 @@ const missingSubmitReason = computed(() => {
   if (!props.selectedItems.length)
     return 'Selecione ao menos um épico ou demanda'
 
-  if (!applyStatus.value && !applyPromisedDate.value && !applyType.value && !applyQuarter.value && !applyRowColor.value)
+  const hasAnyApply = applyStatus.value || applyPromisedDate.value || applyType.value || applyQuarter.value || (!props.hideRowColor && applyRowColor.value)
+  if (!hasAnyApply)
     return 'Selecione ao menos um campo para alterar'
 
   if (applyStatus.value && !status.value)
@@ -133,14 +137,14 @@ const missingSubmitReason = computed(() => {
   if (applyStatus.value && status.value === 'Deprioritized' && !observation.value.trim())
     return 'Preencha a observação da despriorização'
 
-  if (applyType.value && !hasSelectedDemands.value)
-    return 'Não há demandas selecionadas para alterar o tipo'
+  if (applyType.value && !hasTypeQuarterEditable.value)
+    return 'Não há demandas ou épicos simples selecionados para alterar o tipo'
 
   if (applyType.value && !type.value)
     return 'Selecione o tipo da demanda'
 
-  if (applyQuarter.value && !hasSelectedDemands.value)
-    return 'Não há demandas selecionadas para alterar o quarter'
+  if (applyQuarter.value && !hasTypeQuarterEditable.value)
+    return 'Não há demandas ou épicos simples selecionados para alterar o quarter'
 
   if (applyQuarter.value && !selectedQuarter.value)
     return 'Selecione o quarter das demandas'
@@ -175,8 +179,8 @@ watch(() => props.open, (open) => {
   resetState()
 })
 
-watch(hasSelectedDemands, (hasDemands) => {
-  if (hasDemands)
+watch(hasTypeQuarterEditable, (hasEditable) => {
+  if (hasEditable)
     return
 
   applyType.value = false
@@ -274,7 +278,7 @@ function handleSubmit() {
       <div class="space-y-4 p-4">
         <div class="rounded-2xl bg-elevated/35 px-4 py-3 text-sm text-muted shadow-sm ring-1 ring-inset ring-default/60">
           <p class="text-highlighted">As alterações serão aplicadas igualmente aos itens selecionados.</p>
-          <p v-if="hasSelectedDemands" class="mt-1">Quarter e tipo continuam restritos apenas às demandas.</p>
+          <p v-if="hasTypeQuarterEditable" class="mt-1">Quarter e tipo se aplicam às demandas e épicos simples selecionados.</p>
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
@@ -333,13 +337,13 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="!hasSelectedDemands ? 'opacity-60' : ''">
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="!hasTypeQuarterEditable ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Tipo da demanda</p>
-                <p class="text-xs text-muted">Aplicado apenas às demandas selecionadas.</p>
+                <p class="text-xs text-muted">Aplicado às demandas e épicos simples selecionados.</p>
               </div>
-              <USwitch v-model="applyType" :disabled="!hasSelectedDemands" />
+              <USwitch v-model="applyType" :disabled="!hasTypeQuarterEditable" />
             </div>
 
             <UFormField v-if="applyType" label="Novo tipo" required>
@@ -347,13 +351,13 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="!hasSelectedDemands ? 'opacity-60' : ''">
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="!hasTypeQuarterEditable ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Quarter da demanda</p>
-                <p class="text-xs text-muted">Aplicado apenas às demandas selecionadas.</p>
+                <p class="text-xs text-muted">Aplicado às demandas e épicos simples selecionados.</p>
               </div>
-              <USwitch v-model="applyQuarter" :disabled="!hasSelectedDemands" />
+              <USwitch v-model="applyQuarter" :disabled="!hasTypeQuarterEditable" />
             </div>
 
             <UFormField v-if="applyQuarter" label="Novo quarter" required>
@@ -361,7 +365,7 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3">
+          <div v-if="!hideRowColor" class="space-y-3 rounded-xl border border-default bg-default p-3">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Cor da linha</p>

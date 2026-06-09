@@ -120,7 +120,8 @@ export function buildUpdateDemandPayload(id: string, payload: DemandFormData) {
     ...buildSharedDemandMutationPayload(payload),
     status: payload.status ?? 'Backlog',
     observation: payload.observation || undefined,
-    deliveryDate: payload.deliveryDate || undefined
+    deliveryDate: payload.deliveryDate || undefined,
+    removedDependedOnByIds: payload.removedDependedOnByIds ?? []
   }
 }
 

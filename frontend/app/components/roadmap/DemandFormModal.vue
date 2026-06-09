@@ -182,6 +182,17 @@ const showRestFields = computed(() => {
   return (form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId
 })
 
+// Progressive disclosure for demand creation
+const showDemandEpicPaiField = computed(() =>
+  isDemand.value && (isEdit.value || !!form.projectId)
+)
+const showDemandProductField = computed(() =>
+  isDemand.value && (isEdit.value || !!form.parentDemandId)
+)
+const showDemandRestAfterProduct = computed(() =>
+  isDemand.value && (isEdit.value || form.productIds.length > 0)
+)
+
 function setSingleEpicProject(projectId?: string) {
   form.projectIds = projectId ? [projectId] : []
   // Simple epics derive products from the single project — drop products that no longer apply.
@@ -443,7 +454,7 @@ const parentSelectorLabel = computed(() => {
     return selectedParentOption.value.label
 
   if (isEpic.value && !selectedProjectNames.value.length)
-    return 'Selecione os projetos primeiro'
+    return 'Selecione os times primeiro'
 
   return isEpic.value ? 'Selecione o roadmap pai' : 'Selecione o épico pai'
 })
@@ -455,6 +466,17 @@ const measurementSavingKpiId = ref<string | null>(null)
 const measurementDeletingId = ref<string | null>(null)
 const tradeOffDeletingId = ref<string | null>(null)
 const removedTradeOffIds = ref<string[]>([])
+const removedDependedOnByIds = ref<string[]>([])
+
+// "Este item bloqueia" links the user has marked for removal are hidden immediately.
+const visibleDependedOnBy = computed(() =>
+  (props.demand?.dependedOnBy ?? []).filter(dep => !removedDependedOnByIds.value.includes(dep.demandId))
+)
+
+function removeDependedOnBy(demandId: string) {
+  if (!removedDependedOnByIds.value.includes(demandId))
+    removedDependedOnByIds.value = [...removedDependedOnByIds.value, demandId]
+}
 const epicOptionsByProjectId = ref<Record<string, EpicParentOption[]>>({})
 
 function mapEpicParentOptions(items: RoadmapDemand[]): EpicParentOption[] {
@@ -746,6 +768,7 @@ watch(
     if (!open) return
 
     removedTradeOffIds.value = []
+    removedDependedOnByIds.value = []
 
     activeTab.value = 'general'
     showSubmitHint.value = false
@@ -1014,12 +1037,23 @@ const selectedNonDemandProjects = computed(() =>
 const nonDemandProjectsLabel = computed(() => {
   const count = selectedNonDemandProjects.value.length
   if (!count)
-    return 'Selecione os projetos'
+    return 'Selecione os times'
 
   if (count === 1)
     return selectedNonDemandProjects.value[0]!.name
 
-  return `${count} projetos`
+  return `${count} times`
+})
+
+const demandProductsLabel = computed(() => {
+  const selected = productsForProject.value.filter(product => form.productIds.includes(product.id))
+  if (!selected.length)
+    return productsForProject.value.length ? 'Selecione os produtos' : 'Selecione um time primeiro'
+
+  if (selected.length === 1)
+    return selected[0]!.name
+
+  return `${selected.length} produtos`
 })
 
 function setCustomerTags(tags: string[]) {
@@ -1508,24 +1542,25 @@ const missingSubmitReason = computed(() => {
     return 'Selecione o tipo do item'
   if (showEpicModeSelection.value)
     return 'Selecione o modo do épico'
+  // For demands: validate in progressive-disclosure order (Time → Epic → Product → Title → rest)
+  if (isDemand.value && !form.projectId)
+    return 'Selecione o time'
+  if (isDemand.value && !form.parentDemandId)
+    return 'Selecione o épico pai'
+  if (isDemand.value && form.productIds.length === 0)
+    return 'Selecione ao menos um produto'
   if (!form.title)
     return `Informe o título ${isRoadmap.value ? 'do roadmap' : isEpic.value ? 'do épico' : 'da demanda'}`
   if (!isDemand.value && !(form.projectIds?.length ?? 0))
-    return 'Selecione ao menos um projeto'
-  if (!isRoadmap.value && !form.parentDemandId)
-    return isEpic.value ? 'Selecione o roadmap pai' : 'Selecione o épico pai'
-  if (isDemand.value && !form.projectId)
-    return 'Selecione o projeto'
+    return 'Selecione ao menos um time'
+  if (!isRoadmap.value && !isDemand.value && !form.parentDemandId)
+    return 'Selecione o roadmap pai'
   if (isDemand.value && (form.quarterYear == null || form.quarterNumber == null))
     return 'Selecione o quarter'
   if (isSimpleEpic.value && (form.quarterYear == null || form.quarterNumber == null))
     return 'Selecione o quarter do épico'
   if (isEpic.value && !form.classification)
     return 'Selecione a classificação'
-  if (isEpic.value && form.problemClarity == null)
-    return 'Informe a nota de clareza'
-  if (isDemand.value && form.productIds.length === 0)
-    return 'Selecione ao menos um produto'
   if (isSimpleEpic.value && form.productIds.length === 0)
     return 'Selecione ao menos um produto para o épico'
   if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
@@ -1611,6 +1646,7 @@ async function handleSubmit() {
   emit('submit', {
     ...form,
     itemType: form.itemType,
+    removedDependedOnByIds: removedDependedOnByIds.value,
     projectId: form.projectId || undefined,
     projectIds: form.itemType === 'Demand' ? [] : (form.projectIds ?? []),
     quarterYear: normalizedQuarterYear,
@@ -1670,7 +1706,7 @@ async function handleSubmit() {
               />
             </UFormField>
 
-            <UFormField v-if="showProjectsField" :label="isSimpleEpic ? 'Projeto' : 'Projetos'" required>
+            <UFormField v-if="showProjectsField" :label="isSimpleEpic || isDemand ? 'Time' : 'Times'" required>
               <USelect
                 v-if="isDemand"
                 v-model="form.projectId"
@@ -1739,8 +1775,8 @@ async function handleSubmit() {
                 <div class="min-w-80 space-y-2 p-2">
                   <div class="flex items-center justify-between gap-3 rounded-lg border border-default bg-elevated/40 px-2.5 py-2">
                     <div class="min-w-0">
-                      <p class="text-xs font-medium text-highlighted">Buscar roadmaps de outros projetos</p>
-                      <p class="text-[11px] text-muted">Desmarcado: mostra apenas os roadmaps dos projetos selecionados.</p>
+                      <p class="text-xs font-medium text-highlighted">Buscar roadmaps de outros times</p>
+                      <p class="text-[11px] text-muted">Desmarcado: mostra apenas os roadmaps dos times selecionados.</p>
                     </div>
                     <USwitch v-model="includeCrossProjectRoadmaps" />
                   </div>
@@ -1770,10 +1806,10 @@ async function handleSubmit() {
 
                     <p v-if="!filteredParentOptions.length" class="px-2.5 py-3 text-xs italic text-muted">
                       {{ !selectedProjectNames.length
-                        ? 'Selecione ao menos um projeto para buscar roadmaps.'
+                        ? 'Selecione ao menos um time para buscar roadmaps.'
                         : includeCrossProjectRoadmaps
                           ? 'Nenhum roadmap encontrado na busca atual.'
-                          : 'Nenhum roadmap encontrado para os projetos selecionados. Ative a busca em outros projetos para ampliar a lista.' }}
+                          : 'Nenhum roadmap encontrado para os times selecionados. Ative a busca em outros times para ampliar a lista.' }}
                     </p>
                   </div>
                 </div>
@@ -1812,95 +1848,105 @@ async function handleSubmit() {
           </div>
 
           <div v-if="showRestFields" class="space-y-3">
-          <UFormField v-if="isDemand" label="Épico pai" required>
-            <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-              <UButton
-                type="button"
-                variant="outline"
-                color="neutral"
-                trailing-icon="i-lucide-chevron-down"
-                class="w-full justify-between"
-              >
-                <span class="truncate">{{ parentSelectorLabel }}</span>
-              </UButton>
+          <!-- Step 2+3: Épico pai and Produto (progressive disclosure) -->
+          <div v-if="showDemandEpicPaiField" class="grid gap-3" :class="showDemandProductField ? 'md:grid-cols-2' : ''">
+            <UFormField label="Épico pai" required>
+              <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                <UButton
+                  type="button"
+                  variant="outline"
+                  color="neutral"
+                  trailing-icon="i-lucide-chevron-down"
+                  class="w-full justify-between"
+                >
+                  <span class="truncate">{{ parentSelectorLabel }}</span>
+                </UButton>
 
-              <template #content>
-                <div class="min-w-80 space-y-2 p-2">
-                  <div class="flex items-center justify-between gap-3 rounded-lg border border-default bg-elevated/40 px-2.5 py-2">
-                    <div class="min-w-0">
-                      <p class="text-xs font-medium text-highlighted">Buscar épicos de outros projetos</p>
-                      <p class="text-[11px] text-muted">Desmarcado: mostra apenas os épicos do projeto selecionado.</p>
-                    </div>
-                    <USwitch v-model="includeCrossProjectEpics" />
-                  </div>
-
-                  <UInput
-                    v-model="parentSearch"
-                    icon="i-lucide-search"
-                    placeholder="Buscar épico pai"
-                    class="w-full"
-                  />
-
-                  <div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-default bg-default p-1">
-                    <button
-                      v-for="option in filteredParentOptions"
-                      :key="option.value"
-                      type="button"
-                      class="flex w-full items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-elevated"
-                      :class="form.parentDemandId === option.value ? 'bg-primary/5 text-primary' : 'text-highlighted'"
-                      @click="form.parentDemandId = option.value"
-                    >
+                <template #content>
+                  <div class="min-w-80 space-y-2 p-2">
+                    <div class="flex items-center justify-between gap-3 rounded-lg border border-default bg-elevated/40 px-2.5 py-2">
                       <div class="min-w-0">
-                        <p class="truncate text-sm font-medium">{{ option.label }}</p>
-                        <p v-if="option.description" class="truncate text-xs text-muted">{{ option.description }}</p>
+                        <p class="text-xs font-medium text-highlighted">Buscar épicos de outros times</p>
+                        <p class="text-[11px] text-muted">Desmarcado: mostra apenas os épicos do time selecionado.</p>
                       </div>
-                      <UIcon v-if="form.parentDemandId === option.value" name="i-lucide-check" class="mt-0.5 h-4 w-4 shrink-0" />
-                    </button>
+                      <USwitch v-model="includeCrossProjectEpics" />
+                    </div>
 
-                    <p v-if="!filteredParentOptions.length" class="px-2.5 py-3 text-xs italic text-muted">
-                      {{ !form.projectId
-                        ? 'Selecione um projeto para buscar épicos.'
-                        : includeCrossProjectEpics
-                          ? 'Nenhum épico encontrado na busca atual.'
-                          : 'Nenhum épico encontrado para o projeto selecionado. Ative a busca em outros projetos para ampliar a lista.' }}
+                    <UInput
+                      v-model="parentSearch"
+                      icon="i-lucide-search"
+                      placeholder="Buscar épico pai"
+                      class="w-full"
+                    />
+
+                    <div class="max-h-64 space-y-1 overflow-y-auto rounded-lg border border-default bg-default p-1">
+                      <button
+                        v-for="option in filteredParentOptions"
+                        :key="option.value"
+                        type="button"
+                        class="flex w-full items-start justify-between gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                        :class="form.parentDemandId === option.value ? 'bg-primary/5 text-primary' : 'text-highlighted'"
+                        @click="form.parentDemandId = option.value"
+                      >
+                        <div class="min-w-0">
+                          <p class="truncate text-sm font-medium">{{ option.label }}</p>
+                          <p v-if="option.description" class="truncate text-xs text-muted">{{ option.description }}</p>
+                        </div>
+                        <UIcon v-if="form.parentDemandId === option.value" name="i-lucide-check" class="mt-0.5 h-4 w-4 shrink-0" />
+                      </button>
+
+                      <p v-if="!filteredParentOptions.length" class="px-2.5 py-3 text-xs italic text-muted">
+                        {{ !form.projectId
+                          ? 'Selecione um time para buscar épicos.'
+                          : includeCrossProjectEpics
+                            ? 'Nenhum épico encontrado na busca atual.'
+                            : 'Nenhum épico encontrado para o time selecionado. Ative a busca em outros times para ampliar a lista.' }}
+                      </p>
+                    </div>
+                  </div>
+                </template>
+              </UPopover>
+            </UFormField>
+
+            <UFormField v-if="showDemandProductField" label="Produto" required>
+              <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                <UButton
+                  type="button"
+                  variant="outline"
+                  color="neutral"
+                  trailing-icon="i-lucide-chevron-down"
+                  class="w-full justify-between"
+                  :disabled="!productsForProject.length"
+                >
+                  <span class="truncate">{{ demandProductsLabel }}</span>
+                </UButton>
+
+                <template #content>
+                  <div class="min-w-72 space-y-1 p-2">
+                    <label
+                      v-for="product in productsForProject"
+                      :key="product.id"
+                      class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-highlighted transition-colors hover:bg-elevated"
+                    >
+                      <input
+                        type="checkbox"
+                        class="h-4 w-4 accent-primary"
+                        :checked="form.productIds.includes(product.id)"
+                        @change="(event) => toggleProduct(product.id, (event.target as HTMLInputElement).checked)"
+                      >
+                      <span class="truncate">{{ product.name }}</span>
+                    </label>
+
+                    <p v-if="!productsForProject.length" class="px-2.5 py-3 text-xs italic text-muted">
+                      Selecione um time primeiro.
                     </p>
                   </div>
-                </div>
-              </template>
-            </UPopover>
-          </UFormField>
+                </template>
+              </UPopover>
+            </UFormField>
+          </div>
 
-          <UFormField v-if="isDemand" label="Produto" required>
-            <div
-              v-if="productsForProject.length"
-              class="flex flex-wrap gap-2 rounded-lg border border-default bg-elevated p-3"
-            >
-              <label
-                v-for="product in productsForProject"
-                :key="product.id"
-                class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors select-none hover:bg-default"
-                :class="form.productIds.includes(product.id)
-                  ? 'bg-primary/10 border border-primary/30'
-                  : 'border border-transparent'"
-              >
-                <input
-                  type="checkbox"
-                  :value="product.id"
-                  :checked="form.productIds.includes(product.id)"
-                  class="h-3.5 w-3.5 accent-primary"
-                  @change="(e) => toggleProduct(product.id, (e.target as HTMLInputElement).checked)"
-                >
-                <span class="text-sm">{{ product.name }}</span>
-              </label>
-            </div>
-            <p
-              v-else
-              class="text-xs italic text-muted"
-            >
-              Selecione um projeto primeiro.
-            </p>
-          </UFormField>
-
+          <template v-if="!isDemand || showDemandRestAfterProduct">
           <UFormField label="Título" required>
             <UInput
               v-model="form.title"
@@ -2021,11 +2067,11 @@ async function handleSubmit() {
               </label>
             </div>
             <p v-else class="text-xs italic text-muted">
-              Selecione ao menos um projeto primeiro.
+              Selecione ao menos um time primeiro.
             </p>
           </UFormField>
 
-          <div v-if="isEpic" class="grid gap-3 md:grid-cols-3">
+          <div v-if="isEpic && !isSimpleEpic" class="grid gap-3 md:grid-cols-2">
             <UFormField label="Classificação" required>
               <USelect
                 v-model="form.classification"
@@ -2042,43 +2088,16 @@ async function handleSubmit() {
                 class="w-full"
               />
             </UFormField>
-
-            <div class="relative pt-6">
-              <div class="absolute inset-x-0 top-0 flex items-center justify-between gap-2 text-sm leading-none">
-                <span class="font-medium text-highlighted">
-                  Nota de clareza <span class="text-error">*</span>
-                </span>
-                <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
-                  <UButton
-                    type="button"
-                    icon="i-lucide-circle-help"
-                    variant="ghost"
-                    color="neutral"
-                    size="xs"
-                    class="h-4 min-h-0 w-4 min-w-0 p-0"
-                    aria-label="Explicar clareza do problema"
-                  />
-                  <template #content>
-                    <div class="max-w-sm p-4 text-sm text-highlighted">
-                      Clareza do Problema: Sabemos qual problema estamos resolvendo - ou so estamos construindo alguma coisa?
-                    </div>
-                  </template>
-                </UPopover>
-              </div>
-              <div>
-                <UInput
-                  :model-value="form.problemClarity ?? ''"
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="1"
-                  placeholder="0 a 10"
-                  class="w-full"
-                  @update:model-value="updateProblemClarity"
-                />
-              </div>
-            </div>
           </div>
+
+          <UFormField v-if="isSimpleEpic" label="Classificação" required>
+            <USelect
+              v-model="form.classification"
+              :items="classificationOptions"
+              placeholder="Selecione"
+              class="w-full"
+            />
+          </UFormField>
 
           <div v-if="isRoadmap" class="grid gap-3 md:grid-cols-2">
             <UFormField label="Status">
@@ -2198,6 +2217,7 @@ async function handleSubmit() {
             </div>
           </UFormField>
 
+          </template>
           </div>
         </section>
 
@@ -2207,6 +2227,28 @@ async function handleSubmit() {
             <p class="mt-1 text-xs text-muted">
               Relacione demandas que precisam ser concluídas antes deste item seguir adiante.
             </p>
+          </div>
+
+          <div v-if="visibleDependedOnBy.length" class="space-y-1">
+            <p class="text-xs font-medium text-muted uppercase tracking-wide">Este item bloqueia</p>
+            <div class="flex flex-wrap gap-2">
+              <span
+                v-for="dep in visibleDependedOnBy"
+                :key="dep.demandId"
+                class="inline-flex items-center gap-1 rounded-full border border-orange-200/70 bg-orange-50/60 px-2 py-1 text-xs text-orange-700 dark:border-orange-800/50 dark:bg-orange-900/15 dark:text-orange-300/90"
+              >
+                <UIcon name="i-lucide-lock" class="h-3 w-3 shrink-0" />
+                {{ dep.projectName }} · {{ dep.title }}
+                <button
+                  type="button"
+                  class="inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-orange-200/60 dark:hover:bg-orange-800/40"
+                  title="Remover este vínculo de bloqueio"
+                  @click="removeDependedOnBy(dep.demandId)"
+                >
+                  <UIcon name="i-lucide-x" class="h-3 w-3" />
+                </button>
+              </span>
+            </div>
           </div>
 
           <div class="space-y-2">

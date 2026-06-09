@@ -186,6 +186,7 @@ export interface DemandFormData {
   customers?: string[]
   customerRenames?: CustomerRename[]
   dependencyDemandIds?: string[]
+  removedDependedOnByIds?: string[]
   isBlocked?: boolean
   blockedReason?: string
   promisedDate?: string

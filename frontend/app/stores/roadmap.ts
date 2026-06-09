@@ -130,6 +130,19 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     return true
   }
 
+  function refreshDependencySnapshotsFor(updatedDemand: RoadmapDemand) {
+    const { id, quarterYear, quarterNumber, quarterLabel, status } = updatedDemand
+    for (const demand of demands.value) {
+      if (demand.id === id) continue
+      const depIdx = demand.dependsOn.findIndex(dep => dep.demandId === id)
+      if (depIdx >= 0)
+        demand.dependsOn[depIdx] = { ...demand.dependsOn[depIdx]!, quarterYear, quarterNumber, quarterLabel, status }
+      const rDepIdx = demand.dependedOnBy.findIndex(dep => dep.demandId === id)
+      if (rDepIdx >= 0)
+        demand.dependedOnBy[rDepIdx] = { ...demand.dependedOnBy[rDepIdx]!, quarterYear, quarterNumber, quarterLabel, status }
+    }
+  }
+
   function applyUpdatedDemandState(updatedDemand: RoadmapDemand) {
     const existingIndex = demands.value.findIndex(demand => demand.id === updatedDemand.id)
     const isVisible = isDemandVisibleInCurrentStoreScope(updatedDemand)
@@ -139,6 +152,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
         demands.value.splice(existingIndex, 1)
 
       upsertDependencyOptionFromDemand(updatedDemand)
+      refreshDependencySnapshotsFor(updatedDemand)
       sortDemandsInStore()
       return
     }
@@ -146,12 +160,14 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     if (existingIndex >= 0) {
       demands.value.splice(existingIndex, 1, updatedDemand)
       upsertDependencyOptionFromDemand(updatedDemand)
+      refreshDependencySnapshotsFor(updatedDemand)
       sortDemandsInStore()
       return
     }
 
     demands.value.push(updatedDemand)
     upsertDependencyOptionFromDemand(updatedDemand)
+    refreshDependencySnapshotsFor(updatedDemand)
     sortDemandsInStore()
   }
 
@@ -310,8 +326,21 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       body as unknown as Record<string, unknown>
     )
 
-    if (res.data)
+    if (res.data) {
       applyUpdatedDemandState(res.data)
+
+      // "Este item bloqueia" links removed from the blocker's form: drop the matching
+      // dependsOn entry on each dependent demand so the change reflects without a reload.
+      const removedDependedOnByIds = payload.removedDependedOnByIds ?? []
+      if (removedDependedOnByIds.length) {
+        const blockerId = res.data.id
+        for (const dependent of demands.value) {
+          if (!removedDependedOnByIds.includes(dependent.id)) continue
+          const idx = dependent.dependsOn.findIndex(dep => dep.demandId === blockerId)
+          if (idx >= 0) dependent.dependsOn.splice(idx, 1)
+        }
+      }
+    }
 
     customerSuggestions.value = [...new Set([
       ...customerSuggestions.value,
