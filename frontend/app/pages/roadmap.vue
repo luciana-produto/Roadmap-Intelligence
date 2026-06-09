@@ -1527,7 +1527,11 @@ async function handleEpicSortEnd(item: HTMLElement) {
           : null
       })()
     : null
-  const targetQuarterRef = targetQuarter ?? (fallbackQuarterRef
+  // The DOM walk-back is the most reliable signal of the quarter the row was dropped into:
+  // it disambiguates "last row of a quarter" from "first row of the next quarter", which the
+  // onMove-provided targetQuarterKey gets wrong at section boundaries.
+  const walkedQuarter = parseQuarterKey(resolveDropQuarterKey(item))
+  const targetQuarterRef = walkedQuarter ?? targetQuarter ?? (fallbackQuarterRef
     ? { quarterYear: fallbackQuarterRef.quarterYear, quarterNumber: fallbackQuarterRef.quarterNumber }
     : null)
   if (!targetQuarterRef)
@@ -1727,17 +1731,21 @@ async function handleListSortEnd(item: HTMLElement) {
 
   const remainingRows = visibleRows.filter((_, index) => index !== oldIndex)
 
-  // Determine target quarter from drop position
-  const rowAtNewIndex = remainingRows[newIndex]
-  const rowBeforeNewIndex = newIndex > 0 ? remainingRows[newIndex - 1] : null
-  const targetQuarterRef = rowAtNewIndex ?? rowBeforeNewIndex
+  // Determine target quarter from the dropped row's real DOM position. The walk-back reads
+  // the quarter of the nearest data row / quarter divider above the drop point, which
+  // correctly resolves "last row of a quarter" (just above the next quarter's divider)
+  // instead of wrongly switching to the next quarter. Fall back to the flat-index neighbor.
+  const fallbackQuarterRow = remainingRows[newIndex] ?? (newIndex > 0 ? remainingRows[newIndex - 1] : null)
+  const targetQuarter = parseQuarterKey(resolveDropQuarterKey(item))
+    ?? (fallbackQuarterRow
+      ? { quarterYear: fallbackQuarterRow.quarterYear, quarterNumber: fallbackQuarterRow.quarterNumber }
+      : null)
 
-  if (!targetQuarterRef) {
-    await roadmapStore.fetchDemands()
+  if (!targetQuarter) {
+    await forceListRerender()
     return
   }
 
-  const targetQuarter = { quarterYear: targetQuarterRef.quarterYear, quarterNumber: targetQuarterRef.quarterNumber }
   const quarterChanged = demand.quarterYear !== targetQuarter.quarterYear || demand.quarterNumber !== targetQuarter.quarterNumber
 
   listSorting.value = []
@@ -1859,23 +1867,34 @@ function initListSortable() {
       return dragged?.dataset.dragScopeKey === related.dataset.dragScopeKey
     },
     onEnd: async (event) => {
+      const scrollTop = listScrollContainerRef.value?.scrollTop ?? null
+      const scrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
       const draggedItem = event.item as HTMLElement | null
-      if (draggedItem?.dataset.anchorDemandId) {
-        await handleEpicSortEnd(draggedItem)
-        delete draggedItem.dataset.targetQuarterKey
-        delete draggedItem.dataset.targetDemandId
-        delete draggedItem.dataset.targetInsertAfter
-        return
+
+      try {
+        if (draggedItem?.dataset.anchorDemandId) {
+          await handleEpicSortEnd(draggedItem)
+          delete draggedItem.dataset.targetQuarterKey
+          delete draggedItem.dataset.targetDemandId
+          delete draggedItem.dataset.targetInsertAfter
+          return
+        }
+
+        const oldIndex = event.oldDraggableIndex ?? event.oldIndex
+        const newIndex = event.newDraggableIndex ?? event.newIndex
+
+        if (oldIndex == null || newIndex == null || oldIndex === newIndex)
+          return
+
+        if (draggedItem)
+          await handleListSortEnd(draggedItem)
       }
-
-      const oldIndex = event.oldDraggableIndex ?? event.oldIndex
-      const newIndex = event.newDraggableIndex ?? event.newIndex
-
-      if (oldIndex == null || newIndex == null || oldIndex === newIndex)
-        return
-
-      if (draggedItem)
-        handleListSortEnd(draggedItem)
+      finally {
+        // Always rebuild the DOM from the model after a drop. Successful reorders self-heal
+        // via the data-hash watcher, but no-op drops and early returns would otherwise leave
+        // SortableJS's DOM mutation stuck on screen.
+        await forceListRerender(scrollTop, scrollLeft)
+      }
     }
   })
 }
@@ -5122,6 +5141,14 @@ async function refreshListPresentation(scrollTop?: number | null, scrollLeft?: n
     listScrollContainerRef.value.scrollLeft = scrollLeft ?? 0
     syncListHeaderScroll()
   }
+}
+
+// Forces the planning table to remount and rebuild the DOM in model order. Needed after a
+// drag that didn't change the data (a no-op drop): SortableJS already mutated the DOM, but
+// the data-hash watcher won't fire, so the moved row would otherwise stay stuck out of place.
+async function forceListRerender(scrollTop?: number | null, scrollLeft?: number | null) {
+  planningGroupedRenderNonce.value++
+  await refreshListPresentation(scrollTop, scrollLeft)
 }
 
 async function planSelectedDemandsToQuarter(quarterValue: string) {
