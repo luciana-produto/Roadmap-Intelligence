@@ -2007,7 +2007,8 @@ function syncListSectionDividers() {
       return
     }
 
-    const isCollapsedRow = groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+    const isCollapsedRow = groupDemandsByEpic.value && !!demand.epicId
+      && collapsedEpicIds.value.includes(epicQuarterKey(demand.epicId, demand.quarterYear, demand.quarterNumber))
     // Epic rows (simple epics and empty composite epics) in grouped mode are represented by
     // their group header; hide the redundant table row.
     const isEpicHeaderRow = groupDemandsByEpic.value && demand.itemType === 'Epic'
@@ -2359,7 +2360,7 @@ function syncListSectionDividers() {
             toggleButton.addEventListener('click', (event) => {
               event.preventDefault()
               event.stopPropagation()
-              toggleEpicCollapse(config.epicId)
+              toggleEpicCollapse(config.epicId, anchorDemand?.quarterYear, anchorDemand?.quarterNumber)
             })
 
             const toggleIcon = document.createElement('span')
@@ -3523,7 +3524,7 @@ function promptConvertEpicToSimple(epic: RoadmapDemand) {
 function openListView() {
   roadmapStore.selectProject(null)
   groupDemandsByEpic.value = true
-  collapsedEpicIds.value = [...visibleEpicIds.value]
+  collapsedEpicIds.value = [...visibleEpicQuarterKeys.value]
   hasInitializedCollapsedEpicIds.value = true
 
   navigateTo({ path: '/roadmap' })
@@ -3985,14 +3986,16 @@ const listTableRef = useTemplateRef<{
 const collapsedEpicIds = ref<string[]>([])
 const hasInitializedCollapsedEpicIds = ref(false)
 
-const visibleEpicIds = computed(() => {
+// Collapse state is keyed per (epic + quarter): the same epic spanning Q1/Q2 has an independent
+// collapse state in each quarter, so expanding it in one quarter doesn't expand the other.
+const visibleEpicQuarterKeys = computed(() => {
   if (!groupDemandsByEpic.value)
     return []
 
   return Array.from(new Set(
     quarterFilteredDemands.value
-      .map(demand => demand.epicId)
-      .filter((value): value is string => !!value)
+      .filter(demand => !!demand.epicId)
+      .map(demand => epicQuarterKey(demand.epicId!, demand.quarterYear, demand.quarterNumber))
   ))
 })
 
@@ -4070,23 +4073,25 @@ const epicMinSortOrderById = computed(() => {
 })
 
 function isCollapsedRepresentative(demand: RoadmapDemand) {
-  return groupDemandsByEpic.value && !!demand.epicId && collapsedEpicIds.value.includes(demand.epicId)
+  return groupDemandsByEpic.value && !!demand.epicId
+    && collapsedEpicIds.value.includes(epicQuarterKey(demand.epicId, demand.quarterYear, demand.quarterNumber))
 }
 
-function toggleEpicCollapse(epicId?: string) {
-  if (!epicId)
+function toggleEpicCollapse(epicId?: string, quarterYear?: number, quarterNumber?: number) {
+  if (!epicId || quarterYear == null || quarterNumber == null)
     return
 
-  if (collapsedEpicIds.value.includes(epicId)) {
-    collapsedEpicIds.value = collapsedEpicIds.value.filter(id => id !== epicId)
+  const key = epicQuarterKey(epicId, quarterYear, quarterNumber)
+  if (collapsedEpicIds.value.includes(key)) {
+    collapsedEpicIds.value = collapsedEpicIds.value.filter(existing => existing !== key)
     return
   }
 
-  collapsedEpicIds.value = [...collapsedEpicIds.value, epicId]
+  collapsedEpicIds.value = [...collapsedEpicIds.value, key]
 }
 
 function collapseAllEpicGroups() {
-  collapsedEpicIds.value = [...visibleEpicIds.value]
+  collapsedEpicIds.value = [...visibleEpicQuarterKeys.value]
 }
 
 function expandAllEpicGroups() {
@@ -4097,21 +4102,26 @@ const areAllEpicGroupsCollapsed = computed(() => {
   if (!groupDemandsByEpic.value)
     return false
 
-  return visibleEpicIds.value.length > 0 && visibleEpicIds.value.every(epicId => collapsedEpicIds.value.includes(epicId))
+  return visibleEpicQuarterKeys.value.length > 0
+    && visibleEpicQuarterKeys.value.every(key => collapsedEpicIds.value.includes(key))
 })
 
 watch(quarterFilteredDemands, (demands) => {
-  const availableEpicIds = new Set(demands.map(demand => demand.epicId).filter((value): value is string => !!value))
+  const availableKeys = new Set(
+    demands
+      .filter(demand => !!demand.epicId)
+      .map(demand => epicQuarterKey(demand.epicId!, demand.quarterYear, demand.quarterNumber))
+  )
   if (!hasInitializedCollapsedEpicIds.value) {
-    if (availableEpicIds.size === 0)
+    if (availableKeys.size === 0)
       return
 
-    collapsedEpicIds.value = Array.from(availableEpicIds)
+    collapsedEpicIds.value = Array.from(availableKeys)
     hasInitializedCollapsedEpicIds.value = true
     return
   }
 
-  collapsedEpicIds.value = collapsedEpicIds.value.filter(id => availableEpicIds.has(id))
+  collapsedEpicIds.value = collapsedEpicIds.value.filter(key => availableKeys.has(key))
 }, { immediate: true })
 
 const listFilteredCount = computed(() => {
@@ -4188,7 +4198,7 @@ const visibleEpicHeaderByDemandId = computed(() => {
       epicId: demand.epicId,
       roadmapTitle: demand.roadmapTitle,
       epicTitle: demand.epicTitle,
-      collapsed: collapsedEpicIds.value.includes(epicId)
+      collapsed: collapsedEpicIds.value.includes(epicQuarterKey(epicId, demand.quarterYear, demand.quarterNumber))
     }
   }
 
@@ -4306,27 +4316,20 @@ const selectedCompositeEpicIds = computed(() => {
 const selectedCompositeEpics = computed(() =>
   epicItems.value.filter(epic => !epic.isSimple && selectedCompositeEpicIds.value.has(epic.id))
 )
-// Demands/simple-epics selected individually (their own checkbox) — excludes demands locked by a
-// composite-epic-quarter selection (those move with the epic, but aren't edited as demands).
-const individuallySelectedDemands = computed(() => {
-  const ids = new Set(selectedDemandIds.value)
-  return demands.value.filter(item =>
-    ids.has(item.id) && (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple))
-  )
-})
-// Items that can be MOVED to a different quarter: individually selected demands + simple epics +
-// the demands locked by a selected composite-epic-quarter.
+// Items that can be MOVED to a different quarter: selected demands (individual + locked by a
+// composite-epic-quarter) + simple epics.
 const movablePlanningItems = computed(() => {
   const selectedById = new Map<string, RoadmapDemand>()
   selectedDemands.value.forEach(item => selectedById.set(item.id, item))
   selectedSimpleEpics.value.forEach(epic => selectedById.set(epic.id, epic))
   return Array.from(selectedById.values())
 })
-// Items for bulk EDIT: individually selected demands/simple-epics + simple epics (header) + the
-// composite EPIC entities (so selecting a composite epic edits the epic itself).
+// Items for bulk EDIT: selected demands (individual + the composite epic's quarter-demands) +
+// simple epics + the composite EPIC entities. Selecting a composite epic edits the epic AND its
+// demands in that quarter.
 const selectedPlanningItems = computed(() => {
   const selectedById = new Map<string, RoadmapDemand>()
-  individuallySelectedDemands.value.forEach(item => selectedById.set(item.id, item))
+  selectedDemands.value.forEach(item => selectedById.set(item.id, item))
   selectedSimpleEpics.value.forEach(epic => selectedById.set(epic.id, epic))
   selectedCompositeEpics.value.forEach(epic => selectedById.set(epic.id, epic))
   return Array.from(selectedById.values())
@@ -6321,7 +6324,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             variant: 'ghost',
             color: 'neutral',
             class: 'h-6 w-6 rounded-md border border-default bg-default p-0',
-            onClick: () => toggleEpicCollapse(demand.epicId)
+            onClick: () => toggleEpicCollapse(demand.epicId, demand.quarterYear, demand.quarterNumber)
           }, {
             default: () => h(UIconComp, { name: 'i-lucide-chevron-right', class: 'h-4 w-4' })
           })
@@ -6804,8 +6807,8 @@ watch(activeDemandKpiId, async (value) => {
                   v-if="groupDemandsByEpic"
                   type="button"
                   class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
-                  :class="visibleEpicIds.length ? 'text-highlighted' : 'cursor-not-allowed opacity-40 text-muted'"
-                  :disabled="!visibleEpicIds.length"
+                  :class="visibleEpicQuarterKeys.length ? 'text-highlighted' : 'cursor-not-allowed opacity-40 text-muted'"
+                  :disabled="!visibleEpicQuarterKeys.length"
                   @click="areAllEpicGroupsCollapsed ? expandAllEpicGroups() : collapseAllEpicGroups()"
                 >
                   <UIcon name="i-lucide-chevrons-up-down" class="h-4 w-4 shrink-0 text-muted" />

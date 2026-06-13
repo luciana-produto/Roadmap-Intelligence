@@ -794,6 +794,7 @@ watch(
 
     removedTradeOffIds.value = []
     removedDependedOnByIds.value = []
+    quickDepOpen.value = false
 
     activeTab.value = 'general'
     showSubmitHint.value = false
@@ -1054,6 +1055,118 @@ const selectedDependencyOptions = computed(() => {
   const selectedIds = new Set(form.dependencyDemandIds ?? [])
   return props.dependencyOptions.filter(option => selectedIds.has(option.demandId))
 })
+
+// ── Quick-create a dependency demand inline (when it doesn't exist yet) ──
+const quickDepOpen = ref(false)
+const quickDepSaving = ref(false)
+const quickDepTitle = ref('')
+const quickDepProjectId = ref('')
+const quickDepParentEpicId = ref('')
+const quickDepProductIds = ref<string[]>([])
+const quickDepQuarter = ref('')
+
+const quickDepProducts = computed(() => props.projects.find(project => project.id === quickDepProjectId.value)?.products ?? [])
+const quickDepEpicOptions = computed(() => epicOptionsByProjectId.value[quickDepProjectId.value] ?? [])
+
+// Epic options for the select, always including the preselected epic with its NAME (so it never
+// shows a raw id while the project's epics load, or when it belongs to another team).
+const quickDepEpicSelectItems = computed(() => {
+  const items = quickDepEpicOptions.value.map(epic => ({ value: epic.id, label: epic.title }))
+  const selectedId = quickDepParentEpicId.value
+  if (selectedId && !items.some(item => item.value === selectedId)) {
+    const title = (props.demand?.epicId === selectedId ? props.demand?.epicTitle : undefined)
+      ?? (props.epicOptions ?? []).find(option => option.id === selectedId)?.title
+      ?? 'Épico selecionado'
+    items.unshift({ value: selectedId, label: title })
+  }
+  return items
+})
+
+const quickDepProductsLabel = computed(() => {
+  const selected = quickDepProducts.value.filter(product => quickDepProductIds.value.includes(product.id))
+  if (!selected.length)
+    return quickDepProducts.value.length ? 'Selecione os produtos' : 'Selecione um time primeiro'
+  if (selected.length === 1)
+    return selected[0]!.name
+  return `${selected.length} produtos`
+})
+
+function openQuickDependencyCreate() {
+  quickDepTitle.value = dependencySearch.value.trim()
+  // Épico pai defaults to the current demand's parent epic (shown by name, editable). The TIME is
+  // NOT prefilled — a dependency usually belongs to another team — and the product list follows
+  // the chosen time.
+  quickDepProjectId.value = ''
+  quickDepParentEpicId.value = isDemand.value ? (form.parentDemandId || '') : ''
+  quickDepProductIds.value = []
+  quickDepQuarter.value = (form.quarterYear != null && form.quarterNumber != null)
+    ? buildQuarterValue(form.quarterYear, form.quarterNumber)
+    : ''
+  quickDepOpen.value = true
+}
+
+function toggleQuickDepProduct(productId: string, checked: boolean) {
+  quickDepProductIds.value = checked
+    ? [...new Set([...quickDepProductIds.value, productId])]
+    : quickDepProductIds.value.filter(id => id !== productId)
+}
+
+watch(quickDepProjectId, (projectId) => {
+  void ensureEpicOptionsLoaded(projectId)
+  const availableProducts = new Set((props.projects.find(project => project.id === projectId)?.products ?? []).map(product => product.id))
+  quickDepProductIds.value = quickDepProductIds.value.filter(id => availableProducts.has(id))
+})
+
+const canCreateQuickDependency = computed(() =>
+  !!quickDepTitle.value.trim()
+  && !!quickDepProjectId.value
+  && !!quickDepParentEpicId.value
+  && quickDepProductIds.value.length > 0
+  && !!quickDepQuarter.value
+)
+
+async function createQuickDependency() {
+  if (!canCreateQuickDependency.value || quickDepSaving.value)
+    return
+
+  quickDepSaving.value = true
+  try {
+    const { quarterYear, quarterNumber } = parseQuarterValue(quickDepQuarter.value)
+    const created = await roadmapStore.createDemand({
+      itemType: 'Demand',
+      parentDemandId: quickDepParentEpicId.value,
+      title: quickDepTitle.value.trim(),
+      description: '',
+      projectId: quickDepProjectId.value,
+      projectIds: [],
+      quarterYear,
+      quarterNumber,
+      type: 'Planned',
+      classification: 'Strategic',
+      productIds: [...quickDepProductIds.value],
+      status: 'Backlog',
+      issueLinks: [],
+      customers: [],
+      dependencyDemandIds: [],
+      hasNoKpi: false
+    })
+
+    if (created?.id) {
+      form.dependencyDemandIds = [...new Set([...(form.dependencyDemandIds ?? []), created.id])]
+      // Refresh the shared dependency options so the new demand shows in the selected list.
+      await roadmapStore.fetchDependencyOptions()
+    }
+
+    quickDepOpen.value = false
+    dependencySearch.value = ''
+  }
+  catch {
+    // handled by useApi
+  }
+  finally {
+    quickDepSaving.value = false
+  }
+}
 
 const selectedNonDemandProjects = computed(() =>
   props.projects.filter(project => (form.projectIds ?? []).includes(project.id))
@@ -2357,6 +2470,104 @@ async function handleSubmit() {
               <p v-if="!filteredDependencyOptions.length" class="text-xs italic text-muted">
                 Nenhum item encontrado para vincular.
               </p>
+            </div>
+
+            <!-- Criar a demanda na hora e já vincular como dependência -->
+            <button
+              v-if="hasDependencyQuery && !quickDepOpen"
+              type="button"
+              class="flex w-full items-center gap-2 rounded-lg border border-dashed border-primary/40 px-3 py-2 text-left text-sm text-primary transition-colors hover:bg-primary/5"
+              @click="openQuickDependencyCreate"
+            >
+              <UIcon name="i-lucide-plus" class="h-4 w-4 shrink-0" />
+              <span class="truncate">Criar demanda “{{ dependencySearch.trim() }}” e vincular</span>
+            </button>
+
+            <div v-if="quickDepOpen" class="space-y-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-primary">Nova demanda para vincular</p>
+
+              <UFormField label="Título" required>
+                <UInput v-model="quickDepTitle" placeholder="Descreva a demanda brevemente" class="w-full" />
+              </UFormField>
+
+              <div class="grid gap-3 md:grid-cols-2">
+                <UFormField label="Time" required>
+                  <USelect
+                    v-model="quickDepProjectId"
+                    :items="sortedProjects.map(project => ({ value: project.id, label: project.name }))"
+                    placeholder="Selecione"
+                    class="w-full"
+                  />
+                </UFormField>
+
+                <UFormField label="Épico pai" required>
+                  <USelect
+                    v-model="quickDepParentEpicId"
+                    :items="quickDepEpicSelectItems"
+                    placeholder="Selecione"
+                    class="w-full"
+                  />
+                </UFormField>
+
+                <UFormField label="Quarter" required>
+                  <USelect
+                    v-model="quickDepQuarter"
+                    :items="quarters"
+                    placeholder="Selecione"
+                    class="w-full"
+                  />
+                </UFormField>
+
+                <UFormField label="Produto" required>
+                  <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <UButton
+                      type="button"
+                      variant="outline"
+                      color="neutral"
+                      trailing-icon="i-lucide-chevron-down"
+                      class="w-full justify-between"
+                      :disabled="!quickDepProducts.length"
+                    >
+                      <span class="truncate">{{ quickDepProductsLabel }}</span>
+                    </UButton>
+
+                    <template #content>
+                      <div class="min-w-64 space-y-1 p-2">
+                        <label
+                          v-for="product in quickDepProducts"
+                          :key="product.id"
+                          class="flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-highlighted transition-colors hover:bg-elevated"
+                        >
+                          <input
+                            type="checkbox"
+                            class="h-4 w-4 accent-primary"
+                            :checked="quickDepProductIds.includes(product.id)"
+                            @change="(event) => toggleQuickDepProduct(product.id, (event.target as HTMLInputElement).checked)"
+                          >
+                          <span class="truncate">{{ product.name }}</span>
+                        </label>
+
+                        <p v-if="!quickDepProducts.length" class="px-2.5 py-3 text-xs italic text-muted">
+                          Selecione um time primeiro.
+                        </p>
+                      </div>
+                    </template>
+                  </UPopover>
+                </UFormField>
+              </div>
+
+              <div class="flex justify-end gap-2">
+                <UButton size="xs" color="neutral" variant="ghost" @click="quickDepOpen = false">Cancelar</UButton>
+                <UButton
+                  size="xs"
+                  icon="i-lucide-link"
+                  :loading="quickDepSaving"
+                  :disabled="!canCreateQuickDependency"
+                  @click="createQuickDependency"
+                >
+                  Criar e vincular
+                </UButton>
+              </div>
             </div>
           </div>
         </section>
