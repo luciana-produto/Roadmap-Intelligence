@@ -1,5 +1,7 @@
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
+using ProductHub.Application.Roadmap.Commands.BulkMoveDemands;
+using ProductHub.Application.Roadmap.Commands.BulkUpdateDemands;
 using ProductHub.Application.Roadmap.Commands.CreateDemand;
 using ProductHub.Application.Roadmap.Commands.CreateSpillover;
 using ProductHub.Application.Roadmap.Commands.DeleteDemand;
@@ -124,6 +126,24 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     {
         await sender.Send(command, cancellationToken);
         return Ok(ApiResponse.Ok(CorrelationId));
+    }
+
+    [HttpPost("demands/bulk-move")]
+    public async Task<IActionResult> BulkMoveDemands(
+        [FromBody] BulkMoveDemandsToQuarterCommand command,
+        CancellationToken cancellationToken)
+    {
+        await sender.Send(command, cancellationToken);
+        return Ok(ApiResponse.Ok(CorrelationId));
+    }
+
+    [HttpPut("demands/bulk-edit")]
+    public async Task<IActionResult> BulkUpdateDemands(
+        [FromBody] BulkUpdateDemandsCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(command, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<RoadmapDemandDto>>.Ok(result, CorrelationId));
     }
 
 }

@@ -17,6 +17,7 @@ import {
   buildUpdateDemandPayload,
   sanitizeCustomersForItem
 } from '~/utils/roadmapDemandPayload'
+import { formatQuarterLabel, isSpecialBacklogQuarter } from '~/utils/roadmapQuarter'
 
 export const useRoadmapStore = defineStore('roadmap', () => {
   const api = useApi()
@@ -430,6 +431,95 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     applyReorderedDemandState(id, status, orderedDemandIds)
   }
 
+  // Moves a set of demands to a target quarter and applies the new ordering of the whole target
+  // scope in ONE request + ONE local mutation — avoiding the flicker of moving each demand
+  // separately. orderedDemandIds is the desired final order of the target quarter scope.
+  async function bulkMoveDemandsToQuarter(
+    demandIds: string[],
+    targetQuarterYear: number,
+    targetQuarterNumber: number,
+    orderedDemandIds: string[]
+  ) {
+    await api.post<ApiResponse<null>>(
+      '/api/roadmap/demands/bulk-move',
+      {
+        demandIds,
+        targetQuarterYear,
+        targetQuarterNumber,
+        orderedDemandIds
+      }
+    )
+
+    const movedSet = new Set(demandIds)
+    const sortOrderById = new Map(orderedDemandIds.map((demandId, index) => [demandId, (index + 1) * 10]))
+    const isBacklog = isSpecialBacklogQuarter(targetQuarterYear, targetQuarterNumber)
+    const quarterLabel = formatQuarterLabel(targetQuarterYear, targetQuarterNumber)
+
+    demands.value = demands.value.map((demand) => {
+      const moved = movedSet.has(demand.id)
+      const nextSortOrder = sortOrderById.get(demand.id)
+      if (!moved && nextSortOrder === undefined)
+        return demand
+
+      return {
+        ...demand,
+        ...(moved
+          ? {
+              quarterYear: targetQuarterYear,
+              quarterNumber: targetQuarterNumber,
+              quarterLabel,
+              promisedDate: isBacklog ? undefined : demand.promisedDate
+            }
+          : {}),
+        ...(nextSortOrder !== undefined ? { sortOrder: nextSortOrder } : {})
+      }
+    })
+
+    // Refresh dependency snapshots for moved demands (their quarter changed → affects
+    // inconsistency flags on the items that depend on / are depended on by them).
+    for (const movedId of demandIds) {
+      const moved = demands.value.find(demand => demand.id === movedId)
+      if (moved)
+        refreshDependencySnapshotsFor(moved)
+    }
+
+    sortDemandsInStore()
+  }
+
+  // Applies several demand edits in ONE request (reusing the per-item update logic on the backend)
+  // and a single local mutation — replacing the per-item loop that made bulk edits very slow.
+  async function bulkUpdateDemands(updates: { id: string, data: DemandFormData }[]): Promise<RoadmapDemand[]> {
+    if (!updates.length)
+      return []
+
+    const items = updates.map(update => buildUpdateDemandPayload(update.id, update.data))
+    const res = await api.put<ApiResponse<RoadmapDemand[]>>(
+      '/api/roadmap/demands/bulk-edit',
+      { items } as unknown as Record<string, unknown>
+    )
+
+    const updated = res.data ?? []
+    if (updated.length) {
+      const updatedById = new Map(updated.map(demand => [demand.id, demand]))
+      demands.value = demands.value.map(demand => updatedById.get(demand.id) ?? demand)
+
+      for (const demand of updated) {
+        upsertDependencyOptionFromDemand(demand)
+        refreshDependencySnapshotsFor(demand)
+        reconcileReverseDependenciesForUpdatedDemand(demand)
+      }
+
+      customerSuggestions.value = [...new Set([
+        ...customerSuggestions.value,
+        ...updated.flatMap(demand => sanitizeCustomersForItem(demand.itemType, demand.customers))
+      ])].sort((left, right) => left.localeCompare(right, 'pt-BR'))
+
+      sortDemandsInStore()
+    }
+
+    return updated
+  }
+
   async function patchDemandStatus(id: string, status: DemandStatus) {
     const demand = demands.value.find(d => d.id === id)
     if (!demand) return
@@ -484,6 +574,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     deleteDemand,
     createSpillover,
     reorderDemand,
+    bulkMoveDemandsToQuarter,
+    bulkUpdateDemands,
     patchDemandStatus,
     selectProject,
     selectQuarter

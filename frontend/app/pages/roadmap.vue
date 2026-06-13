@@ -66,8 +66,8 @@ const quarterPhaseConfig: Record<QuarterPhase, { label: string, class: string }>
 
 const quarterOptions = computed(() =>
   [
-    { value: BACKLOG_QUARTER.value, label: 'Backlog — não priorizado' },
-    { value: PRIORITIZED_BACKLOG_QUARTER.value, label: `${PRIORITIZED_BACKLOG_QUARTER.label} — não comprometido` },
+    { value: BACKLOG_QUARTER.value, label: BACKLOG_QUARTER.label },
+    { value: PRIORITIZED_BACKLOG_QUARTER.value, label: PRIORITIZED_BACKLOG_QUARTER.label },
     ...buildPreRegisteredQuarterYears(currentYear, PRE_REGISTERED_QUARTER_END_YEAR).flatMap(y =>
       [1, 2, 3, 4].map(q => ({
         value: buildQuarterValue(y, q),
@@ -1526,21 +1526,79 @@ async function handleEpicSortEnd(item: HTMLElement) {
 
   const quarterChanged = anchorDemand.quarterYear !== targetQuarterRef.quarterYear || anchorDemand.quarterNumber !== targetQuarterRef.quarterNumber
   if (quarterChanged) {
-    // Simple epics have their own quarter — move them directly via updateDemand.
-    // Empty composite epics (sem demanda) don't have demands to move, so skip.
+    const sameGroupInTarget = (row: RoadmapDemand) =>
+      row.id !== anchorDemand.id
+      && !currentCluster.some(clusterDemand => clusterDemand.id === row.id)
+      && row.quarterYear === targetQuarterRef.quarterYear
+      && row.quarterNumber === targetQuarterRef.quarterNumber
+      && getDemandGroupKey(row) === getDemandGroupKey(anchorDemand)
+
+    // Placement among the TARGET quarter's items. Prefer the epic headers (visible even when the
+    // groups are collapsed), so the dropped item keeps the priority position where it landed. Fall
+    // back to the demand-row neighbors (works when groups are expanded / in non-grouped contexts).
+    // Computed for BOTH simple and composite epics so each lands at the dropped priority.
+    const placementHeaderRows = Array.from(tbody.querySelectorAll('.list-epic-divider')) as HTMLElement[]
+    const placementDraggedIndex = placementHeaderRows.indexOf(item as HTMLElement)
+
+    const targetEpicBoundaryId = (headerRow: HTMLElement, edge: 'first' | 'last'): string | null => {
+      const headerAnchorId = headerRow.dataset.anchorDemandId
+      if (!headerAnchorId)
+        return null
+      const headerAnchor = visibleListRows.value.find(row => row.id === headerAnchorId)
+      if (!headerAnchor || headerAnchor.epicId === anchorDemand.epicId)
+        return null
+      if (getEffectiveProjectId(headerAnchor) !== getEffectiveProjectId(anchorDemand))
+        return null
+      if (headerAnchor.quarterYear !== targetQuarterRef.quarterYear || headerAnchor.quarterNumber !== targetQuarterRef.quarterNumber)
+        return null
+      if (getDemandGroupKey(headerAnchor) !== getDemandGroupKey(anchorDemand))
+        return null
+      const cluster = (headerAnchor.itemType === 'Epic' && headerAnchor.isSimple)
+        ? [headerAnchor]
+        : getVisibleEpicDemandCluster(headerAnchor)
+      if (!cluster.length)
+        return null
+      return edge === 'first' ? cluster[0]!.id : cluster[cluster.length - 1]!.id
+    }
+
+    let headerBeforeId: string | null = null
+    if (placementDraggedIndex >= 0)
+      for (let index = placementDraggedIndex + 1; index < placementHeaderRows.length && !headerBeforeId; index++)
+        headerBeforeId = targetEpicBoundaryId(placementHeaderRows[index]!, 'first')
+
+    let headerAfterId: string | null = null
+    if (placementDraggedIndex >= 0)
+      for (let index = placementDraggedIndex - 1; index >= 0 && !headerAfterId; index--)
+        headerAfterId = targetEpicBoundaryId(placementHeaderRows[index]!, 'last')
+
+    const demandBeforeId = targetDemand && sameGroupInTarget(targetDemand) && !targetInsertAfter
+      ? targetDemand.id
+      : (nextDemand && sameGroupInTarget(nextDemand) ? nextDemand.id : null)
+    const demandAfterId = demandBeforeId
+      ? null
+      : (targetDemand && sameGroupInTarget(targetDemand) && targetInsertAfter
+          ? targetDemand.id
+          : (previousDemand && sameGroupInTarget(previousDemand) ? previousDemand.id : null))
+
+    const beforeId = headerBeforeId ?? demandBeforeId
+    const afterId = beforeId ? null : (headerAfterId ?? demandAfterId)
+
+    // Simple epics carry their own quarter: move it via updateDemand, then place it at the drop
+    // position (same ordering scope as demands). Empty composite epics have nothing to move.
     if (anchorDemand.itemType === 'Epic') {
       if (anchorDemand.isSimple) {
         const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
         const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
         isBulkPlanning.value = true
         try {
-          await roadmapStore.updateDemand(
+          const updatedEpic = await roadmapStore.updateDemand(
             anchorDemand.id,
             buildDemandFormData(anchorDemand, {
               quarterYear: targetQuarterRef.quarterYear,
               quarterNumber: targetQuarterRef.quarterNumber
             })
           )
+          await persistDemandPriority(updatedEpic, updatedEpic.status, beforeId, afterId)
           await refreshListPresentation(listScrollTop, listScrollLeft)
         }
         catch { /* handled by useApi */ }
@@ -1549,30 +1607,15 @@ async function handleEpicSortEnd(item: HTMLElement) {
       return
     }
 
-    const sameGroupInTarget = (row: RoadmapDemand) =>
-      row.id !== anchorDemand.id
-      && !currentCluster.some(clusterDemand => clusterDemand.id === row.id)
-      && row.quarterYear === targetQuarterRef.quarterYear
-      && row.quarterNumber === targetQuarterRef.quarterNumber
-      && getDemandGroupKey(row) === getDemandGroupKey(anchorDemand)
-
-    const beforeId = targetDemand && sameGroupInTarget(targetDemand) && !targetInsertAfter
-      ? targetDemand.id
-      : (nextDemand && sameGroupInTarget(nextDemand) ? nextDemand.id : null)
-    const afterId = beforeId
-      ? null
-      : (targetDemand && sameGroupInTarget(targetDemand) && targetInsertAfter
-          ? targetDemand.id
-          : (previousDemand && sameGroupInTarget(previousDemand) ? previousDemand.id : null))
-
     await planEpicDemandsToQuarter(
-      anchorDemand.epicId ?? '',
-      `${targetQuarterRef.quarterNumber}-${targetQuarterRef.quarterYear}`,
-      {
-        anchorDemandId: anchorDemand.id,
-        beforeId,
-        afterId
-      }
+      // Only this quarter's demands of the epic move (the source-quarter cluster) — an epic that
+      // also has demands in other quarters keeps those untouched.
+      currentCluster.map(clusterDemand => clusterDemand.id),
+      // Use buildQuarterValue so backlog quarters serialize to their special tokens
+      // ('backlog' / 'backlog-prioritario'); a raw "${number}-${year}" breaks for the
+      // prioritized backlog (number -1 → "-1-0") and yields an invalid quarter.
+      buildQuarterValue(targetQuarterRef.quarterYear, targetQuarterRef.quarterNumber),
+      { beforeId, afterId }
     )
     return
   }
@@ -1783,7 +1826,7 @@ async function handleListSortEnd(item: HTMLElement) {
 
       toast.add({
         title: 'Demanda movida de quarter',
-        description: `${demand.title} movida para ${quarterShortLabel(`${targetQuarter.quarterNumber}-${targetQuarter.quarterYear}`)}`,
+        description: `${demand.title} movida para ${quarterShortLabel(buildQuarterValue(targetQuarter.quarterYear, targetQuarter.quarterNumber))}`,
         color: 'success'
       })
     }
@@ -2185,10 +2228,10 @@ function syncListSectionDividers() {
               const checkbox = document.createElement('input')
               checkbox.type = 'checkbox'
               checkbox.className = 'mt-1 h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary'
-              checkbox.checked = isEpicSelected(config.epicId)
+              checkbox.checked = isEpicSelected(config.epicId, anchorDemand?.quarterYear, anchorDemand?.quarterNumber)
               checkbox.addEventListener('click', event => event.stopPropagation())
               checkbox.addEventListener('change', (event) => {
-                toggleEpicSelection(config.epicId!, (event.target as HTMLInputElement).checked)
+                toggleEpicSelection(config.epicId!, (event.target as HTMLInputElement).checked, anchorDemand?.quarterYear, anchorDemand?.quarterNumber)
               })
               handleWrap.appendChild(checkbox)
             }
@@ -3723,53 +3766,52 @@ async function planDemandToQuarter(demand: RoadmapDemand, quarterValue: string) 
 }
 
 async function planEpicDemandsToQuarter(
-  epicId: string,
+  movedDemandIds: string[],
   quarterValue: string,
-  placement?: { anchorDemandId?: string, beforeId: string | null, afterId: string | null }
+  placement?: { beforeId: string | null, afterId: string | null }
 ) {
-  const visibleEpicDemands = getVisibleEpicDemands(epicId)
-  if (!visibleEpicDemands.length || isBulkPlanning.value)
+  const movedDemands = movedDemandIds
+    .map(id => itemsById.value.get(id))
+    .filter((demand): demand is RoadmapDemand => !!demand)
+  if (!movedDemands.length || isBulkPlanning.value)
     return
 
   const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
-  const epicTitle = visibleEpicDemands[0]?.epicTitle ?? 'Épico'
-  const targetDemandIds = new Set(visibleEpicDemands.map(demand => demand.id))
+  const epicTitle = movedDemands[0]?.epicTitle ?? 'Épico'
+  const movedSet = new Set(movedDemandIds)
+  const project = getEffectiveProjectId(movedDemands[0]!)
+
+  // Desired final order of the target quarter scope: the demands already there (same team) plus the
+  // moved block, with the block positioned at the drop point.
+  const targetScopeIds = [...demandItems.value, ...epicItems.value.filter(epic => epic.isSimple)]
+    .filter(item =>
+      getEffectiveProjectId(item) === project
+      && item.quarterYear === quarterYear
+      && item.quarterNumber === quarterNumber
+      && !movedSet.has(item.id))
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map(item => item.id)
+
+  const orderedDemandIds = moveDemandCluster(
+    [...targetScopeIds, ...movedDemandIds],
+    movedDemandIds,
+    placement?.beforeId ?? null,
+    placement?.afterId ?? null
+  )
 
   try {
     isBulkPlanning.value = true
 
-    let updatedAnchor: RoadmapDemand | null = null
-
-    for (const demand of visibleEpicDemands) {
-      const updatedDemand = await roadmapStore.updateDemand(
-        demand.id,
-        buildDemandFormData(demand, {
-          quarterYear,
-          quarterNumber,
-          status: demand.status
-        })
-      )
-
-      if (placement?.anchorDemandId === demand.id)
-        updatedAnchor = updatedDemand
-      else if (!updatedAnchor)
-        updatedAnchor = updatedDemand
-    }
-
-    if (updatedAnchor && (placement?.beforeId || placement?.afterId)) {
-      const scopedDemandIds = getScopedDemandIds(updatedAnchor)
-      const movedIds = scopedDemandIds.filter(id => targetDemandIds.has(id))
-      const orderedDemandIds = moveDemandCluster(scopedDemandIds, movedIds, placement.beforeId, placement.afterId)
-      await roadmapStore.reorderDemand(updatedAnchor.id, updatedAnchor.status, orderedDemandIds)
-    }
+    // Single request + single local mutation — no per-demand flicker.
+    await roadmapStore.bulkMoveDemandsToQuarter(movedDemandIds, quarterYear, quarterNumber, orderedDemandIds)
 
     await refreshListPresentation(listScrollTop, listScrollLeft)
 
     toast.add({
       title: 'Épico planejado no quarter',
-      description: `${epicTitle} movido para ${quarterShortLabel(quarterValue)} com ${visibleEpicDemands.length.toLocaleString('pt-BR')} demandas visíveis`,
+      description: `${epicTitle} movido para ${quarterShortLabel(quarterValue)} com ${movedDemands.length.toLocaleString('pt-BR')} demandas`,
       color: 'success'
     })
   }
@@ -4176,6 +4218,31 @@ const priorityRankByDemandId = computed(() => {
 })
 const selectedDemandIds = ref<string[]>([])
 const selectedEpicIds = ref<string[]>([])
+// Composite epic selection is per (epic + quarter): the same epic can sit in two quarters with
+// distinct demands, and selecting its header in one quarter must select only that quarter's
+// demands. Keys are `${epicId}:${quarterYear}:${quarterNumber}`.
+const selectedEpicQuarters = ref<string[]>([])
+function epicQuarterKey(epicId: string, quarterYear: number, quarterNumber: number) {
+  return `${epicId}:${quarterYear}:${quarterNumber}`
+}
+// Demands "locked" by a selected composite-epic-quarter: they show as selected and can't be
+// unchecked individually (the whole epic-quarter moves/edits as a unit).
+const epicLockedDemandIds = computed(() => {
+  const locked = new Set<string>()
+  if (!selectedEpicQuarters.value.length)
+    return locked
+  const keys = new Set(selectedEpicQuarters.value)
+  for (const demand of demandItems.value)
+    if (demand.epicId && keys.has(epicQuarterKey(demand.epicId, demand.quarterYear, demand.quarterNumber)))
+      locked.add(demand.id)
+  return locked
+})
+const effectiveSelectedDemandIds = computed(() => {
+  const ids = new Set(selectedDemandIds.value)
+  for (const id of epicLockedDemandIds.value)
+    ids.add(id)
+  return ids
+})
 const isBulkPlanning = ref(false)
 const isSavingAllPlanningInlineEdits = ref(false)
 type PlanningInlineDraft = {
@@ -4212,35 +4279,56 @@ const planningStatusModalItemId = ref<string | null>(null)
 const planningStatusModalSnapshot = ref<PlanningInlineDraft | null>(null)
 const visibleListDemandIds = computed(() => visibleListRows.value.map(demand => demand.id))
 const selectedDemands = computed(() => {
-  const selectedIds = new Set(selectedDemandIds.value)
-  // In non-grouped mode, simple epics appear as regular rows and get added to selectedDemandIds
+  const selectedIds = effectiveSelectedDemandIds.value
+  // Includes demands selected individually, simple epics (rows), and demands locked by a selected
+  // composite-epic-quarter.
   return demands.value.filter(item =>
     selectedIds.has(item.id) &&
     (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple))
   )
-})
-const selectedPlanningEpics = computed(() => {
-  const selectedIds = new Set(selectedEpicIds.value)
-  return epicItems.value.filter(epic => selectedIds.has(epic.id))
 })
 const selectedSimpleEpics = computed(() => {
   // Simple epics selected via the epic checkbox (grouped mode)
   const selectedIds = new Set(selectedEpicIds.value)
   return epicItems.value.filter(epic => selectedIds.has(epic.id) && epic.isSimple)
 })
-// Items that can be moved to a different quarter: individually selected demands + selected simple epics
+// Composite epics whose header was selected (in any quarter). Used by bulk EDIT, which edits the
+// epic entity itself (its demands are handled by bulk MOVE).
+const selectedCompositeEpicIds = computed(() => {
+  const ids = new Set<string>()
+  for (const key of selectedEpicQuarters.value) {
+    const epicId = key.split(':')[0]
+    if (epicId)
+      ids.add(epicId)
+  }
+  return ids
+})
+const selectedCompositeEpics = computed(() =>
+  epicItems.value.filter(epic => !epic.isSimple && selectedCompositeEpicIds.value.has(epic.id))
+)
+// Demands/simple-epics selected individually (their own checkbox) — excludes demands locked by a
+// composite-epic-quarter selection (those move with the epic, but aren't edited as demands).
+const individuallySelectedDemands = computed(() => {
+  const ids = new Set(selectedDemandIds.value)
+  return demands.value.filter(item =>
+    ids.has(item.id) && (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple))
+  )
+})
+// Items that can be MOVED to a different quarter: individually selected demands + simple epics +
+// the demands locked by a selected composite-epic-quarter.
 const movablePlanningItems = computed(() => {
   const selectedById = new Map<string, RoadmapDemand>()
   selectedDemands.value.forEach(item => selectedById.set(item.id, item))
   selectedSimpleEpics.value.forEach(epic => selectedById.set(epic.id, epic))
   return Array.from(selectedById.values())
 })
+// Items for bulk EDIT: individually selected demands/simple-epics + simple epics (header) + the
+// composite EPIC entities (so selecting a composite epic edits the epic itself).
 const selectedPlanningItems = computed(() => {
   const selectedById = new Map<string, RoadmapDemand>()
-  // Epics selected via the epic checkbox (grouped mode headers)
-  selectedPlanningEpics.value.forEach(epic => selectedById.set(epic.id, epic))
-  // Individual demands + simple epics in non-grouped mode
-  selectedDemands.value.forEach(demand => selectedById.set(demand.id, demand))
+  individuallySelectedDemands.value.forEach(item => selectedById.set(item.id, item))
+  selectedSimpleEpics.value.forEach(epic => selectedById.set(epic.id, epic))
+  selectedCompositeEpics.value.forEach(epic => selectedById.set(epic.id, epic))
   return Array.from(selectedById.values())
 })
 const selectedPlanningItemCount = computed(() => selectedPlanningItems.value.length)
@@ -4438,11 +4526,26 @@ function sanitizeSelectedDemands() {
 
   const availableEpicIds = new Set(visibleListRows.value.map(demand => demand.epicId).filter((value): value is string => !!value))
   selectedEpicIds.value = selectedEpicIds.value.filter(id => availableEpicIds.has(id))
+
+  // Drop composite-epic-quarter keys that no longer have any demand (epic emptied or moved away).
+  const availableEpicQuarterKeys = new Set(
+    demandItems.value
+      .filter(demand => !!demand.epicId)
+      .map(demand => epicQuarterKey(demand.epicId!, demand.quarterYear, demand.quarterNumber))
+  )
+  selectedEpicQuarters.value = selectedEpicQuarters.value.filter(key => availableEpicQuarterKeys.has(key))
 }
 function isDemandSelected(demandId: string) {
-  return selectedDemandIds.value.includes(demandId)
+  return effectiveSelectedDemandIds.value.has(demandId)
+}
+// Locked = selected via a composite-epic-quarter; the individual checkbox is shown but disabled.
+function isDemandLocked(demandId: string) {
+  return epicLockedDemandIds.value.has(demandId)
 }
 function toggleDemandSelection(demandId: string, selected: boolean) {
+  if (isDemandLocked(demandId))
+    return
+
   if (selected) {
     if (!selectedDemandIds.value.includes(demandId))
       selectedDemandIds.value = [...selectedDemandIds.value, demandId]
@@ -4453,24 +4556,62 @@ function toggleDemandSelection(demandId: string, selected: boolean) {
   selectedDemandIds.value = selectedDemandIds.value.filter(id => id !== demandId)
 }
 
-function isEpicSelected(epicId?: string) {
-  return !!epicId && selectedEpicIds.value.includes(epicId)
+function isEpicSelected(epicId?: string, quarterYear?: number, quarterNumber?: number) {
+  if (!epicId)
+    return false
+
+  const epic = epicItems.value.find(item => item.id === epicId)
+  // Simple epics keep their own (row-like) selection.
+  if (epic?.isSimple)
+    return selectedEpicIds.value.includes(epicId)
+
+  // Composite epics: selection is per quarter instance.
+  if (quarterYear == null || quarterNumber == null)
+    return false
+  return selectedEpicQuarters.value.includes(epicQuarterKey(epicId, quarterYear, quarterNumber))
 }
 
-function toggleEpicSelection(epicId: string, selected: boolean) {
-  if (selected) {
-    if (!selectedEpicIds.value.includes(epicId))
-      selectedEpicIds.value = [...selectedEpicIds.value, epicId]
+function toggleEpicSelection(epicId: string, selected: boolean, quarterYear?: number, quarterNumber?: number) {
+  const epic = epicItems.value.find(item => item.id === epicId)
 
+  // Simple epic: behaves like selecting a single row.
+  if (epic?.isSimple) {
+    if (selected) {
+      if (!selectedEpicIds.value.includes(epicId))
+        selectedEpicIds.value = [...selectedEpicIds.value, epicId]
+    }
+    else {
+      selectedEpicIds.value = selectedEpicIds.value.filter(id => id !== epicId)
+    }
     return
   }
 
-  selectedEpicIds.value = selectedEpicIds.value.filter(id => id !== epicId)
+  // Composite epic: select/deselect this quarter's demands as a locked unit.
+  if (quarterYear == null || quarterNumber == null)
+    return
+  const key = epicQuarterKey(epicId, quarterYear, quarterNumber)
+  if (selected) {
+    if (!selectedEpicQuarters.value.includes(key))
+      selectedEpicQuarters.value = [...selectedEpicQuarters.value, key]
+  }
+  else {
+    selectedEpicQuarters.value = selectedEpicQuarters.value.filter(existing => existing !== key)
+    // Drop any of this epic-quarter's demands that were also individually selected, so unchecking
+    // the epic fully clears its demands.
+    const dropIds = new Set(
+      demandItems.value
+        .filter(demand => demand.epicId === epicId && demand.quarterYear === quarterYear && demand.quarterNumber === quarterNumber)
+        .map(demand => demand.id)
+    )
+    if (dropIds.size)
+      selectedDemandIds.value = selectedDemandIds.value.filter(id => !dropIds.has(id))
+  }
 }
 
 function clearSelectedDemands() {
   selectedDemandIds.value = []
   selectedEpicIds.value = []
+  selectedEpicQuarters.value = []
 
   queueMicrotask(() => {
     syncListSectionDividers()
@@ -5113,15 +5254,15 @@ async function handlePlanningBulkEdit(changes: BulkEditRoadmapItemsData) {
   const updatedCount = selectedPlanningItems.value.length
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  const updates = selectedPlanningItems.value.map(item => ({
+    id: item.id,
+    data: buildDemandFormData(item, buildBulkEditOverrides(item, changes))
+  }))
   isBulkPlanning.value = true
 
   try {
-    for (const item of selectedPlanningItems.value) {
-      await roadmapStore.updateDemand(
-        item.id,
-        buildDemandFormData(item, buildBulkEditOverrides(item, changes))
-      )
-    }
+    // Single request + single local mutation (no per-item flicker/slowness).
+    await roadmapStore.bulkUpdateDemands(updates)
 
     planningBulkEditModalOpen.value = false
     clearSelectedDemands()
@@ -5240,27 +5381,38 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
     return
 
   const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
-  const movedCount = movablePlanningItems.value.length
+  const movedIds = movablePlanningItems.value.map(item => item.id)
+  const movedCount = movedIds.length
+  const movedSet = new Set(movedIds)
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+
+  // Place the moved items at the END of the target quarter (existing items first, moved appended).
+  // The backend sets sortOrder per index; ordering only matters within each team scope, so a
+  // mixed-team list stays correct (existing < moved within every scope).
+  const existingTargetIds = [...demandItems.value, ...epicItems.value.filter(epic => epic.isSimple)]
+    .filter(item =>
+      item.quarterYear === quarterYear
+      && item.quarterNumber === quarterNumber
+      && !movedSet.has(item.id))
+    .sort((left, right) => left.sortOrder - right.sortOrder)
+    .map(item => item.id)
+  const orderedDemandIds = [...existingTargetIds, ...movedIds]
+
   isBulkPlanning.value = true
 
   try {
-    for (const demand of movablePlanningItems.value) {
-      await roadmapStore.updateDemand(
-        demand.id,
-        buildDemandFormData(demand, {
-          quarterYear,
-          quarterNumber,
-          status: demand.status
-        })
-      )
-    }
+    // Single request + single local mutation — no per-item flicker/slowness.
+    await roadmapStore.bulkMoveDemandsToQuarter(movedIds, quarterYear, quarterNumber, orderedDemandIds)
+
+    // Clear the selection BEFORE rebuilding the list, otherwise the (imperative) epic header
+    // checkboxes get rebuilt still marked and stay visually selected.
+    selectedDemandIds.value = []
+    selectedEpicIds.value = []
+    selectedEpicQuarters.value = []
 
     await refreshListPresentation(listScrollTop, listScrollLeft)
 
-    selectedDemandIds.value = []
-    selectedEpicIds.value = []
     toast.add({
       title: 'Itens planejados no quarter',
       description: `${movedCount.toLocaleString('pt-BR')} ${movedCount === 1 ? 'item movido' : 'itens movidos'} para ${quarterShortLabel(quarterValue)}`,
@@ -5748,8 +5900,10 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           h('label', { class: 'flex shrink-0 items-center justify-center' }, [
             h('input', {
               type: 'checkbox',
-              class: 'h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary',
+              class: ['h-3.5 w-3.5 rounded border-default text-primary focus:ring-primary', isDemandLocked(demand.id) ? 'cursor-not-allowed opacity-70' : ''],
               checked: isDemandSelected(demand.id),
+              disabled: isDemandLocked(demand.id),
+              title: isDemandLocked(demand.id) ? 'Selecionado pelo épico — desmarque o épico para alterar' : undefined,
               onClick: (event: Event) => event.stopPropagation(),
               onChange: (event: Event) => toggleDemandSelection(demand.id, (event.target as HTMLInputElement).checked)
             })

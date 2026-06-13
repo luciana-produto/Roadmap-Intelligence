@@ -31,6 +31,8 @@ public interface IRoadmapDemandRepository : IRepository<RoadmapDemand>
 
     Task<IReadOnlyList<RoadmapDemand>> GetByIdsAsync(IEnumerable<Guid> ids, CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<RoadmapDemand>> GetByIdsForUpdateAsync(IEnumerable<Guid> ids, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<RoadmapDemandDependency>> GetDependenciesByDemandIdsAsync(
         IEnumerable<Guid> demandIds,
         CancellationToken cancellationToken = default);

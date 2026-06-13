@@ -187,14 +187,16 @@ const showRestFields = computed(() => {
 })
 
 // Progressive disclosure for demand creation: Tipo+Time -> Épico pai -> Produto -> restante.
+// Each step requires ALL previous steps (not just its own field) so that auto-filling a single
+// product doesn't reveal the rest before the épico pai is chosen.
 const showDemandEpicPaiField = computed(() =>
   isDemand.value && (isEdit.value || !!form.projectId)
 )
 const showDemandProductField = computed(() =>
-  isDemand.value && (isEdit.value || !!form.parentDemandId)
+  isDemand.value && (isEdit.value || (!!form.projectId && !!form.parentDemandId))
 )
 const showDemandRestAfterProduct = computed(() =>
-  isDemand.value && (isEdit.value || form.productIds.length > 0)
+  isDemand.value && (isEdit.value || (!!form.projectId && !!form.parentDemandId && form.productIds.length > 0))
 )
 
 // Progressive disclosure for simple epics: Time -> Roadmap pai -> Produto -> restante.
@@ -203,8 +205,9 @@ const showSimpleEpicProductField = computed(() =>
   && (isEdit.value || ((form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId))
 )
 const showSimpleEpicRestAfterProduct = computed(() =>
-  // Always require a product before revealing the rest, even when prefilled from a roadmap line.
-  isSimpleEpic.value && (isEdit.value || form.productIds.length > 0)
+  // Require the full chain before revealing the rest, even when prefilled from a roadmap line.
+  isSimpleEpic.value
+  && (isEdit.value || ((form.projectIds?.length ?? 0) > 0 && !!form.parentDemandId && form.productIds.length > 0))
 )
 
 // Whether the "rest" fields (and dependencies section) should be visible, accounting for the

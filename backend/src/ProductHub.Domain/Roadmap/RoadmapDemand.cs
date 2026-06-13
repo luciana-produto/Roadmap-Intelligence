@@ -236,6 +236,18 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public void SetSortOrder(int sortOrder) =>
         SortOrder = sortOrder;
 
+    /// <summary>Moves the item to another quarter (used by bulk quarter moves). Backlog quarters
+    /// can't carry a promised date, so it is cleared when moving into one.</summary>
+    public void MoveToQuarter(int quarterYear, int quarterNumber)
+    {
+        var quarter = Quarter.Create(quarterYear, quarterNumber);
+        QuarterYear = quarter.Year;
+        QuarterNumber = quarter.Number;
+
+        if (quarter.IsSpecialBacklog)
+            PromisedDate = null;
+    }
+
     public void SetSuccessor(Guid successorId) =>
         SuccessorDemandId = successorId;
 

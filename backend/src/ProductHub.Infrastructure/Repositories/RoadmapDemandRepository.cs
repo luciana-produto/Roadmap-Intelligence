@@ -106,6 +106,22 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<RoadmapDemand>> GetByIdsForUpdateAsync(
+        IEnumerable<Guid> ids,
+        CancellationToken cancellationToken = default)
+    {
+        var demandIds = ids.Distinct().ToArray();
+        if (demandIds.Length == 0)
+            return [];
+
+        // Tracked (no AsNoTracking) so the returned entities can be mutated and saved.
+        return await context.RoadmapDemands
+            .Include(d => d.Products)
+            .Include(d => d.ProjectLinks)
+            .Where(d => demandIds.Contains(d.Id))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<RoadmapDemandDependency>> GetDependenciesByDemandIdsAsync(
         IEnumerable<Guid> demandIds,
         CancellationToken cancellationToken = default)

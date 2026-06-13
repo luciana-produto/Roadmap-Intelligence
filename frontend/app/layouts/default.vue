@@ -106,7 +106,7 @@ const navLinks: NavLinkItem[] = [
     label: 'Cadastros',
     icon: 'i-lucide-package',
     children: [
-      { label: 'Projetos e Produtos', to: '/products' },
+      { label: 'Times e Produtos', to: '/products' },
       { label: 'KPIs', to: '/kpis' }
     ]
   },

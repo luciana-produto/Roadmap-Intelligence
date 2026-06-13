@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { RoadmapProduct, RoadmapProject } from '~/types/roadmap'
 
-useSeoMeta({ title: 'Projetos e Produtos · ProductHub' })
+useSeoMeta({ title: 'Times e Produtos · ProductHub' })
 
 const roadmapStore = useRoadmapStore()
 const toast = useToast()
@@ -84,11 +84,11 @@ async function submitProject() {
   try {
     if (editingProject.value) {
       await roadmapStore.updateProject(editingProject.value.id, payload)
-      toast.add({ title: 'Projeto atualizado', color: 'success' })
+      toast.add({ title: 'Time atualizado', color: 'success' })
     }
     else {
       await roadmapStore.createProject(payload)
-      toast.add({ title: 'Projeto criado', color: 'success' })
+      toast.add({ title: 'Time criado', color: 'success' })
     }
 
     showProjectModal.value = false
@@ -156,7 +156,7 @@ async function executeDeleteProject() {
   isSubmitting.value = true
   try {
     await roadmapStore.deleteProject(projectToDelete.value.id)
-    toast.add({ title: 'Projeto removido', color: 'success' })
+    toast.add({ title: 'Time removido', color: 'success' })
     showDeleteProjectModal.value = false
     projectToDelete.value = null
   }
@@ -198,17 +198,17 @@ async function executeDeleteProduct() {
   <div class="space-y-6">
     <div class="flex items-center justify-between gap-4 flex-wrap">
       <div>
-        <h1 class="text-2xl font-bold text-highlighted">Projetos e produtos</h1>
+        <h1 class="text-2xl font-bold text-highlighted">Times e produtos</h1>
         <p class="text-sm text-muted mt-1">
           Cadastre a estrutura base que abastece o roadmap e os indicadores.
         </p>
       </div>
-      <UButton icon="i-lucide-folder-plus" label="Novo projeto" @click="openCreateProject" />
+      <UButton icon="i-lucide-folder-plus" label="Novo time" @click="openCreateProject" />
     </div>
 
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <UCard :ui="{ body: 'p-4' }">
-        <div class="text-sm text-muted">Projetos cadastrados</div>
+        <div class="text-sm text-muted">Times cadastrados</div>
         <div class="text-2xl font-bold text-highlighted">{{ summary.totalProjects }}</div>
       </UCard>
       <UCard :ui="{ body: 'p-4' }">
@@ -216,7 +216,7 @@ async function executeDeleteProduct() {
         <div class="text-2xl font-bold text-highlighted">{{ summary.totalProducts }}</div>
       </UCard>
       <UCard :ui="{ body: 'p-4' }">
-        <div class="text-sm text-muted">Projetos com produtos</div>
+        <div class="text-sm text-muted">Times com produtos</div>
         <div class="text-2xl font-bold text-success">{{ summary.populatedProjects }}</div>
       </UCard>
     </div>
@@ -225,7 +225,7 @@ async function executeDeleteProduct() {
       <UInput
         v-model="searchQuery"
         icon="i-lucide-search"
-        placeholder="Buscar projeto, slug ou produto..."
+        placeholder="Buscar time, slug ou produto..."
         class="w-full max-w-md"
       />
     </div>
@@ -258,7 +258,7 @@ async function executeDeleteProduct() {
         <div class="mt-5 rounded-2xl border border-default bg-elevated/50">
           <div class="flex items-center justify-between gap-3 border-b border-default px-4 py-3">
             <div>
-              <p class="text-sm font-medium text-highlighted">Produtos do projeto</p>
+              <p class="text-sm font-medium text-highlighted">Produtos do time</p>
               <p class="text-xs text-muted">Gerencie os itens disponíveis para vincular nas demandas.</p>
             </div>
             <UButton size="xs" icon="i-lucide-plus" label="Novo produto" @click="openCreateProduct(project)" />
@@ -282,7 +282,7 @@ async function executeDeleteProduct() {
 
           <div v-else class="px-4 py-8 text-center text-sm text-muted">
             <UIcon name="i-lucide-package-open" class="mx-auto mb-2 text-2xl" />
-            <p>Este projeto ainda não possui produtos cadastrados.</p>
+            <p>Este time ainda não possui produtos cadastrados.</p>
           </div>
         </div>
       </UCard>
@@ -292,19 +292,19 @@ async function executeDeleteProduct() {
       <div class="text-center text-muted">
         <UIcon name="i-lucide-package-search" class="mx-auto mb-3 text-4xl" />
         <p class="text-base font-medium text-highlighted">
-          {{ projects.length ? 'Nenhum resultado encontrado.' : 'Nenhum projeto cadastrado ainda.' }}
+          {{ projects.length ? 'Nenhum resultado encontrado.' : 'Nenhum time cadastrado ainda.' }}
         </p>
         <p class="mt-1 text-sm">
-          {{ projects.length ? 'Ajuste a busca para localizar um projeto ou produto.' : 'Crie o primeiro projeto para começar a popular o banco real.' }}
+          {{ projects.length ? 'Ajuste a busca para localizar um time ou produto.' : 'Crie o primeiro time para começar a popular o banco real.' }}
         </p>
-        <UButton v-if="!projects.length" label="Criar projeto" class="mt-4" @click="openCreateProject" />
+        <UButton v-if="!projects.length" label="Criar time" class="mt-4" @click="openCreateProject" />
       </div>
     </UCard>
 
     <UModal v-model:open="showProjectModal">
       <template #header>
         <h3 class="text-lg font-semibold text-highlighted">
-          {{ editingProject ? 'Editar projeto' : 'Novo projeto' }}
+          {{ editingProject ? 'Editar time' : 'Novo time' }}
         </h3>
       </template>
 
@@ -315,7 +315,7 @@ async function executeDeleteProduct() {
           </UFormField>
 
           <p class="text-xs text-muted">
-            O identificador interno do projeto agora é gerado automaticamente a partir do nome.
+            O identificador interno do time agora é gerado automaticamente a partir do nome.
           </p>
         </div>
       </template>
@@ -324,7 +324,7 @@ async function executeDeleteProduct() {
         <div class="flex justify-end gap-2">
           <UButton label="Cancelar" variant="ghost" @click="showProjectModal = false" />
           <UButton
-            :label="editingProject ? 'Salvar' : 'Criar projeto'"
+            :label="editingProject ? 'Salvar' : 'Criar time'"
             :loading="isSubmitting"
             :disabled="!projectForm.name.trim()"
             @click="submitProject"
@@ -343,7 +343,7 @@ async function executeDeleteProduct() {
       <template #body>
         <div class="space-y-4 p-4">
           <div class="rounded-xl border border-default bg-elevated/60 px-3 py-2 text-sm text-muted">
-            Projeto vinculado: <strong class="text-highlighted">{{ productParentProject?.name }}</strong>
+            Time vinculado: <strong class="text-highlighted">{{ productParentProject?.name }}</strong>
           </div>
 
           <UFormField label="Nome" required>
@@ -367,12 +367,12 @@ async function executeDeleteProduct() {
 
     <UModal v-model:open="showDeleteProjectModal">
       <template #header>
-        <h3 class="text-lg font-semibold text-error">Remover projeto</h3>
+        <h3 class="text-lg font-semibold text-error">Remover time</h3>
       </template>
 
       <template #body>
         <p class="p-4 text-sm text-muted">
-          Tem certeza que deseja remover o projeto <strong>{{ projectToDelete?.name }}</strong>?
+          Tem certeza que deseja remover o time <strong>{{ projectToDelete?.name }}</strong>?
           A exclusão só será permitida se ele ainda não estiver em uso no roadmap.
         </p>
       </template>
