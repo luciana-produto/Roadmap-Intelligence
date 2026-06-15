@@ -206,6 +206,19 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
         context.RoadmapDemandDependencies.RemoveRange(links);
     }
 
+    public async Task RemoveAllDependenciesInvolvingAsync(
+        Guid demandId,
+        CancellationToken cancellationToken = default)
+    {
+        // Both directions: links where this item depends on others, and links where others depend
+        // on this item. Used before deleting an item so it doesn't violate the FK.
+        var links = await context.RoadmapDemandDependencies
+            .Where(link => link.DemandId == demandId || link.DependsOnDemandId == demandId)
+            .ToListAsync(cancellationToken);
+
+        context.RoadmapDemandDependencies.RemoveRange(links);
+    }
+
     public async Task<RoadmapDemand?> GetOriginalBySuccessorIdAsync(
         Guid successorId,
         CancellationToken cancellationToken = default) =>

@@ -98,6 +98,15 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     if (original) original.successorDemandId = undefined
     demands.value = demands.value.filter(demand => demand.id !== id)
     removeDependencyOption(id)
+
+    // The backend dropped every dependency link involving the deleted item; mirror that locally so
+    // the other items' "depends on / blocked by" update without a reload.
+    for (const demand of demands.value) {
+      if (demand.dependsOn?.some(dep => dep.demandId === id))
+        demand.dependsOn = demand.dependsOn.filter(dep => dep.demandId !== id)
+      if (demand.dependedOnBy?.some(dep => dep.demandId === id))
+        demand.dependedOnBy = demand.dependedOnBy.filter(dep => dep.demandId !== id)
+    }
   }
 
   function applyReorderedDemandState(id: string, status: DemandStatus, orderedDemandIds: string[]) {

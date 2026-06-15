@@ -36,6 +36,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         var originalStatus = demand.Status;
         var originalQuarterYear = demand.QuarterYear;
         var originalQuarterNumber = demand.QuarterNumber;
+        var originalProjectId = demand.ProjectId;
 
         // A composite epic can only become simple again when it has no demands linked to it.
         if (itemType == RoadmapItemType.Epic && request.IsSimple && !demand.IsSimple
@@ -43,13 +44,6 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         {
             throw new ValidationException([
                 new ValidationFailure(nameof(request.IsSimple), "An epic with linked demands cannot be converted to a simple epic.")
-            ]);
-        }
-
-        if (request.ProjectId != demand.ProjectId && itemType == RoadmapItemType.Demand)
-        {
-            throw new ValidationException([
-                new ValidationFailure(nameof(request.ProjectId), "Changing the project of an existing demand is not supported.")
             ]);
         }
 
@@ -137,7 +131,9 @@ public sealed class UpdateRoadmapDemandCommandHandler(
         int? nextSortOrder = null;
         if (itemType == RoadmapItemType.Demand
             && request.ProjectId.HasValue
-            && (originalQuarterYear != request.QuarterYear || originalQuarterNumber != request.QuarterNumber))
+            && (originalQuarterYear != request.QuarterYear
+                || originalQuarterNumber != request.QuarterNumber
+                || originalProjectId != request.ProjectId))
         {
             nextSortOrder = await demandRepository.GetNextSortOrderAsync(
                 request.ProjectId.Value,

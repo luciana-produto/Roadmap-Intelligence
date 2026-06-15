@@ -592,25 +592,62 @@ function compareQuarterPosition(left: Pick<RoadmapDemand, 'quarterYear' | 'quart
   return left.quarterNumber - right.quarterNumber
 }
 
+// Quarter used for dependency ordering. Demands and simple epics use their own quarter. A composite
+// epic has no own quarter, so we use its LAST (latest) demand's quarter — recomputed LIVE from the
+// store, so adding/removing demands keeps the inconsistency correct. A composite epic with no
+// demands is "unplanned" → it can never be "done", so depending on it is always inconsistent.
+type DependencyQuarter = { quarterYear: number, quarterNumber: number } | 'unplanned'
+
+function effectiveDependencyQuarter(
+  itemId: string,
+  fallback: { quarterYear: number, quarterNumber: number }
+): DependencyQuarter {
+  const item = itemsById.value.get(itemId)
+  if (!item)
+    return fallback // not loaded (rare) → fall back to the snapshot quarter
+
+  if (item.itemType !== 'Epic' || item.isSimple)
+    return { quarterYear: item.quarterYear, quarterNumber: item.quarterNumber }
+
+  const epicDemands = demandItems.value.filter(child => child.epicId === itemId)
+  if (!epicDemands.length)
+    return 'unplanned'
+
+  let latest = epicDemands[0]!
+  for (const child of epicDemands)
+    if ((child.quarterYear * 4 + child.quarterNumber) > (latest.quarterYear * 4 + latest.quarterNumber))
+      latest = child
+  return { quarterYear: latest.quarterYear, quarterNumber: latest.quarterNumber }
+}
+
+// `dependent` is scheduled before `dependency` is done → inconsistent. Handles epics (effective
+// quarter), backlog (unplanned) and no-demand epics (never done).
+function isOrderInconsistent(
+  dependent: { id: string, quarterYear: number, quarterNumber: number },
+  dependency: DemandDependency
+) {
+  const dependentQuarter = effectiveDependencyQuarter(dependent.id, { quarterYear: dependent.quarterYear, quarterNumber: dependent.quarterNumber })
+  if (dependentQuarter === 'unplanned' || isSpecialBacklogQuarter(dependentQuarter.quarterYear, dependentQuarter.quarterNumber))
+    return false // the dependent isn't planned → no ordering to violate
+
+  const dependencyQuarter = effectiveDependencyQuarter(dependency.demandId, { quarterYear: dependency.quarterYear, quarterNumber: dependency.quarterNumber })
+  if (dependencyQuarter === 'unplanned' || isSpecialBacklogQuarter(dependencyQuarter.quarterYear, dependencyQuarter.quarterNumber))
+    return true // the dependency can't be "done" before the dependent starts
+
+  return compareQuarterPosition(dependentQuarter, dependencyQuarter) < 0
+}
+
 function isDependencyInconsistent(demand: RoadmapDemand, dependency: DemandDependency) {
-  const isDependentDemandBacklog = isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
-  if (isDependentDemandBacklog)
-    return false
-
-  const isDependencyBacklog = isSpecialBacklogQuarter(dependency.quarterYear, dependency.quarterNumber)
-  if (isDependencyBacklog)
-    return true
-
-  return compareQuarterPosition(demand, dependency) < 0
+  // `demand` depends on `dependency`.
+  return isOrderInconsistent(demand, dependency)
 }
 
 function isReverseDependencyInconsistent(demand: RoadmapDemand, dep: DemandDependency) {
-  // dep = demand A that depends on this demand (B); inconsistent if A is planned before B finishes
-  const isABacklog = isSpecialBacklogQuarter(dep.quarterYear, dep.quarterNumber)
-  if (isABacklog) return false
-  const isBBacklog = isSpecialBacklogQuarter(demand.quarterYear, demand.quarterNumber)
-  if (isBBacklog) return true
-  return (dep.quarterYear * 4 + dep.quarterNumber) < (demand.quarterYear * 4 + demand.quarterNumber)
+  // `dep` (its demandId) depends on `demand` — i.e. `demand` blocks `dep`.
+  return isOrderInconsistent(
+    { id: dep.demandId, quarterYear: dep.quarterYear, quarterNumber: dep.quarterNumber },
+    { ...dep, demandId: demand.id, quarterYear: demand.quarterYear, quarterNumber: demand.quarterNumber }
+  )
 }
 
 function hasInconsistentDependency(demand: RoadmapDemand) {
@@ -3415,6 +3452,23 @@ const convertSourceEpic = ref<RoadmapDemand | null>(null)
 const confirmConvertToCompositeOpen = ref(false)
 const deleteId = ref<string | null>(null)
 const confirmDeleteOpen = ref(false)
+// Dependency links of the item being deleted (both directions) — shown in the confirm dialog so the
+// user knows these links will be removed before the item is deleted.
+const deleteDependencyLinks = computed(() => {
+  if (!deleteId.value)
+    return []
+  const target = demands.value.find(demand => demand.id === deleteId.value)
+  if (!target)
+    return []
+
+  const seen = new Set<string>()
+  const links: Array<{ demandId: string, title: string, projectName: string, itemType: RoadmapItemType, relation: 'dependsOn' | 'dependedOnBy' }> = []
+  for (const dep of target.dependsOn ?? [])
+    if (!seen.has(dep.demandId)) { seen.add(dep.demandId); links.push({ demandId: dep.demandId, title: dep.title, projectName: dep.projectName, itemType: dep.itemType, relation: 'dependsOn' }) }
+  for (const dep of target.dependedOnBy ?? [])
+    if (!seen.has(dep.demandId)) { seen.add(dep.demandId); links.push({ demandId: dep.demandId, title: dep.title, projectName: dep.projectName, itemType: dep.itemType, relation: 'dependedOnBy' }) }
+  return links
+})
 const roadmapParentOptions = computed(() =>
   roadmapItems.value.map(item => ({
     id: item.id,
@@ -7702,8 +7756,35 @@ watch(activeDemandKpiId, async (value) => {
     <UModal
       v-model:open="confirmDeleteOpen"
       title="Remover Demanda"
-      description="Tem certeza que deseja remover esta demanda? Esta ação não pode ser desfeita."
+      :description="deleteDependencyLinks.length ? undefined : 'Tem certeza que deseja remover esta demanda? Esta ação não pode ser desfeita.'"
     >
+      <template v-if="deleteDependencyLinks.length" #body>
+        <div class="space-y-3">
+          <p class="text-sm text-muted">
+            Tem certeza que deseja remover esta demanda? Esta ação não pode ser desfeita.
+          </p>
+          <div class="rounded-lg border border-amber-200/70 bg-amber-50/60 p-3 dark:border-amber-800/50 dark:bg-amber-900/15">
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-300">
+              Este item possui {{ deleteDependencyLinks.length === 1 ? 'um vínculo' : `${deleteDependencyLinks.length} vínculos` }} de dependência que {{ deleteDependencyLinks.length === 1 ? 'será removido' : 'serão removidos' }} ao excluir:
+            </p>
+            <ul class="mt-2 space-y-1">
+              <li
+                v-for="link in deleteDependencyLinks"
+                :key="link.demandId"
+                class="flex items-center gap-1.5 text-xs text-amber-800/90 dark:text-amber-300/90"
+              >
+                <UIcon :name="link.relation === 'dependsOn' ? 'i-lucide-lock' : 'i-lucide-lock-open'" class="h-3 w-3 shrink-0" />
+                <span>
+                  {{ link.relation === 'dependsOn' ? 'Depende de' : 'Bloqueia' }}:
+                  <strong>{{ link.itemType === 'Epic' ? 'Épico' : 'Demanda' }} {{ link.title }}</strong>
+                  <template v-if="link.projectName"> · {{ link.projectName }}</template>
+                </span>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </template>
+
       <template #footer>
         <div class="flex justify-end gap-2">
           <UButton

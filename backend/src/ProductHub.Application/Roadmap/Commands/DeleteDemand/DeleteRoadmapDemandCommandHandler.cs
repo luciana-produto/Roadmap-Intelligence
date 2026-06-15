@@ -32,6 +32,10 @@ public sealed class DeleteRoadmapDemandCommandHandler(
         var original = await demandRepository.GetOriginalBySuccessorIdAsync(request.Id, cancellationToken);
         original?.ClearSuccessor();
 
+        // Remove every dependency link involving this item (both directions) so the deletion doesn't
+        // violate the foreign key — the dependency is simply dropped from the other side.
+        await demandRepository.RemoveAllDependenciesInvolvingAsync(request.Id, cancellationToken);
+
         demandRepository.Remove(demand);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }

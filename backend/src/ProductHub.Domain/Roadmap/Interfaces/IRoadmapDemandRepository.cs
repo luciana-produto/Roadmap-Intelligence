@@ -51,5 +51,9 @@ public interface IRoadmapDemandRepository : IRepository<RoadmapDemand>
         IEnumerable<Guid> dependentDemandIds,
         CancellationToken cancellationToken = default);
 
+    Task RemoveAllDependenciesInvolvingAsync(
+        Guid demandId,
+        CancellationToken cancellationToken = default);
+
     Task<RoadmapDemand?> GetOriginalBySuccessorIdAsync(Guid successorId, CancellationToken cancellationToken = default);
 }

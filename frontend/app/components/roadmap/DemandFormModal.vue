@@ -325,6 +325,7 @@ const activeTab = ref<DemandFormTab>('general')
 const showSubmitHint = ref(false)
 const customerInputRef = useTemplateRef<HTMLInputElement>('customerInput')
 const issueLinksContainerRef = useTemplateRef<HTMLElement>('issueLinksContainer')
+const dependencyResultsRef = useTemplateRef<HTMLElement>('dependencyResults')
 const customerRenameSource = ref<string | null>(null)
 const pendingCustomerRenames = ref<CustomerRename[]>([])
 let submitHintTimeout: ReturnType<typeof setTimeout> | null = null
@@ -687,6 +688,17 @@ function syncSingleProductSelection() {
   form.productIds = form.productIds.filter(productId => availableProductIds.has(productId))
 }
 
+// Fired only on a USER change of the demand's "Time" (not on form population). The team owns the
+// products, so drop products that don't exist in the new team and auto-select when it has a single
+// product — the user re-picks otherwise. Works on edit too (changing an existing demand's team).
+function onDemandProjectChange() {
+  const availableProductIds = new Set(productsForProject.value.map(product => product.id))
+  form.productIds = form.productIds.filter(productId => availableProductIds.has(productId))
+
+  if (form.productIds.length === 0 && productsForProject.value.length === 1)
+    form.productIds = [productsForProject.value[0]!.id]
+}
+
 function populateFormFromDemand(demand: RoadmapDemand) {
   isHydratingForm.value = true
   includeCrossProjectRoadmaps.value = false
@@ -795,6 +807,7 @@ watch(
     removedTradeOffIds.value = []
     removedDependedOnByIds.value = []
     quickDepOpen.value = false
+    dependencySearch.value = ''
 
     activeTab.value = 'general'
     showSubmitHint.value = false
@@ -1035,19 +1048,51 @@ const canCreateCustomerFromInput = computed(() => {
 
 const hasDependencyQuery = computed(() => dependencySearch.value.trim().length > 0)
 
+// Bring the dependency results (and the "create & link" option) into view when a search starts or
+// the quick-create opens. We locate the modal's actual scroll container and scroll it, because
+// scrollIntoView can fail to find the right ancestor inside the modal.
+function scrollDependencyAreaIntoView() {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      const anchor = dependencyResultsRef.value
+      if (!anchor)
+        return
+
+      let parent = anchor.parentElement
+      while (parent) {
+        const style = getComputedStyle(parent)
+        if (/(auto|scroll)/.test(style.overflowY) && parent.scrollHeight > parent.clientHeight) {
+          parent.scrollTo({ top: parent.scrollHeight, behavior: 'smooth' })
+          return
+        }
+        parent = parent.parentElement
+      }
+
+      anchor.scrollIntoView({ block: 'end', behavior: 'smooth' })
+    })
+  })
+}
+
+watch(hasDependencyQuery, (hasQuery) => {
+  if (hasQuery)
+    scrollDependencyAreaIntoView()
+})
+
 const filteredDependencyOptions = computed(() => {
   const query = dependencySearch.value.trim().toLowerCase()
   if (!query)
     return []
 
   return props.dependencyOptions.filter(option => {
-    if (option.itemType !== 'Demand')
+    // Both demands and epics can be dependencies (roadmaps are already excluded by the backend).
+    if (option.itemType === 'Roadmap')
       return false
 
     if (props.demand && option.demandId === props.demand.id)
       return false
 
-    return `${option.projectName} ${option.title} ${option.quarterLabel} ${option.status}`.toLowerCase().includes(query)
+    const typeLabel = option.itemType === 'Epic' ? 'épico' : 'demanda'
+    return `${typeLabel} ${option.projectName} ${option.title} ${option.quarterLabel} ${option.status}`.toLowerCase().includes(query)
   })
 })
 
@@ -1103,6 +1148,7 @@ function openQuickDependencyCreate() {
     ? buildQuarterValue(form.quarterYear, form.quarterNumber)
     : ''
   quickDepOpen.value = true
+  scrollDependencyAreaIntoView()
 }
 
 function toggleQuickDepProduct(productId: string, checked: boolean) {
@@ -1867,7 +1913,7 @@ async function handleSubmit() {
                 :items="sortedProjects.map(p => ({ value: p.id, label: p.name }))"
                 placeholder="Selecione"
                 class="w-full"
-                :disabled="isEdit"
+                @update:model-value="onDemandProjectChange"
               />
 
               <!-- Épico simples: apenas 1 projeto -->
@@ -2434,6 +2480,7 @@ async function handleSubmit() {
                 :key="dependency.demandId"
                 class="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-1 text-xs text-primary"
               >
+                <span class="rounded bg-white/60 px-1 text-[10px] font-semibold uppercase dark:bg-black/20">{{ dependency.itemType === 'Epic' ? 'Épico' : 'Demanda' }}</span>
                 {{ dependency.projectName }} · {{ dependency.title }}
                 <button
                   type="button"
@@ -2462,7 +2509,15 @@ async function handleSubmit() {
                   @change="(event) => toggleDependency(dependency.demandId, (event.target as HTMLInputElement).checked)"
                 >
                 <div class="min-w-0">
-                  <p class="truncate text-sm font-medium text-highlighted">{{ dependency.title }}</p>
+                  <div class="flex items-center gap-1.5">
+                    <span
+                      class="shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+                      :class="dependency.itemType === 'Epic' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'"
+                    >
+                      {{ dependency.itemType === 'Epic' ? 'Épico' : 'Demanda' }}
+                    </span>
+                    <p class="truncate text-sm font-medium text-highlighted">{{ dependency.title }}</p>
+                  </div>
                   <p class="text-xs text-muted">{{ dependency.projectName }} · {{ dependency.quarterLabel }} · {{ dependency.status }}</p>
                 </div>
               </label>
@@ -2569,6 +2624,9 @@ async function handleSubmit() {
                 </UButton>
               </div>
             </div>
+
+            <!-- Scroll anchor: brings the results + "create & link" into view when searching. -->
+            <div ref="dependencyResults" aria-hidden="true"></div>
           </div>
         </section>
         </template>
