@@ -70,7 +70,7 @@ export function useAuth(deps: AuthDeps = {}) {
 
   async function handleCallback(sessionId: string): Promise<boolean> {
     try {
-      logger.info('Processando callback SSO', { sessionId })
+      logger.info('Processando callback SSO')
 
       const user = await $fetch<SsoUser>(
         `${ssoBaseUrl}/api/auth/${tenantKey}/user/${sessionId}`

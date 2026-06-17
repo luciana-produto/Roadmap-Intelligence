@@ -16,8 +16,13 @@ const errorMessage = ref('')
 onMounted(async () => {
   const sessionId = route.query.sessionId as string | undefined
 
+  // Remove o sessionId da barra de endereços/histórico imediatamente,
+  // para que o token não fique exposto na URL (histórico, referer, etc.).
+  if (import.meta.client)
+    window.history.replaceState(window.history.state, '', '/auth/callback')
+
   if (!sessionId) {
-    logger.warn('Callback sem sessionId', { query: route.query })
+    logger.warn('Callback sem sessionId')
     errorMessage.value = 'Parâmetro de sessão ausente. Tente fazer login novamente.'
     status.value = 'error'
     return
