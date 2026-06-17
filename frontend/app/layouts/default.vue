@@ -159,7 +159,7 @@ const mainContentWidthClass = computed(() =>
 <template>
   <div class="min-h-screen bg-default md:flex">
     <aside
-      class="relative hidden md:flex md:shrink-0 md:flex-col md:border-r md:border-white/10 dark transition-[width] duration-200"
+      class="relative hidden md:sticky md:top-0 md:h-screen md:flex md:shrink-0 md:flex-col md:border-r md:border-white/10 dark transition-[width] duration-200"
       :class="desktopSidebarClasses"
       :style="sidebarStyle"
     >

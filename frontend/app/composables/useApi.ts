@@ -1,15 +1,22 @@
 import { useAppStore } from '~/stores/app'
+import { useAuthStore } from '~/stores/auth'
 import { AppConstants } from '~/utils/constants'
 
 export const useApi = () => {
   const config = useRuntimeConfig()
   const baseURL = config.public.apiBase
   const appStore = useAppStore()
+  const authStore = useAuthStore()
   const toast = useToast()
   const logger = useLogger('useApi')
   const { getHeader: getCorrelationHeader, get: getCorrelationId } = useCorrelationId()
 
-  const buildHeaders = (): Record<string, string> => getCorrelationHeader()
+  const buildHeaders = (): Record<string, string> => {
+    const headers = getCorrelationHeader()
+    if (authStore.sessionId)
+      headers['Authorization'] = `Bearer ${authStore.sessionId}`
+    return headers
+  }
 
   const handleError = (error: unknown, correlationId: string) => {
     const err = error as { data?: { title?: string, detail?: string, correlationId?: string }, status?: number }

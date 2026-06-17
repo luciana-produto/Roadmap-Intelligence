@@ -41,6 +41,11 @@ services:
       - ASPNETCORE_ENVIRONMENT=Production
       - ASPNETCORE_HTTP_PORTS=8080
       - Serilog__SeqUrl=http://seq:5341
+      - Sso__BaseUrl=https://sso-auth-hub.linxfood.com.br
+      - Sso__TenantKey=linx
+      # Habilita o "Dev Login (local only)" neste ambiente local.
+      # ATENÇÃO: NUNCA deixar 'true' em um ambiente exposto/publicado — bypassa a autenticação.
+      - Sso__AllowDevSession=true
       - Cors__AllowedOrigins__0=http://localhost:3001
       - "ConnectionStrings__SqlServer=${ConnectionStrings__SqlServer:-Server=20.51.132.203,1433;Database=ProductHub;User ID=product_team;Password=6gr95L4gAJ6ll2o3BWxq9enxfg;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30}"
       - Roadmap__SeedMockData=false

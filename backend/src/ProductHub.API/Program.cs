@@ -1,8 +1,11 @@
 using Serilog;
 using Serilog.Enrichers.CorrelationId;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using System.Reflection;
 using ProductHub.API.Middleware;
+using ProductHub.API.Security;
 using ProductHub.Application;
 using ProductHub.Infrastructure;
 using ProductHub.Infrastructure.Persistence;
@@ -37,6 +40,32 @@ try
     builder.Services.AddControllers();
     builder.Services.AddOpenApi();
 
+    builder.Services.AddHttpClient();
+    builder.Services.AddMemoryCache();
+
+    builder.Services
+        .AddAuthentication(SsoAuthenticationHandler.SchemeName)
+        .AddScheme<SsoAuthenticationOptions, SsoAuthenticationHandler>(
+            SsoAuthenticationHandler.SchemeName,
+            options =>
+            {
+                options.SsoBaseUrl = builder.Configuration["Sso:BaseUrl"] ?? string.Empty;
+                options.TenantKey = builder.Configuration["Sso:TenantKey"] ?? string.Empty;
+                // Aceita o "Dev Login (local only)" sem chamar o SSO.
+                // Por padrão só em Development; pode ser ligado explicitamente via Sso:AllowDevSession
+                // para rodar localmente em containers (NUNCA habilitar em ambiente exposto/publicado).
+                options.AllowDevSession =
+                    builder.Configuration.GetValue<bool?>("Sso:AllowDevSession")
+                    ?? builder.Environment.IsDevelopment();
+            });
+
+    // Por padrão, todo endpoint exige um usuário autenticado.
+    // Endpoints públicos (health, OpenAPI) usam .AllowAnonymous() explicitamente.
+    builder.Services.AddAuthorization(options =>
+        options.FallbackPolicy = new AuthorizationPolicyBuilder()
+            .RequireAuthenticatedUser()
+            .Build());
+
     builder.Services.AddCors(options =>
         options.AddPolicy("AllowFrontend", policy =>
             policy.WithOrigins(
@@ -60,7 +89,7 @@ try
     app.UseMiddleware<ExceptionHandlingMiddleware>();
 
     if (app.Environment.IsDevelopment())
-        app.MapOpenApi();
+        app.MapOpenApi().AllowAnonymous();
 
     app.UseSerilogRequestLogging(opts =>
         opts.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
@@ -71,9 +100,10 @@ try
 
     app.UseHttpsRedirection();
     app.UseCors("AllowFrontend");
+    app.UseAuthentication();
     app.UseAuthorization();
     app.MapControllers();
-    app.MapHealthChecks("/health");
+    app.MapHealthChecks("/health").AllowAnonymous();
 
     app.Run();
 }
