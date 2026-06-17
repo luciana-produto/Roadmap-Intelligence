@@ -121,14 +121,26 @@ Visão consolidada por projeto com:
 - Observabilidade via Seq com structured logging
 - Seed automático com dados mock realistas
 
+## Configuração de segredos (.env)
+
+As credenciais (senha do banco, connection string) **não ficam no `docker-compose.yml`**. Elas são lidas de um arquivo `.env` na raiz do projeto, que **não é versionado** (está no `.gitignore`).
+
+Para configurar o ambiente local:
+
+1. Copie o modelo: `cp .env.example .env`
+2. Preencha os valores reais no `.env` (`SA_PASSWORD` e `ConnectionStrings__SqlServer`).
+3. Suba a stack normalmente: `docker compose up -d --build`
+
+O `docker-compose` carrega o `.env` automaticamente. **Nunca** commite o arquivo `.env`.
+
 ## Configuração SQL Server
 
-Para ambiente persistente, o backend lê a connection string pela chave `ConnectionStrings__SqlServer`.
+Para ambiente persistente, o backend lê a connection string pela chave `ConnectionStrings__SqlServer` (definida no `.env`).
 
-Exemplo PowerShell:
+Exemplo de valor (sem expor a senha real):
 
-```powershell
-$env:ConnectionStrings__SqlServer = "Server=20.51.132.203,1433;Database=ProductHub;User ID=product_team;Password=<senha>;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30"
+```
+Server=<host>,1433;Database=ProductHub;User ID=<usuario>;Password=<senha>;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30
 ```
 
 Observações:

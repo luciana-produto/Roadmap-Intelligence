@@ -4,7 +4,7 @@ services:
     container_name: producthub_sqlserver
     environment:
       - ACCEPT_EULA=Y
-      - SA_PASSWORD=ProductHub@2026!
+      - SA_PASSWORD=${SA_PASSWORD}
       - MSSQL_PID=Developer
     ports:
       - '1433:1433'
@@ -13,7 +13,7 @@ services:
     networks:
       - producthub
     healthcheck:
-      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'ProductHub@2026!' -Q 'SELECT 1' -No -C || exit 1"]
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$SA_PASSWORD\" -Q 'SELECT 1' -No -C || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -47,7 +47,7 @@ services:
       # ATENÇÃO: NUNCA deixar 'true' em um ambiente exposto/publicado — bypassa a autenticação.
       - Sso__AllowDevSession=true
       - Cors__AllowedOrigins__0=http://localhost:3001
-      - "ConnectionStrings__SqlServer=${ConnectionStrings__SqlServer:-Server=20.51.132.203,1433;Database=ProductHub;User ID=product_team;Password=6gr95L4gAJ6ll2o3BWxq9enxfg;Encrypt=True;TrustServerCertificate=True;Connection Timeout=30}"
+      - "ConnectionStrings__SqlServer=${ConnectionStrings__SqlServer}"
       - Roadmap__SeedMockData=false
     ports:
       - '5001:8080'
