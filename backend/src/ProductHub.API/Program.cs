@@ -71,9 +71,9 @@ try
             policy.WithOrigins(
                       builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
                       ?? ["http://localhost:3000"])
-                  .AllowAnyMethod()
-                  .AllowAnyHeader()
-                  .WithExposedHeaders("X-Correlation-ID")));
+                  .WithMethods("GET", "POST", "PUT", "DELETE")
+                  .WithHeaders("Authorization", "Content-Type", AppConstants.Http.CorrelationIdHeader)
+                  .WithExposedHeaders(AppConstants.Http.CorrelationIdHeader)));
 
     var sqlConnectionString = builder.Configuration.GetConnectionString("SqlServer");
     var seedMockData = builder.Configuration.GetValue<bool?>("Roadmap:SeedMockData") ?? builder.Environment.IsDevelopment();
