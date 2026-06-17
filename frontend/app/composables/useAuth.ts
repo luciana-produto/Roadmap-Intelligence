@@ -53,6 +53,14 @@ export function useAuth(deps: AuthDeps = {}) {
     userCookie.value = null
   }
 
+  // Restaura a sessão a partir dos cookies (ex.: após recarregar a página),
+  // já que o store fica em memória e é perdido no reload.
+  function restoreFromCookies() {
+    if (authStore.isAuthenticated) return
+    if (sessionCookie.value && userCookie.value)
+      authStore.restoreSession(sessionCookie.value, userCookie.value)
+  }
+
   function buildLoginUrl(callbackUrl: string): string {
     const params = new URLSearchParams({
       clientId,
@@ -114,5 +122,5 @@ export function useAuth(deps: AuthDeps = {}) {
     }
   }
 
-  return { redirectToSso, handleCallback, logout, persistSession }
+  return { redirectToSso, handleCallback, logout, persistSession, restoreFromCookies }
 }
