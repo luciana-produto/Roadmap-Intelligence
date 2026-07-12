@@ -39,6 +39,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public NoKpiClassification? NoKpiClassification { get; private set; }
     public bool ExcludeFromCapacity { get; private set; }
     public Guid? SuccessorDemandId { get; private set; }
+    public SpilloverReason? SpilloverReason { get; private set; }
+    public string? SpilloverObservation { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -165,7 +167,9 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         bool excludeFromCapacity = false,
         bool hoursRed = false,
         string? rowColor = null,
-        bool isSimple = false)
+        bool isSimple = false,
+        SpilloverReason? spilloverReason = null,
+        string? spilloverObservation = null)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -209,6 +213,8 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
         HasNoKpi = hasNoKpi;
         NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification);
         ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity;
+        SpilloverReason = status == DemandStatus.Spillover ? spilloverReason : null;
+        SpilloverObservation = status == DemandStatus.Spillover ? spilloverObservation : null;
     }
 
     public void ConvertToComposite()
@@ -235,6 +241,12 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
 
     public void SetSortOrder(int sortOrder) =>
         SortOrder = sortOrder;
+
+    public void SetSpilloverDetails(SpilloverReason? reason, string? observation)
+    {
+        SpilloverReason = reason;
+        SpilloverObservation = observation;
+    }
 
     /// <summary>Moves the item to another quarter (used by bulk quarter moves). Backlog quarters
     /// can't carry a promised date, so it is cleared when moving into one.</summary>

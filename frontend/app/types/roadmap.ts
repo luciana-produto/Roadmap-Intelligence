@@ -17,6 +17,25 @@ export type DeprioritizationReason =
   | 'LackOfCapacity'
   | 'ContextChange'
   | 'Customizacao'
+  | 'StrategyChange'
+  | 'HigherValuePrioritization'
+  | 'LowCustomerDemand'
+  | 'LowExpectedReturn'
+  | 'BusinessDefinitionDependency'
+  | 'AlternativeSolutionAvailable'
+  | 'RegulatoryRequirementChanged'
+  | 'CustomerWithdrew'
+  | 'ReplacedByOtherInitiative'
+  | 'UndefinedScope'
+
+export type SpilloverReason =
+  | 'ScopeChange'
+  | 'PriorityChangeNoTradeOff'
+  | 'ExternalDependency'
+  | 'TechnicalBlock'
+  | 'IncorrectEstimate'
+  | 'InsufficientCapacity'
+  | 'QualityIssues'
 
 export type KpiType = 'Business' | 'Product'
 export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
@@ -138,6 +157,8 @@ export interface RoadmapDemand {
   noKpiClassification?: NoKpiClassification
   excludeFromCapacity?: boolean
   successorDemandId?: string
+  spilloverReason?: SpilloverReason
+  spilloverObservation?: string
   tradeOffHistory: DemandTradeOffHistory[]
   kpiLinks: DemandKpiLink[]
   kpiMeasurements: KpiMeasurement[]
@@ -195,6 +216,8 @@ export interface DemandFormData {
   hasNoKpi?: boolean
   noKpiClassification?: NoKpiClassification
   excludeFromCapacity?: boolean
+  spilloverReason?: SpilloverReason
+  spilloverObservation?: string
 }
 
 export interface CustomerRename {

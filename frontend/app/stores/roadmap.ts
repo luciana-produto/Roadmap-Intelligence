@@ -413,10 +413,10 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     removeDemandState(id)
   }
 
-  async function createSpillover(demandId: string, targetYear: number, targetNumber: number): Promise<RoadmapDemand> {
+  async function createSpillover(demandId: string, targetYear: number, targetNumber: number, spilloverReason?: string, spilloverObservation?: string): Promise<RoadmapDemand> {
     const res = await api.post<ApiResponse<RoadmapDemand>>(
       `/api/roadmap/demands/${demandId}/spillover`,
-      { originalDemandId: demandId, targetQuarterYear: targetYear, targetQuarterNumber: targetNumber }
+      { originalDemandId: demandId, targetQuarterYear: targetYear, targetQuarterNumber: targetNumber, spilloverReason, spilloverObservation }
     )
 
     if (res.data) {
@@ -425,6 +425,8 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       if (original) {
         original.successorDemandId = res.data.id
         original.status = 'Spillover'
+        original.spilloverReason = (spilloverReason as RoadmapDemand['spilloverReason']) ?? undefined
+        original.spilloverObservation = spilloverObservation ?? undefined
       }
     }
 

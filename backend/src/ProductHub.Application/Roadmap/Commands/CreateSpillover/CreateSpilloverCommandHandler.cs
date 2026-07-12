@@ -83,6 +83,9 @@ public sealed class CreateSpilloverCommandHandler(
 
         original.SetSuccessor(spillover.Id);
         original.SetStatus(DemandStatus.Spillover);
+        original.SetSpilloverDetails(
+            !string.IsNullOrEmpty(request.SpilloverReason) ? Enum.Parse<SpilloverReason>(request.SpilloverReason) : null,
+            request.SpilloverObservation);
 
         await demandRepository.AddAsync(spillover, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);

@@ -172,7 +172,9 @@ public sealed class UpdateRoadmapDemandCommandHandler(
               request.ExcludeFromCapacity,
               request.HoursRed,
               request.RowColor,
-              request.IsSimple);
+              request.IsSimple,
+              !string.IsNullOrEmpty(request.SpilloverReason) ? Enum.Parse<SpilloverReason>(request.SpilloverReason) : null,
+              request.SpilloverObservation);
         if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
         {
             var existingTradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(demand.Id, cancellationToken);

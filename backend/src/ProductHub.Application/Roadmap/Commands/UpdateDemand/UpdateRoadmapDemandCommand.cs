@@ -36,4 +36,6 @@ public sealed record UpdateRoadmapDemandCommand(
     bool ExcludeFromCapacity = false,
     bool HoursRed = false,
     string? RowColor = null,
-    bool IsSimple = false) : IRequest<RoadmapDemandDto>;
+    bool IsSimple = false,
+    string? SpilloverReason = null,
+    string? SpilloverObservation = null) : IRequest<RoadmapDemandDto>;

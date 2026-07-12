@@ -37,6 +37,8 @@ type SharedDemandMutationPayload = {
   problemClarity?: number
   hasNoKpi: boolean
   noKpiClassification?: NoKpiClassification
+  spilloverReason?: string
+  spilloverObservation?: string
 }
 
 function normalizeCustomers(customers?: string[]) {
@@ -101,7 +103,9 @@ function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemand
     problemClarity: payload.itemType === 'Epic' ? payload.problemClarity ?? undefined : undefined,
     hasNoKpi: payload.hasNoKpi ?? false,
     noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined,
-    excludeFromCapacity: payload.excludeFromCapacity ?? false
+    excludeFromCapacity: payload.excludeFromCapacity ?? false,
+    spilloverReason: payload.status === 'Spillover' ? payload.spilloverReason || undefined : undefined,
+    spilloverObservation: payload.status === 'Spillover' ? payload.spilloverObservation?.trim() || undefined : undefined
   }
 }
 
@@ -156,6 +160,8 @@ export function buildStatusPatchPayload(demand: RoadmapDemand, status: DemandSta
     deliveryDate: demand.deliveryDate || undefined,
     problemClarity: demand.itemType === 'Epic' ? demand.problemClarity ?? undefined : undefined,
     hasNoKpi: demand.hasNoKpi ?? false,
-    noKpiClassification: demand.hasNoKpi ? demand.noKpiClassification ?? undefined : undefined
+    noKpiClassification: demand.hasNoKpi ? demand.noKpiClassification ?? undefined : undefined,
+    spilloverReason: status === 'Spillover' ? demand.spilloverReason || undefined : undefined,
+    spilloverObservation: status === 'Spillover' ? demand.spilloverObservation?.trim() || undefined : undefined
   }
 }

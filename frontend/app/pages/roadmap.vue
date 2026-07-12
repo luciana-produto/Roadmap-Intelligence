@@ -83,12 +83,16 @@ const planningQuarterOptions = computed(() =>
 const bulkMoveQuarterOptions = computed(() => quarterOptions.value)
 
 const deprioritizationReasonOptions = [
-  { value: 'Strategic', label: 'Estratégico' },
-  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
-  { value: 'LowImpact', label: 'Baixo impacto' },
-  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
-  { value: 'ContextChange', label: 'Mudança de contexto' },
-  { value: 'Customizacao', label: 'Customização' }
+  { value: 'StrategyChange', label: 'Mudança de estratégia' },
+  { value: 'HigherValuePrioritization', label: 'Priorização de maior valor' },
+  { value: 'LowCustomerDemand', label: 'Baixa demanda de clientes' },
+  { value: 'LowExpectedReturn', label: 'Baixo retorno esperado' },
+  { value: 'BusinessDefinitionDependency', label: 'Dependência de definição de negócio' },
+  { value: 'AlternativeSolutionAvailable', label: 'Solução alternativa disponível' },
+  { value: 'RegulatoryRequirementChanged', label: 'Requisito regulatório alterado' },
+  { value: 'CustomerWithdrew', label: 'Cliente desistiu' },
+  { value: 'ReplacedByOtherInitiative', label: 'Substituída por outra iniciativa' },
+  { value: 'UndefinedScope', label: 'Escopo indefinido' }
 ] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
 
 const CACHE_KEY_PLANNING_PROJECTS = 'roadmap:planning:projectIds'
@@ -510,6 +514,47 @@ function getDeprioritizationReasonLabel(value: string | undefined) {
       return 'Mudança de contexto'
     case 'Customizacao':
       return 'Customização'
+    case 'StrategyChange':
+      return 'Mudança de estratégia'
+    case 'HigherValuePrioritization':
+      return 'Priorização de maior valor'
+    case 'LowCustomerDemand':
+      return 'Baixa demanda de clientes'
+    case 'LowExpectedReturn':
+      return 'Baixo retorno esperado'
+    case 'BusinessDefinitionDependency':
+      return 'Dependência de definição de negócio'
+    case 'AlternativeSolutionAvailable':
+      return 'Solução alternativa disponível'
+    case 'RegulatoryRequirementChanged':
+      return 'Requisito regulatório alterado'
+    case 'CustomerWithdrew':
+      return 'Cliente desistiu'
+    case 'ReplacedByOtherInitiative':
+      return 'Substituída por outra iniciativa'
+    case 'UndefinedScope':
+      return 'Escopo indefinido'
+    default:
+      return ''
+  }
+}
+
+function getSpilloverReasonLabel(value: string | undefined) {
+  switch (value) {
+    case 'ScopeChange':
+      return 'Mudança de escopo'
+    case 'PriorityChangeNoTradeOff':
+      return 'Mudança de prioridade (sem trade-off)'
+    case 'ExternalDependency':
+      return 'Dependência externa'
+    case 'TechnicalBlock':
+      return 'Impedimento técnico'
+    case 'IncorrectEstimate':
+      return 'Estimativa incorreta'
+    case 'InsufficientCapacity':
+      return 'Capacidade insuficiente'
+    case 'QualityIssues':
+      return 'Problemas de qualidade'
     default:
       return ''
   }
@@ -582,6 +627,8 @@ function getDemandNotesTooltip(demand: RoadmapDemand): string {
     notes.push(`Impedimento\n${demand.blockedReason}`)
   if (demand.status === 'Deprioritized' && demand.observation)
     notes.push(`Despriorização${demand.deprioritizationReason ? ` · ${getDeprioritizationReasonLabel(demand.deprioritizationReason)}` : ''}\n${demand.observation}`)
+  if (demand.status === 'Spillover' && demand.spilloverObservation)
+    notes.push(`Transbordo${demand.spilloverReason ? ` · ${getSpilloverReasonLabel(demand.spilloverReason)}` : ''}\n${demand.spilloverObservation}`)
   return notes.join('\n\n')
 }
 
@@ -2518,7 +2565,7 @@ function syncListSectionDividers() {
           else {
             const epicTitle = document.createElement('button')
             epicTitle.type = 'button'
-            epicTitle.className = `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${displayEpic?.status === 'Deprioritized' ? 'line-through text-muted' : 'text-highlighted'} ${headerMeta ? getPlanningEditableCellButtonClass(headerMeta.epic) : ''}`
+            epicTitle.className = `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${displayEpic?.status === 'Deprioritized' ? 'line-through text-muted opacity-50' : 'text-highlighted'} ${headerMeta ? getPlanningEditableCellButtonClass(headerMeta.epic) : ''}`
                   epicTitle.textContent = displayEpic?.title ?? headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
             epicTitle.disabled = !headerMeta || isPlanningInlineSaving(headerMeta.epic.id) || isSavingAllPlanningInlineEdits.value
             if (headerMeta?.epic.description?.trim())
@@ -2941,19 +2988,6 @@ function syncListSectionDividers() {
                 schedulePlanningGroupedHeaderSync()
               })
               statusRow.appendChild(badge)
-            }
-
-            if (draftEpic.status === 'Blocked') {
-              const blockedBadge = document.createElement('span')
-              blockedBadge.className = 'inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300'
-              blockedBadge.appendChild(createSvgIcon(['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01'], 'h-3 w-3'))
-              statusRow.appendChild(blockedBadge)
-            }
-            else if (getDemandNotesTooltip(draftEpic)) {
-              const noteBadge = document.createElement('span')
-              noteBadge.className = 'inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
-              noteBadge.appendChild(createSvgIcon(['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'], 'h-3 w-3'))
-              statusRow.appendChild(noteBadge)
             }
 
             container.appendChild(statusRow)
@@ -3664,6 +3698,8 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     hasNoKpi: demand.hasNoKpi,
     noKpiClassification: demand.noKpiClassification ?? undefined,
     excludeFromCapacity: demand.excludeFromCapacity,
+    spilloverReason: demand.spilloverReason ?? undefined,
+    spilloverObservation: demand.spilloverObservation ?? '',
     ...overrides
   }
 }
@@ -3694,25 +3730,72 @@ const spilloverModalOpen = ref(false)
 const spilloverModalDemand = ref<RoadmapDemand | null>(null)
 const spilloverTargetYear = ref<number | null>(null)
 const spilloverTargetNumber = ref<number | null>(null)
+const spilloverReason = ref<string | null>(null)
+const spilloverObservation = ref('')
 const isCreatingSpillover = ref(false)
+// Restore mode: item already has a spillover copy (successorDemandId); we only re-collect
+// motivo/observação and update the inline draft — no new copy is created.
+const spilloverRestoreMode = ref(false)
 
 function openSpilloverModal(demand: RoadmapDemand) {
   spilloverModalDemand.value = demand
+  spilloverRestoreMode.value = false
   spilloverTargetYear.value = demand.quarterYear
   spilloverTargetNumber.value = demand.quarterNumber === 4 ? 1 : demand.quarterNumber + 1
   if (demand.quarterNumber === 4) spilloverTargetYear.value = demand.quarterYear + 1
+  spilloverReason.value = null
+  spilloverObservation.value = ''
   spilloverModalOpen.value = true
 }
 
+function openPlanningSpilloverRestoreModal(item: RoadmapDemand) {
+  const draft = getPlanningInlineDraft(item)
+  spilloverModalDemand.value = item
+  spilloverRestoreMode.value = true
+  spilloverTargetYear.value = item.quarterYear
+  spilloverTargetNumber.value = item.quarterNumber
+  spilloverReason.value = draft.spilloverReason ?? item.spilloverReason ?? null
+  spilloverObservation.value = draft.spilloverObservation ?? item.spilloverObservation ?? ''
+  spilloverModalOpen.value = true
+}
+
+function closeSpilloverModal() {
+  spilloverModalOpen.value = false
+  spilloverRestoreMode.value = false
+  spilloverModalDemand.value = null
+}
+
 async function confirmCreateSpillover() {
-  if (!spilloverModalDemand.value || !spilloverTargetYear.value || !spilloverTargetNumber.value) return
+  if (!spilloverModalDemand.value) return
+  if (!spilloverReason.value || !spilloverObservation.value.trim()) return
+
+  if (spilloverRestoreMode.value) {
+    // Item already has a spillover copy — just re-apply the status and new motivo/observação
+    // to the inline draft. The normal save flow persists it (no createSpillover call).
+    updatePlanningInlineDraft(spilloverModalDemand.value, {
+      status: 'Spillover',
+      spilloverReason: spilloverReason.value,
+      spilloverObservation: spilloverObservation.value.trim(),
+      deliveryDate: '',
+      blockedReason: '',
+      deprioritizationReason: undefined,
+      replacementDemandId: undefined,
+      observation: ''
+    })
+    closeSpilloverModal()
+    return
+  }
+
+  if (!spilloverTargetYear.value || !spilloverTargetNumber.value) return
   isCreatingSpillover.value = true
   try {
     const demandId = spilloverModalDemand.value.id
     await roadmapStore.createSpillover(
       demandId,
       spilloverTargetYear.value,
-      spilloverTargetNumber.value
+      spilloverTargetNumber.value,
+      spilloverReason.value,
+      spilloverObservation.value.trim()
     )
     clearPlanningInlineDraft(demandId)
     spilloverModalOpen.value = false
@@ -3873,16 +3956,31 @@ async function planEpicDemandsToQuarter(
   }
 }
 
+async function handleFormSpillover(demandId: string, targetYear: number, targetNumber: number, reason: string, observation: string) {
+  if (isSavingDemand.value) return
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  try {
+    isSavingDemand.value = true
+    modalOpen.value = false
+    await roadmapStore.createSpillover(demandId, targetYear, targetNumber, reason, observation)
+    clearPlanningInlineDraft(demandId)
+    toast.add({ title: 'Transbordo criado', color: 'success' })
+    queueMicrotask(() => {
+      void refreshListPresentation(listScrollTop, listScrollLeft)
+    })
+  }
+  catch (error) {
+    toast.add({ title: 'Erro ao criar transbordo', color: 'error' })
+  }
+  finally {
+    isSavingDemand.value = false
+  }
+}
+
 async function handleSubmit(data: DemandFormData) {
   if (isSavingDemand.value)
     return
-
-  // If editing and status changed to Spillover, redirect to spillover modal
-  if (editingDemand.value && data.status === 'Spillover' && editingDemand.value.status !== 'Spillover') {
-    modalOpen.value = false
-    openSpilloverModal(editingDemand.value)
-    return
-  }
 
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
@@ -4333,6 +4431,8 @@ type PlanningInlineDraft = {
   deliveryDate: string
   deprioritizationReason?: DeprioritizationReason
   replacementDemandId?: string
+  spilloverReason?: string
+  spilloverObservation?: string
 }
 type PlanningEditableField = 'title' | 'status' | 'classification' | 'quarterType' | 'products' | 'hours' | 'customers' | 'dueDate'
 type PlanningActiveCell = {
@@ -4472,8 +4572,10 @@ const STATUS_SELECT_OPTIONS = [
 ]
 
 function getStatusOptionsForItem(item: RoadmapDemand) {
-  const canSpillover = (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple)) && !item.successorDemandId
-  if (canSpillover || item.status === 'Spillover') return STATUS_SELECT_OPTIONS
+  const isDemandOrSimpleEpic = item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple)
+  const canSpillover = isDemandOrSimpleEpic && !item.successorDemandId
+  const hadSpillover = isDemandOrSimpleEpic && !!item.successorDemandId
+  if (canSpillover || hadSpillover || item.status === 'Spillover') return STATUS_SELECT_OPTIONS
   return STATUS_SELECT_OPTIONS_BASE
 }
 const classificationBadgeClass: Record<DemandClassification, string> = {
@@ -4763,7 +4865,9 @@ function createPlanningInlineDraft(item: RoadmapDemand): PlanningInlineDraft {
     blockedReason: item.blockedReason ?? '',
     deliveryDate: item.deliveryDate ?? '',
     deprioritizationReason: item.deprioritizationReason ?? undefined,
-    replacementDemandId: item.replacementDemandId ?? undefined
+    replacementDemandId: item.replacementDemandId ?? undefined,
+    spilloverReason: item.spilloverReason ?? undefined,
+    spilloverObservation: item.spilloverObservation ?? ''
   }
 }
 
@@ -5081,7 +5185,13 @@ function handlePlanningStatusChange(item: RoadmapDemand, nextStatus: DemandStatu
   }
 
   if (nextStatus === 'Spillover') {
-    openSpilloverModal(item)
+    if (item.successorDemandId) {
+      // Already has a spillover copy — open planning status modal to collect new reason/observation
+      openPlanningSpilloverRestoreModal(item)
+    }
+    else {
+      openSpilloverModal(item)
+    }
     deactivatePlanningCell(item.id, 'status')
     return
   }
@@ -5123,6 +5233,11 @@ function confirmPlanningStatusModal() {
   if (draft.status === 'Deprioritized') {
     if (!draft.deprioritizationReason) {
       toast.add({ title: 'Selecione o motivo da despriorização', color: 'warning' })
+      return
+    }
+
+    if ((draft.deprioritizationReason === 'ReplacedByOtherInitiative' || draft.deprioritizationReason === 'HigherValuePrioritization') && !draft.replacementDemandId) {
+      toast.add({ title: 'Selecione a demanda priorizada no lugar', color: 'warning' })
       return
     }
 
@@ -5229,6 +5344,8 @@ async function savePlanningInline(
       blockedReason: draft.status === 'Blocked' ? draft.blockedReason : '',
       deprioritizationReason: draft.status === 'Deprioritized' ? draft.deprioritizationReason : undefined,
       replacementDemandId: draft.status === 'Deprioritized' ? draft.replacementDemandId : undefined,
+      spilloverReason: draft.status === 'Spillover' ? (draft.spilloverReason as any) : undefined,
+      spilloverObservation: draft.status === 'Spillover' ? draft.spilloverObservation : undefined,
       hours,
       hoursRed: draft.hoursRed,
       promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
@@ -6043,7 +6160,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           h('div', { class: 'mb-0.5 flex min-w-0 items-center gap-1.5' }, [
             h(UIconComp, { name: 'i-lucide-star', class: 'h-3.5 w-3.5 shrink-0 text-amber-500' }),
             h('span', {
-              class: `min-w-0 flex-1 truncate text-[10px] ${isEpicDeprioritized ? 'line-through text-muted' : 'text-muted'}`,
+              class: `min-w-0 flex-1 truncate text-[10px] ${isEpicDeprioritized ? 'line-through text-muted opacity-50' : 'text-muted'}`,
               title: d.epicTitle
             }, d.epicTitle),
           ])
@@ -6071,7 +6188,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
                     })
                   : h('button', {
                       type: 'button',
-                      class: `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
+                      class: `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted opacity-50' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
                       title: d.description || undefined,
                       disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
                       onClick: () => activatePlanningCell(d, 'title')
@@ -6108,7 +6225,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               })
             : h('button', {
                 type: 'button',
-                class: `min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
+                class: `min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted opacity-50' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
                 title: d.description || undefined,
                 disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
                 onClick: () => activatePlanningCell(d, 'title')
@@ -7121,18 +7238,6 @@ watch(activeDemandKpiId, async (value) => {
                       >
                         {{ statusLabels[getPlanningInlineDraft(row.original).status] }}
                       </button>
-                      <span
-                        v-if="getPlanningDraftDisplayItem(row.original).status === 'Blocked'"
-                        class="inline-flex items-center justify-center rounded-full border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] font-medium text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-300"
-                      >
-                        <UIcon name="i-lucide-triangle-alert" class="w-3 h-3" />
-                      </span>
-                      <span
-                        v-else-if="getDemandNotesTooltip(getPlanningDraftDisplayItem(row.original))"
-                        class="inline-flex items-center justify-center rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
-                      >
-                        <UIcon name="i-lucide-message-square-warning" class="w-3 h-3" />
-                      </span>
                     </div>
                   </template>
                   <span v-else class="text-xs text-muted">—</span>
@@ -7341,7 +7446,7 @@ watch(activeDemandKpiId, async (value) => {
                     type="button"
                     class="rounded-md border text-[10px] font-semibold transition-colors"
                     :class="[
-                      row.original.excludeFromCapacity || row.original.status === 'Deprioritized' ? 'line-through text-muted' : (getPlanningInlineDraft(row.original).hoursRed ? 'text-red-500' : 'text-highlighted'),
+                      row.original.excludeFromCapacity || row.original.status === 'Deprioritized' ? 'line-through text-muted opacity-50' : (getPlanningInlineDraft(row.original).hoursRed ? 'text-red-500' : 'text-highlighted'),
                       isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10 hover:border-primary/60 hover:bg-primary/5' : 'border-transparent hover:border-primary/30 hover:bg-elevated'
                     ]"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
@@ -7668,13 +7773,16 @@ watch(activeDemandKpiId, async (value) => {
               />
             </UFormField>
 
-            <UFormField label="Demanda priorizada no lugar">
+            <UFormField
+              label="Demanda priorizada no lugar"
+              :required="planningStatusModalDraft.deprioritizationReason === 'ReplacedByOtherInitiative' || planningStatusModalDraft.deprioritizationReason === 'HigherValuePrioritization'"
+            >
               <USelect
                 :model-value="planningStatusModalDraft.replacementDemandId"
                 :items="planningStatusReplacementDemandOptions"
                 value-key="value"
                 option-attribute="label"
-                placeholder="Opcional"
+                :placeholder="(planningStatusModalDraft.deprioritizationReason === 'ReplacedByOtherInitiative' || planningStatusModalDraft.deprioritizationReason === 'HigherValuePrioritization') ? 'Selecione uma demanda' : 'Opcional'"
                 class="w-full"
                 @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { replacementDemandId: value ? String(value) : undefined })"
               />
@@ -7727,6 +7835,7 @@ watch(activeDemandKpiId, async (value) => {
       :focus-field="modalEditFocusField"
       @trade-off-deleted="handleTradeOffDeleted"
       @submit="handleSubmit"
+      @create-spillover="handleFormSpillover"
     />
 
     <RoadmapCapacityModal
@@ -7815,13 +7924,18 @@ watch(activeDemandKpiId, async (value) => {
 
     <UModal
       v-model:open="spilloverModalOpen"
-      :title="spilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo'"
+      :title="spilloverRestoreMode ? 'Restaurar Transbordo' : (spilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo')"
       :ui="{ content: 'sm:max-w-md' }"
+      @update:open="(open) => { if (!open) closeSpilloverModal() }"
     >
       <template #body>
         <div class="space-y-4">
           <p class="text-sm text-muted">
-            <template v-if="spilloverModalDemand?.status === 'Deprioritized'">
+            <template v-if="spilloverRestoreMode">
+              {{ spilloverModalDemand?.itemType === 'Epic' ? 'O épico' : 'A demanda' }} <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> voltará ao status <em>Transbordo</em>.
+              Informe o novo motivo e observação. A cópia já existente no quarter de destino é mantida.
+            </template>
+            <template v-else-if="spilloverModalDemand?.status === 'Deprioritized'">
               {{ spilloverModalDemand?.itemType === 'Epic' ? 'O épico' : 'A demanda' }} <strong class="text-highlighted">{{ spilloverModalDemand?.title }}</strong> será repriorizado
               com uma cópia do tipo <em>Spillover</em> no quarter de destino. O registro original permanece preservado.
             </template>
@@ -7830,7 +7944,7 @@ watch(activeDemandKpiId, async (value) => {
               no quarter atual e uma cópia do tipo <em>Spillover</em> será criada no quarter de destino.
             </template>
           </p>
-          <div class="grid grid-cols-2 gap-3">
+          <div v-if="!spilloverRestoreMode" class="grid grid-cols-2 gap-3">
             <UFormField label="Ano">
               <UInput
                 v-model="spilloverTargetYear"
@@ -7849,6 +7963,32 @@ watch(activeDemandKpiId, async (value) => {
               />
             </UFormField>
           </div>
+          <UFormField label="Motivo do transbordo" required>
+            <USelect
+              v-model="spilloverReason"
+              :items="[
+                { label: 'Mudança de escopo', value: 'ScopeChange' },
+                { label: 'Mudança de prioridade (sem trade-off)', value: 'PriorityChangeNoTradeOff' },
+                { label: 'Dependência externa', value: 'ExternalDependency' },
+                { label: 'Impedimento técnico', value: 'TechnicalBlock' },
+                { label: 'Estimativa incorreta', value: 'IncorrectEstimate' },
+                { label: 'Capacidade insuficiente', value: 'InsufficientCapacity' },
+                { label: 'Problemas de qualidade', value: 'QualityIssues' }
+              ]"
+              value-key="value"
+              option-attribute="label"
+              placeholder="Selecione o motivo"
+              class="w-full"
+            />
+          </UFormField>
+          <UFormField label="Observação" required>
+            <UTextarea
+              v-model="spilloverObservation"
+              :rows="3"
+              placeholder="Descreva o motivo do transbordo"
+              class="w-full"
+            />
+          </UFormField>
         </div>
       </template>
       <template #footer>
@@ -7858,12 +7998,12 @@ watch(activeDemandKpiId, async (value) => {
             color="neutral"
             label="Cancelar"
             :disabled="isCreatingSpillover"
-            @click="spilloverModalOpen = false"
+            @click="closeSpilloverModal"
           />
           <UButton
             color="primary"
             icon="i-lucide-forward"
-            :label="spilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar' : 'Criar Transbordo'"
+            :label="spilloverRestoreMode ? 'Restaurar' : (spilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar' : 'Criar Transbordo')"
             :loading="isCreatingSpillover"
             @click="confirmCreateSpillover"
           />

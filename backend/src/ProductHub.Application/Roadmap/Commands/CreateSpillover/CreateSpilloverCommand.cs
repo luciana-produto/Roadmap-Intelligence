@@ -6,4 +6,6 @@ namespace ProductHub.Application.Roadmap.Commands.CreateSpillover;
 public sealed record CreateSpilloverCommand(
     Guid OriginalDemandId,
     int TargetQuarterYear,
-    int TargetQuarterNumber) : IRequest<RoadmapDemandDto>;
+    int TargetQuarterNumber,
+    string? SpilloverReason = null,
+    string? SpilloverObservation = null) : IRequest<RoadmapDemandDto>;

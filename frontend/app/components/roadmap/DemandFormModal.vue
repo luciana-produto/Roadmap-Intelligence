@@ -114,6 +114,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:open': [value: boolean]
   submit: [data: DemandFormData]
+  'create-spillover': [demandId: string, targetYear: number, targetNumber: number, reason: string, observation: string]
   'trade-off-deleted': [tradeOffId: string]
 }>()
 
@@ -283,38 +284,54 @@ const statusOptions = [
 
 const statusOptionsForForm = computed(() => {
   const canSpillover = (isDemand.value || isSimpleEpic.value) && !props.demand?.successorDemandId
-  if (canSpillover || props.demand?.status === 'Spillover') return statusOptions
+  const hadSpillover = (isDemand.value || isSimpleEpic.value) && !!props.demand?.successorDemandId
+  if (canSpillover || hadSpillover || props.demand?.status === 'Spillover') return statusOptions
   return statusOptions.filter(o => o.value !== 'Spillover')
 })
 
 const statusOptionsForRoadmap = statusOptions.filter(o => !['Spillover', 'UX', 'Prioritized'].includes(o.value))
 
 const deprioritizationReasonOptions = [
-  { value: 'Strategic', label: 'Estratégico' },
-  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
-  { value: 'LowImpact', label: 'Baixo impacto' },
-  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
-  { value: 'ContextChange', label: 'Mudança de contexto' },
-  { value: 'Customizacao', label: 'Customização' }
+  { value: 'StrategyChange', label: 'Mudança de estratégia' },
+  { value: 'HigherValuePrioritization', label: 'Priorização de maior valor' },
+  { value: 'LowCustomerDemand', label: 'Baixa demanda de clientes' },
+  { value: 'LowExpectedReturn', label: 'Baixo retorno esperado' },
+  { value: 'BusinessDefinitionDependency', label: 'Dependência de definição de negócio' },
+  { value: 'AlternativeSolutionAvailable', label: 'Solução alternativa disponível' },
+  { value: 'RegulatoryRequirementChanged', label: 'Requisito regulatório alterado' },
+  { value: 'CustomerWithdrew', label: 'Cliente desistiu' },
+  { value: 'ReplacedByOtherInitiative', label: 'Substituída por outra iniciativa' },
+  { value: 'UndefinedScope', label: 'Escopo indefinido' }
 ] as const
 
-const deprioritizationReasonExamples: Record<DeprioritizationReason, string> = {
-  Strategic: 'vamos dar foco em algo mais estratégico',
-  MandatoryUrgent: 'precisamos encaixar uma demanda fiscal ou urgente',
-  LowImpact: 'a demanda não justificativa o esforço neste momento',
-  LackOfCapacity: 'erro de planejamento',
-  ContextChange: 'Cliente desistiu / Legislação revogada',
-  Customizacao: 'Será substituída por uma demanda de customização de outro cliente'
-}
-
-const deprioritizationReasonLabels: Record<DeprioritizationReason, string> = {
+const deprioritizationReasonLabels: Record<string, string> = {
   Strategic: 'Estratégico',
   MandatoryUrgent: 'Mandatório/Urgente',
   LowImpact: 'Baixo impacto',
   LackOfCapacity: 'Falta de capacidade',
   ContextChange: 'Mudança de contexto',
-  Customizacao: 'Customização'
+  Customizacao: 'Customização',
+  StrategyChange: 'Mudança de estratégia',
+  HigherValuePrioritization: 'Priorização de maior valor',
+  LowCustomerDemand: 'Baixa demanda de clientes',
+  LowExpectedReturn: 'Baixo retorno esperado',
+  BusinessDefinitionDependency: 'Dependência de definição de negócio',
+  AlternativeSolutionAvailable: 'Solução alternativa disponível',
+  RegulatoryRequirementChanged: 'Requisito regulatório alterado',
+  CustomerWithdrew: 'Cliente desistiu',
+  ReplacedByOtherInitiative: 'Substituída por outra iniciativa',
+  UndefinedScope: 'Escopo indefinido'
 }
+
+const spilloverReasonOptions = [
+  { value: 'ScopeChange', label: 'Mudança de escopo' },
+  { value: 'PriorityChangeNoTradeOff', label: 'Mudança de prioridade (sem trade-off)' },
+  { value: 'ExternalDependency', label: 'Dependência externa' },
+  { value: 'TechnicalBlock', label: 'Impedimento técnico' },
+  { value: 'IncorrectEstimate', label: 'Estimativa incorreta' },
+  { value: 'InsufficientCapacity', label: 'Capacidade insuficiente' },
+  { value: 'QualityIssues', label: 'Problemas de qualidade' }
+] as const
 
 type DemandFormTab = 'general' | 'status'
 
@@ -347,6 +364,12 @@ const observationRequired = computed(() => form.status === 'Deprioritized')
 const deprioritizationReasonRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
 const blockedReasonRequired = computed(() => form.status === 'Blocked')
+const isTransitioningToSpillover = computed(() => form.status === 'Spillover' && props.demand?.status !== 'Spillover' && !props.demand?.successorDemandId)
+const isAlreadySpillover = computed(() => form.status === 'Spillover' && (props.demand?.status === 'Spillover' || !!props.demand?.successorDemandId))
+const spilloverFieldsRequired = computed(() => form.status === 'Spillover')
+
+const spilloverTargetYear = ref<number | null>(null)
+const spilloverTargetNumber = ref<number | null>(null)
 
 const form = reactive<DemandFormState>({
   itemType: '',
@@ -375,7 +398,9 @@ const form = reactive<DemandFormState>({
   deliveryDate: '',
   problemClarity: undefined,
   hasNoKpi: false,
-  noKpiClassification: undefined
+  noKpiClassification: undefined,
+  spilloverReason: undefined,
+  spilloverObservation: ''
 })
 
 const projectNameById = computed(() =>
@@ -594,8 +619,7 @@ const availableEpicOptions = computed(() => {
 })
 
 const selectedDeprioritizationExample = computed(() => {
-  const reason = form.deprioritizationReason
-  return reason ? deprioritizationReasonExamples[reason] : ''
+  return ''
 })
 
 const replacementDemandOptions = computed(() => {
@@ -730,6 +754,8 @@ function populateFormFromDemand(demand: RoadmapDemand) {
   form.observation = demand.observation ?? ''
   form.deprioritizationReason = demand.deprioritizationReason ?? undefined
   form.replacementDemandId = demand.replacementDemandId ?? undefined
+  form.spilloverReason = demand.spilloverReason ?? undefined
+  form.spilloverObservation = demand.spilloverObservation ?? ''
   form.jiraIssue = demand.jiraIssue ?? ''
   form.issueLinks = demand.issueLinks?.length
     ? demand.issueLinks.map(issue => ({ key: issue.key, url: issue.url ?? '' }))
@@ -1027,6 +1053,18 @@ watch(() => form.status, (status) => {
     form.deprioritizationReason = undefined
     form.observation = ''
     form.replacementDemandId = undefined
+  }
+
+  if (status === 'Spillover' && !props.demand?.successorDemandId) {
+    const qy = form.quarterYear ?? props.demand?.quarterYear ?? new Date().getFullYear()
+    const qn = form.quarterNumber ?? props.demand?.quarterNumber ?? 1
+    spilloverTargetYear.value = qn === 4 ? qy + 1 : qy
+    spilloverTargetNumber.value = qn === 4 ? 1 : qn + 1
+  }
+
+  if (status !== 'Spillover') {
+    form.spilloverReason = undefined
+    form.spilloverObservation = ''
   }
 })
 
@@ -1776,12 +1814,20 @@ const missingSubmitReason = computed(() => {
     return 'Selecione a classificação'
   if (deprioritizationReasonRequired.value && !form.deprioritizationReason)
     return 'Selecione o motivo da despriorização'
+  if (deprioritizationReasonRequired.value && (form.deprioritizationReason === 'ReplacedByOtherInitiative' || form.deprioritizationReason === 'HigherValuePrioritization') && !form.replacementDemandId)
+    return 'Selecione a demanda priorizada no lugar'
   if (observationRequired.value && !form.observation)
     return 'Preencha a observação da despriorização'
   if (deliveryDateRequired.value && !form.deliveryDate)
     return 'Informe a data de entrega para concluir a demanda'
   if (blockedReasonRequired.value && !form.blockedReason.trim())
     return 'Preencha o motivo do impedimento'
+  if (spilloverFieldsRequired.value && !form.spilloverReason)
+    return 'Selecione o motivo do transbordo'
+  if (spilloverFieldsRequired.value && !form.spilloverObservation?.trim())
+    return 'Preencha a observação do transbordo'
+  if (isTransitioningToSpillover.value && (!spilloverTargetYear.value || !spilloverTargetNumber.value))
+    return 'Informe o ano e quarter de destino do transbordo'
 
   const normalizedIssueLinks = normalizeIssueLinks(form.issueLinks)
   if (normalizedIssueLinks.some(issue => !issue.key || !issue.url))
@@ -1825,6 +1871,10 @@ function focusRelevantTab() {
     || missingSubmitReason.value === 'Preencha a observação da despriorização'
     || missingSubmitReason.value === 'Informe a data de entrega para concluir a demanda'
     || missingSubmitReason.value === 'Preencha o motivo do impedimento'
+    || missingSubmitReason.value === 'Selecione o motivo do transbordo'
+    || missingSubmitReason.value === 'Preencha a observação do transbordo'
+    || missingSubmitReason.value === 'Informe o ano e quarter de destino do transbordo'
+    || missingSubmitReason.value === 'Selecione a demanda priorizada no lugar'
   ) {
     activeTab.value = hasStatusTab.value ? 'status' : 'general'
     return
@@ -1849,6 +1899,18 @@ function handleSubmitClick() {
 
 async function handleSubmit() {
   if (isSubmitBlocked.value || !form.itemType) return
+
+  // When transitioning to Spillover: emit create-spillover instead of regular submit
+  if (isTransitioningToSpillover.value && props.demand) {
+    emit('create-spillover',
+      props.demand.id,
+      spilloverTargetYear.value ?? 0,
+      spilloverTargetNumber.value ?? 0,
+      form.spilloverReason ?? '',
+      form.spilloverObservation?.trim() ?? ''
+    )
+    return
+  }
 
   const sanitizedIssueLinks = sanitizeIssueLinksForItem(form.itemType, normalizeIssueLinks(form.issueLinks))
   const normalizedQuarterYear = form.quarterYear ?? 0
@@ -2701,7 +2763,8 @@ async function handleSubmit() {
           <UFormField
             v-if="observationRequired"
             label="Demanda priorizada no lugar"
-            hint="Opcional"
+            :hint="(form.deprioritizationReason === 'ReplacedByOtherInitiative' || form.deprioritizationReason === 'HigherValuePrioritization') ? undefined : 'Opcional'"
+            :required="form.deprioritizationReason === 'ReplacedByOtherInitiative' || form.deprioritizationReason === 'HigherValuePrioritization'"
           >
             <USelect
               v-model="form.replacementDemandId"
@@ -2722,6 +2785,54 @@ async function handleSubmit() {
               :rows="2"
               class="w-full"
               :class="!form.observation ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
+
+          <template v-if="isTransitioningToSpillover">
+            <p class="text-sm text-muted">
+              O histórico {{ form.itemType === 'Epic' ? 'do épico' : 'da demanda' }} será preservado
+              no quarter atual e uma cópia do tipo <em>Spillover</em> será criada no quarter de destino.
+            </p>
+            <div class="grid grid-cols-2 gap-3">
+              <UFormField label="Ano destino" required>
+                <UInput
+                  v-model="spilloverTargetYear"
+                  type="number"
+                  :min="2020"
+                  :max="2040"
+                  placeholder="Ano"
+                />
+              </UFormField>
+              <UFormField label="Quarter destino" required>
+                <USelect
+                  v-model="spilloverTargetNumber"
+                  :items="[{ label: 'Q1', value: 1 }, { label: 'Q2', value: 2 }, { label: 'Q3', value: 3 }, { label: 'Q4', value: 4 }]"
+                  value-key="value"
+                  label-key="label"
+                />
+              </UFormField>
+            </div>
+          </template>
+
+          <UFormField v-if="spilloverFieldsRequired" label="Motivo do transbordo" required>
+            <USelect
+              v-model="form.spilloverReason"
+              :items="spilloverReasonOptions"
+              value-key="value"
+              option-attribute="label"
+              placeholder="Selecione o motivo"
+              class="w-full"
+              :class="!form.spilloverReason ? 'ring-2 ring-red-400' : ''"
+            />
+          </UFormField>
+
+          <UFormField v-if="spilloverFieldsRequired" label="Observação transbordo" required>
+            <UTextarea
+              v-model="form.spilloverObservation"
+              placeholder="Descreva o motivo do transbordo"
+              :rows="2"
+              class="w-full"
+              :class="!form.spilloverObservation ? 'ring-2 ring-red-400' : ''"
             />
           </UFormField>
 

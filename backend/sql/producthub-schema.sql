@@ -327,3 +327,13 @@ IF COL_LENGTH(N'dbo.RoadmapDemands', N'IsSimple') IS NULL
 BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD IsSimple BIT NOT NULL CONSTRAINT DF_RoadmapDemands_IsSimple DEFAULT (0);
 END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'SpilloverReason') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD SpilloverReason NVARCHAR(50) NULL;
+END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'SpilloverObservation') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD SpilloverObservation NVARCHAR(2000) NULL;
+END;

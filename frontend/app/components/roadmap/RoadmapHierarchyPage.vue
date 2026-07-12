@@ -106,6 +106,8 @@ const hierarchySpilloverModalOpen = ref(false)
 const hierarchySpilloverModalDemand = ref<RoadmapDemand | null>(null)
 const hierarchySpilloverTargetYear = ref<number | null>(null)
 const hierarchySpilloverTargetNumber = ref<number | null>(null)
+const hierarchySpilloverReason = ref<string | null>(null)
+const hierarchySpilloverObservation = ref('')
 const isCreatingHierarchySpillover = ref(false)
 const selectedProjectIds = ref<string[]>([])
 watch(selectedProjectIds, (val) => {
@@ -147,12 +149,16 @@ const hierarchyItemExtraWidth = computed(() => {
 })
 
 const deprioritizationReasonOptions = [
-  { value: 'Strategic', label: 'Estratégico' },
-  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
-  { value: 'LowImpact', label: 'Baixo impacto' },
-  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
-  { value: 'ContextChange', label: 'Mudança de contexto' },
-  { value: 'Customizacao', label: 'Customização' }
+  { value: 'StrategyChange', label: 'Mudança de estratégia' },
+  { value: 'HigherValuePrioritization', label: 'Priorização de maior valor' },
+  { value: 'LowCustomerDemand', label: 'Baixa demanda de clientes' },
+  { value: 'LowExpectedReturn', label: 'Baixo retorno esperado' },
+  { value: 'BusinessDefinitionDependency', label: 'Dependência de definição de negócio' },
+  { value: 'AlternativeSolutionAvailable', label: 'Solução alternativa disponível' },
+  { value: 'RegulatoryRequirementChanged', label: 'Requisito regulatório alterado' },
+  { value: 'CustomerWithdrew', label: 'Cliente desistiu' },
+  { value: 'ReplacedByOtherInitiative', label: 'Substituída por outra iniciativa' },
+  { value: 'UndefinedScope', label: 'Escopo indefinido' }
 ] as const satisfies Array<{ value: DeprioritizationReason, label: string }>
 
 const hierarchyProblemOptions = [
@@ -350,8 +356,10 @@ const statusSelectOptions = computed(() =>
 
 function getHierarchyStatusOptionsForItem(item: RoadmapDemand) {
   if (item.itemType === 'Roadmap') return statusSelectOptionsBase.value
-  const canSpillover = (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple)) && !item.successorDemandId
-  if (canSpillover || item.status === 'Spillover') return Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+  const isDemandOrSimpleEpic = item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple)
+  const canSpillover = isDemandOrSimpleEpic && !item.successorDemandId
+  const hadSpillover = isDemandOrSimpleEpic && !!item.successorDemandId
+  if (canSpillover || hadSpillover || item.status === 'Spillover') return Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
   return statusSelectOptions.value
 }
 
@@ -1638,7 +1646,12 @@ function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStat
   }
 
   if (nextStatus === 'Spillover') {
-    openHierarchySpilloverModal(item)
+    if (item.successorDemandId) {
+      updateHierarchyInlineDraft(item, { status: nextStatus })
+    }
+    else {
+      openHierarchySpilloverModal(item)
+    }
     deactivateHierarchyCell(item.id, 'status')
     return
   }
@@ -1665,18 +1678,23 @@ function openHierarchySpilloverModal(demand: RoadmapDemand) {
   hierarchySpilloverTargetYear.value = demand.quarterYear
   hierarchySpilloverTargetNumber.value = demand.quarterNumber === 4 ? 1 : demand.quarterNumber + 1
   if (demand.quarterNumber === 4) hierarchySpilloverTargetYear.value = demand.quarterYear + 1
+  hierarchySpilloverReason.value = null
+  hierarchySpilloverObservation.value = ''
   hierarchySpilloverModalOpen.value = true
 }
 
 async function confirmHierarchySpillover() {
   if (!hierarchySpilloverModalDemand.value || !hierarchySpilloverTargetYear.value || !hierarchySpilloverTargetNumber.value) return
+  if (!hierarchySpilloverReason.value || !hierarchySpilloverObservation.value.trim()) return
   isCreatingHierarchySpillover.value = true
   try {
     const demandId = hierarchySpilloverModalDemand.value.id
     await roadmapStore.createSpillover(
       demandId,
       hierarchySpilloverTargetYear.value,
-      hierarchySpilloverTargetNumber.value
+      hierarchySpilloverTargetNumber.value,
+      hierarchySpilloverReason.value,
+      hierarchySpilloverObservation.value.trim()
     )
     clearHierarchyInlineDraft(demandId)
     hierarchySpilloverModalOpen.value = false
@@ -4207,6 +4225,32 @@ onUnmounted(() => {
               />
             </UFormField>
           </div>
+          <UFormField label="Motivo do transbordo" required>
+            <USelect
+              v-model="hierarchySpilloverReason"
+              :items="[
+                { label: 'Mudança de escopo', value: 'ScopeChange' },
+                { label: 'Mudança de prioridade (sem trade-off)', value: 'PriorityChangeNoTradeOff' },
+                { label: 'Dependência externa', value: 'ExternalDependency' },
+                { label: 'Impedimento técnico', value: 'TechnicalBlock' },
+                { label: 'Estimativa incorreta', value: 'IncorrectEstimate' },
+                { label: 'Capacidade insuficiente', value: 'InsufficientCapacity' },
+                { label: 'Problemas de qualidade', value: 'QualityIssues' }
+              ]"
+              value-key="value"
+              option-attribute="label"
+              placeholder="Selecione o motivo"
+              class="w-full"
+            />
+          </UFormField>
+          <UFormField label="Observação" required>
+            <UTextarea
+              v-model="hierarchySpilloverObservation"
+              :rows="3"
+              placeholder="Descreva o motivo do transbordo"
+              class="w-full"
+            />
+          </UFormField>
         </div>
       </template>
       <template #footer>
