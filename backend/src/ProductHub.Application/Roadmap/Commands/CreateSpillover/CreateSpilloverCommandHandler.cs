@@ -37,6 +37,8 @@ public sealed class CreateSpilloverCommandHandler(
                 cancellationToken)
             : 0;
 
+        var originalStatus = original.Status;
+
         var spillover = isSimpleEpicSpillover
             ? RoadmapDemand.Create(
                 RoadmapItemType.Epic,
@@ -47,7 +49,7 @@ public sealed class CreateSpilloverCommandHandler(
                 original.ProjectLinks.Select(link => link.ProjectId),
                 request.TargetQuarterYear,
                 request.TargetQuarterNumber,
-                DemandStatus.Backlog,
+                originalStatus,
                 DemandType.Spillover,
                 original.Classification,
                 original.Products.Select(p => p.ProductId),
@@ -67,7 +69,7 @@ public sealed class CreateSpilloverCommandHandler(
                 null,
                 request.TargetQuarterYear,
                 request.TargetQuarterNumber,
-                DemandStatus.Backlog,
+                originalStatus,
                 DemandType.Spillover,
                 original.Classification,
                 original.Products.Select(p => p.ProductId),
@@ -80,6 +82,7 @@ public sealed class CreateSpilloverCommandHandler(
                 noKpiClassification: original.NoKpiClassification);
 
         original.SetSuccessor(spillover.Id);
+        original.SetStatus(DemandStatus.Spillover);
 
         await demandRepository.AddAsync(spillover, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);

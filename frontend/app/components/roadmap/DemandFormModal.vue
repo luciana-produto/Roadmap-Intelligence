@@ -275,8 +275,19 @@ const statusOptions = [
   { value: 'InProgress',    label: 'Doing' },
   { value: 'Done',          label: 'Concluído' },
   { value: 'Deprioritized', label: 'Despriorizado' },
-  { value: 'Blocked',       label: 'Impedido' }
+  { value: 'Blocked',       label: 'Impedido' },
+  { value: 'UX',            label: 'UX' },
+  { value: 'Prioritized',   label: 'Priorizado' },
+  { value: 'Spillover',     label: 'Transbordo' }
 ]
+
+const statusOptionsForForm = computed(() => {
+  const canSpillover = (isDemand.value || isSimpleEpic.value) && !props.demand?.successorDemandId
+  if (canSpillover || props.demand?.status === 'Spillover') return statusOptions
+  return statusOptions.filter(o => o.value !== 'Spillover')
+})
+
+const statusOptionsForRoadmap = statusOptions.filter(o => !['Spillover', 'UX', 'Prioritized'].includes(o.value))
 
 const deprioritizationReasonOptions = [
   { value: 'Strategic', label: 'Estratégico' },
@@ -2315,7 +2326,7 @@ async function handleSubmit() {
             <UFormField label="Status">
               <USelect
                 v-model="form.status as DemandStatus"
-                :items="statusOptions"
+                :items="statusOptionsForRoadmap"
                 class="w-full"
               />
             </UFormField>
@@ -2641,7 +2652,7 @@ async function handleSubmit() {
             <UFormField label="Status">
               <USelect
                 v-model="form.status as DemandStatus"
-                :items="statusOptions"
+                :items="statusOptionsForForm"
                 class="w-full"
               />
             </UFormField>

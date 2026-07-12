@@ -102,6 +102,11 @@ const hierarchyCustomerInputs = ref<Record<string, string>>({})
 const hierarchyStatusModalOpen = ref(false)
 const hierarchyStatusModalItemId = ref<string | null>(null)
 const hierarchyStatusModalSnapshot = ref<HierarchyInlineDraft | null>(null)
+const hierarchySpilloverModalOpen = ref(false)
+const hierarchySpilloverModalDemand = ref<RoadmapDemand | null>(null)
+const hierarchySpilloverTargetYear = ref<number | null>(null)
+const hierarchySpilloverTargetNumber = ref<number | null>(null)
+const isCreatingHierarchySpillover = ref(false)
 const selectedProjectIds = ref<string[]>([])
 watch(selectedProjectIds, (val) => {
   localStorage.setItem(CACHE_KEY_HIERARCHY_PROJECTS, JSON.stringify(val))
@@ -331,9 +336,24 @@ const statusFilterOptions = computed(() =>
   Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
 )
 
-const statusSelectOptions = computed(() =>
-  Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+const statusSelectOptionsBase = computed(() =>
+  Object.entries(statusLabels)
+    .filter(([value]) => !['Spillover', 'UX', 'Prioritized'].includes(value))
+    .map(([value, label]) => ({ value, label }))
 )
+
+const statusSelectOptions = computed(() =>
+  Object.entries(statusLabels)
+    .filter(([value]) => value !== 'Spillover')
+    .map(([value, label]) => ({ value, label }))
+)
+
+function getHierarchyStatusOptionsForItem(item: RoadmapDemand) {
+  if (item.itemType === 'Roadmap') return statusSelectOptionsBase.value
+  const canSpillover = (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple)) && !item.successorDemandId
+  if (canSpillover || item.status === 'Spillover') return Object.entries(statusLabels).map(([value, label]) => ({ value, label }))
+  return statusSelectOptions.value
+}
 
 const classificationSelectOptions = computed(() =>
   Object.entries(classificationLabels).map(([value, label]) => ({ value, label }))
@@ -435,15 +455,21 @@ const statusLabels: Record<DemandStatus, string> = {
   InProgress: 'Doing',
   Done: 'Concluído',
   Deprioritized: 'Despriorizado',
-  Blocked: 'Impedido'
+  Blocked: 'Impedido',
+  Spillover: 'Transbordo',
+  UX: 'UX',
+  Prioritized: 'Priorizado'
 }
 
 const statusTone: Record<DemandStatus, string> = {
   Backlog: 'border-default bg-elevated text-muted',
   InProgress: 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300',
   Done: 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300',
-  Deprioritized: 'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300',
-  Blocked: 'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300'
+  Deprioritized: 'border-pink-200 bg-pink-50 text-pink-700 dark:border-pink-800 dark:bg-pink-900/20 dark:text-pink-300',
+  Blocked: 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300',
+  Spillover: 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300',
+  UX: 'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-900/20 dark:text-purple-300',
+  Prioritized: 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-900/20 dark:text-cyan-300'
 }
 
 const classificationLabels: Record<RoadmapDemand['classification'], string> = {
@@ -1611,6 +1637,12 @@ function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStat
     return
   }
 
+  if (nextStatus === 'Spillover') {
+    openHierarchySpilloverModal(item)
+    deactivateHierarchyCell(item.id, 'status')
+    return
+  }
+
   if (requiresHierarchyStatusDetails(nextStatus)) {
     openHierarchyStatusModal(item, nextStatus)
     deactivateHierarchyCell(item.id, 'status')
@@ -1626,6 +1658,33 @@ function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStat
     replacementDemandId: undefined
   })
   deactivateHierarchyCell(item.id, 'status')
+}
+
+function openHierarchySpilloverModal(demand: RoadmapDemand) {
+  hierarchySpilloverModalDemand.value = demand
+  hierarchySpilloverTargetYear.value = demand.quarterYear
+  hierarchySpilloverTargetNumber.value = demand.quarterNumber === 4 ? 1 : demand.quarterNumber + 1
+  if (demand.quarterNumber === 4) hierarchySpilloverTargetYear.value = demand.quarterYear + 1
+  hierarchySpilloverModalOpen.value = true
+}
+
+async function confirmHierarchySpillover() {
+  if (!hierarchySpilloverModalDemand.value || !hierarchySpilloverTargetYear.value || !hierarchySpilloverTargetNumber.value) return
+  isCreatingHierarchySpillover.value = true
+  try {
+    const demandId = hierarchySpilloverModalDemand.value.id
+    await roadmapStore.createSpillover(
+      demandId,
+      hierarchySpilloverTargetYear.value,
+      hierarchySpilloverTargetNumber.value
+    )
+    clearHierarchyInlineDraft(demandId)
+    hierarchySpilloverModalOpen.value = false
+  }
+  finally {
+    isCreatingHierarchySpillover.value = false
+    hierarchySpilloverModalDemand.value = null
+  }
 }
 
 function confirmHierarchyStatusModal() {
@@ -2303,6 +2362,13 @@ async function handleSubmit(data: DemandFormData) {
   if (isSavingDemand.value)
     return
 
+  // If editing and status changed to Spillover, redirect to spillover modal
+  if (editingDemand.value && data.status === 'Spillover' && editingDemand.value.status !== 'Spillover') {
+    modalOpen.value = false
+    openHierarchySpilloverModal(editingDemand.value)
+    return
+  }
+
   const customerRenames = sanitizeCustomerRenames(data.customerRenames)
 
   try {
@@ -2868,7 +2934,7 @@ onUnmounted(() => {
                     <USelect
                       v-if="isHierarchyCellEditing(group.roadmap, 'status')"
                       :model-value="getHierarchyInlineDraft(group.roadmap).status"
-                      :items="statusSelectOptions"
+                      :items="getHierarchyStatusOptionsForItem(group.roadmap)"
                       value-key="value"
                       option-attribute="label"
                       size="xs"
@@ -3149,7 +3215,7 @@ onUnmounted(() => {
                       <USelect
                         v-if="isHierarchyCellEditing(epicEntry.epic, 'status')"
                         :model-value="getHierarchyInlineDraft(epicEntry.epic).status"
-                        :items="statusSelectOptions"
+                        :items="getHierarchyStatusOptionsForItem(epicEntry.epic)"
                         value-key="value"
                         option-attribute="label"
                         size="xs"
@@ -3371,7 +3437,7 @@ onUnmounted(() => {
                       <USelect
                         v-if="isHierarchyCellEditing(demand, 'status')"
                         :model-value="getHierarchyInlineDraft(demand).status"
-                        :items="statusSelectOptions"
+                        :items="getHierarchyStatusOptionsForItem(demand)"
                         value-key="value"
                         option-attribute="label"
                         size="xs"
@@ -3505,7 +3571,7 @@ onUnmounted(() => {
                       <USelect
                         v-if="isHierarchyCellEditing(epic, 'status')"
                         :model-value="getHierarchyInlineDraft(epic).status"
-                        :items="statusSelectOptions"
+                        :items="getHierarchyStatusOptionsForItem(epic)"
                         value-key="value"
                         option-attribute="label"
                         size="xs"
@@ -3786,7 +3852,7 @@ onUnmounted(() => {
                   <USelect
                     v-if="isHierarchyCellEditing(demand, 'status')"
                     :model-value="getHierarchyInlineDraft(demand).status"
-                    :items="statusSelectOptions"
+                    :items="getHierarchyStatusOptionsForItem(demand)"
                     value-key="value"
                     option-attribute="label"
                     size="xs"
@@ -4100,6 +4166,64 @@ onUnmounted(() => {
             icon="i-lucide-trash-2"
             label="Remover"
             @click="confirmDelete"
+          />
+        </div>
+      </template>
+    </UModal>
+
+    <UModal
+      v-model:open="hierarchySpilloverModalOpen"
+      :title="hierarchySpilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo'"
+      :ui="{ content: 'sm:max-w-md' }"
+    >
+      <template #body>
+        <div class="space-y-4">
+          <p class="text-sm text-muted">
+            <template v-if="hierarchySpilloverModalDemand?.status === 'Deprioritized'">
+              {{ hierarchySpilloverModalDemand?.itemType === 'Epic' ? 'O épico' : 'A demanda' }} <strong class="text-highlighted">{{ hierarchySpilloverModalDemand?.title }}</strong> será repriorizado
+              com uma cópia do tipo <em>Spillover</em> no quarter de destino. O registro original permanece preservado.
+            </template>
+            <template v-else>
+              O histórico {{ hierarchySpilloverModalDemand?.itemType === 'Epic' ? 'do épico' : 'da demanda' }} <strong class="text-highlighted">{{ hierarchySpilloverModalDemand?.title }}</strong> será preservado
+              no quarter atual e uma cópia do tipo <em>Spillover</em> será criada no quarter de destino.
+            </template>
+          </p>
+          <div class="grid grid-cols-2 gap-3">
+            <UFormField label="Ano">
+              <UInput
+                v-model="hierarchySpilloverTargetYear"
+                type="number"
+                :min="2020"
+                :max="2040"
+                placeholder="Ano"
+              />
+            </UFormField>
+            <UFormField label="Quarter">
+              <USelect
+                v-model="hierarchySpilloverTargetNumber"
+                :items="[{ label: 'Q1', value: 1 }, { label: 'Q2', value: 2 }, { label: 'Q3', value: 3 }, { label: 'Q4', value: 4 }]"
+                value-key="value"
+                label-key="label"
+              />
+            </UFormField>
+          </div>
+        </div>
+      </template>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton
+            variant="outline"
+            color="neutral"
+            label="Cancelar"
+            :disabled="isCreatingHierarchySpillover"
+            @click="hierarchySpilloverModalOpen = false"
+          />
+          <UButton
+            color="primary"
+            icon="i-lucide-forward"
+            :label="hierarchySpilloverModalDemand?.status === 'Deprioritized' ? 'Repriorizar' : 'Criar Transbordo'"
+            :loading="isCreatingHierarchySpillover"
+            @click="confirmHierarchySpillover"
           />
         </div>
       </template>

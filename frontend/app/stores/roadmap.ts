@@ -422,7 +422,10 @@ export const useRoadmapStore = defineStore('roadmap', () => {
     if (res.data) {
       applyUpdatedDemandState(res.data)
       const original = demands.value.find(d => d.id === demandId)
-      if (original) original.successorDemandId = res.data.id
+      if (original) {
+        original.successorDemandId = res.data.id
+        original.status = 'Spillover'
+      }
     }
 
     return res.data

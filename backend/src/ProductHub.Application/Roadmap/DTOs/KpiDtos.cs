@@ -85,4 +85,5 @@ public sealed record DemandStatusDistributionDto(
     int InProgress,
     int Done,
     int Deprioritized,
+    int Spillover,
     int Total);

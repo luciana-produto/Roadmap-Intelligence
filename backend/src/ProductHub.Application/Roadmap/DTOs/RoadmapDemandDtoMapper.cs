@@ -22,7 +22,7 @@ internal static class RoadmapDemandDtoMapper
             && demand.DeliveryDate.HasValue
             && effectivePromisedDate.HasValue
             && demand.DeliveryDate.Value > effectivePromisedDate.Value;
-        var isOverdue = demand.Status is not DemandStatus.Done and not DemandStatus.Deprioritized
+        var isOverdue = demand.Status is not DemandStatus.Done and not DemandStatus.Deprioritized and not DemandStatus.Spillover
             && effectivePromisedDate.HasValue
             && today > effectivePromisedDate.Value;
 

@@ -1,4 +1,4 @@
-export type DemandStatus = 'Backlog' | 'InProgress' | 'Done' | 'Deprioritized' | 'Blocked'
+export type DemandStatus = 'Backlog' | 'InProgress' | 'Done' | 'Deprioritized' | 'Blocked' | 'Spillover' | 'UX' | 'Prioritized'
 export type DemandType = 'Planned' | 'Spillover' | 'Unplanned' | 'Additional'
 export type RoadmapItemType = 'Roadmap' | 'Epic' | 'Demand'
 export type DemandClassification =

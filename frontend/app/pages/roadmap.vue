@@ -539,7 +539,15 @@ function getStatusBadgeClass(status: DemandStatus) {
     case 'InProgress':
       return 'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300'
     case 'Deprioritized':
+      return 'border-pink-200 bg-pink-50 text-pink-700 dark:border-pink-800 dark:bg-pink-900/20 dark:text-pink-300'
+    case 'Blocked':
       return 'border-red-200 bg-red-50 text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300'
+    case 'Spillover':
+      return 'border-orange-200 bg-orange-50 text-orange-700 dark:border-orange-800 dark:bg-orange-900/20 dark:text-orange-300'
+    case 'UX':
+      return 'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-800 dark:bg-purple-900/20 dark:text-purple-300'
+    case 'Prioritized':
+      return 'border-cyan-200 bg-cyan-50 text-cyan-700 dark:border-cyan-800 dark:bg-cyan-900/20 dark:text-cyan-300'
     default:
       return 'border-default bg-default text-muted'
   }
@@ -2900,7 +2908,7 @@ function syncListSectionDividers() {
               select.className = 'min-w-0 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors focus:border-primary/40'
               select.disabled = isPlanningInlineSaving(epic.id) || isSavingAllPlanningInlineEdits.value
 
-              STATUS_SELECT_OPTIONS.forEach((option) => {
+              getStatusOptionsForItem(epic).forEach((option) => {
                 const optionNode = document.createElement('option')
                 optionNode.value = option.value
                 optionNode.textContent = option.label
@@ -3224,21 +3232,6 @@ function syncListSectionDividers() {
 
             const actions = document.createElement('div')
             actions.className = 'pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100'
-
-            // Criar transbordo (simple epics only, like demands).
-            if (headerMeta.epic.isSimple && !headerMeta.epic.successorDemandId) {
-              const spilloverButton = document.createElement('button')
-              spilloverButton.type = 'button'
-              spilloverButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
-              spilloverButton.title = headerMeta.epic.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo'
-              spilloverButton.addEventListener('click', (event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                openSpilloverModal(headerMeta.epic)
-              })
-              spilloverButton.appendChild(createSvgIcon(['m15 17 5-5-5-5', 'M4 18v-2a4 4 0 0 1 4-4h12'], 'h-4 w-4'))
-              actions.appendChild(spilloverButton)
-            }
 
             const createButton = document.createElement('button')
             createButton.type = 'button'
@@ -3715,11 +3708,13 @@ async function confirmCreateSpillover() {
   if (!spilloverModalDemand.value || !spilloverTargetYear.value || !spilloverTargetNumber.value) return
   isCreatingSpillover.value = true
   try {
+    const demandId = spilloverModalDemand.value.id
     await roadmapStore.createSpillover(
-      spilloverModalDemand.value.id,
+      demandId,
       spilloverTargetYear.value,
       spilloverTargetNumber.value
     )
+    clearPlanningInlineDraft(demandId)
     spilloverModalOpen.value = false
   }
   finally {
@@ -3882,6 +3877,13 @@ async function handleSubmit(data: DemandFormData) {
   if (isSavingDemand.value)
     return
 
+  // If editing and status changed to Spillover, redirect to spillover modal
+  if (editingDemand.value && data.status === 'Spillover' && editingDemand.value.status !== 'Spillover') {
+    modalOpen.value = false
+    openSpilloverModal(editingDemand.value)
+    return
+  }
+
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
   const customerRenames = sanitizeCustomerRenames(data.customerRenames)
@@ -3985,21 +3987,27 @@ async function confirmDelete() {
 
 // ─── List view labels ──────────────────────────────────────────────────────────
 const statusLabels: Record<DemandStatus, string> = {
-  Backlog: 'Backlog', InProgress: 'Doing', Done: 'Concluído', Deprioritized: 'Despriorizado', Blocked: 'Impedido'
+  Backlog: 'Backlog', InProgress: 'Doing', Done: 'Concluído', Deprioritized: 'Despriorizado', Blocked: 'Impedido', Spillover: 'Transbordo', UX: 'UX', Prioritized: 'Priorizado'
 }
 const statusTextClass: Record<DemandStatus, string> = {
   Backlog: 'text-muted',
   InProgress: 'text-blue-600 dark:text-blue-400',
   Done: 'text-green-600 dark:text-green-400',
-  Deprioritized: 'text-red-600 dark:text-red-400',
-  Blocked: 'text-amber-600 dark:text-amber-400'
+  Deprioritized: 'text-pink-600 dark:text-pink-400',
+  Blocked: 'text-red-600 dark:text-red-400',
+  Spillover: 'text-orange-600 dark:text-orange-400',
+  UX: 'text-purple-600 dark:text-purple-400',
+  Prioritized: 'text-cyan-600 dark:text-cyan-400'
 }
 const statusDotClass: Record<DemandStatus, string> = {
   Backlog: 'bg-neutral-400 dark:bg-neutral-500',
   InProgress: 'bg-blue-500 dark:bg-blue-400',
   Done: 'bg-green-500 dark:bg-green-400',
-  Deprioritized: 'bg-red-500 dark:bg-red-400',
-  Blocked: 'bg-amber-500 dark:bg-amber-400'
+  Deprioritized: 'bg-pink-500 dark:bg-pink-400',
+  Blocked: 'bg-red-500 dark:bg-red-400',
+  Spillover: 'bg-orange-500 dark:bg-orange-400',
+  UX: 'bg-purple-500 dark:bg-purple-400',
+  Prioritized: 'bg-cyan-500 dark:bg-cyan-400'
 }
 const typeLabels: Record<DemandType, string> = {
   Planned: 'Planejado', Spillover: 'Transbordo', Unplanned: 'Não Planejado', Additional: 'Adicional'
@@ -4449,13 +4457,25 @@ interface ListColMeta {
   disableSorting?: boolean
 }
 
-const STATUS_SELECT_OPTIONS = [
+const STATUS_SELECT_OPTIONS_BASE = [
   { label: 'Backlog',       value: 'Backlog' },
   { label: 'Doing',  value: 'InProgress' },
   { label: 'Concluído',     value: 'Done' },
   { label: 'Despriorizado', value: 'Deprioritized' },
   { label: 'Impedido',      value: 'Blocked' },
+  { label: 'UX',            value: 'UX' },
+  { label: 'Priorizado',    value: 'Prioritized' },
 ]
+const STATUS_SELECT_OPTIONS = [
+  ...STATUS_SELECT_OPTIONS_BASE,
+  { label: 'Transbordo',    value: 'Spillover' },
+]
+
+function getStatusOptionsForItem(item: RoadmapDemand) {
+  const canSpillover = (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple)) && !item.successorDemandId
+  if (canSpillover || item.status === 'Spillover') return STATUS_SELECT_OPTIONS
+  return STATUS_SELECT_OPTIONS_BASE
+}
 const classificationBadgeClass: Record<DemandClassification, string> = {
   TechnicalDebtSecurity: 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:border-slate-700',
   Strategic: 'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800',
@@ -5056,6 +5076,12 @@ function handlePlanningStatusChange(item: RoadmapDemand, nextStatus: DemandStatu
   const currentDraft = getPlanningInlineDraft(item)
 
   if (nextStatus === currentDraft.status && !requiresPlanningStatusDetails(nextStatus)) {
+    deactivatePlanningCell(item.id, 'status')
+    return
+  }
+
+  if (nextStatus === 'Spillover') {
+    openSpilloverModal(item)
     deactivatePlanningCell(item.id, 'status')
     return
   }
@@ -6388,22 +6414,6 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const actionSlots = []
       const kpiSummary = getDemandKpiSummary(demand)
 
-      // 1st: Transbordo / Repriorizar
-      if (demand.itemType === 'Demand' && !demand.successorDemandId) {
-        actionSlots.push(
-          h(UButtonComp, {
-            size: 'xs',
-            variant: 'ghost',
-            color: 'neutral',
-            class: 'h-6 w-6 p-0',
-            title: demand.status === 'Deprioritized' ? 'Repriorizar em outro quarter' : 'Criar Transbordo',
-            onClick: () => openSpilloverModal(demand)
-          }, {
-            default: () => h(UIconComp, { name: 'i-lucide-forward', class: 'h-4 w-4' })
-          })
-        )
-      }
-
       // 2nd: Agendar (backlog only)
       if (isBacklogDemand(demand)) {
         actionSlots.push(
@@ -7092,7 +7102,7 @@ watch(activeDemandKpiId, async (value) => {
                     <USelect
                       v-if="isPlanningCellEditing(row.original, 'status')"
                       :model-value="getPlanningInlineDraft(row.original).status"
-                      :items="STATUS_SELECT_OPTIONS"
+                      :items="getStatusOptionsForItem(row.original)"
                       value-key="value"
                       option-attribute="label"
                       size="xs"

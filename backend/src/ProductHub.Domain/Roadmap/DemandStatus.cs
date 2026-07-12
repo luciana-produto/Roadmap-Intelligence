@@ -6,5 +6,8 @@ public enum DemandStatus
     InProgress = 1,
     Done = 2,
     Deprioritized = 3,
-    Blocked = 4
+    Blocked = 4,
+    Spillover = 5,
+    UX = 6,
+    Prioritized = 7
 }
