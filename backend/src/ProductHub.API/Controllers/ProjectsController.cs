@@ -1,5 +1,7 @@
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProductHub.API.Security;
 using ProductHub.Application.Roadmap.Commands.CreateProject;
 using ProductHub.Application.Roadmap.Commands.CreateProjectProduct;
 using ProductHub.Application.Roadmap.Commands.DeleteProject;
@@ -23,6 +25,7 @@ public sealed class ProjectsController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> Create(
         [FromBody] CreateRoadmapProjectCommand command,
         CancellationToken cancellationToken)
@@ -32,6 +35,7 @@ public sealed class ProjectsController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> Update(
         Guid id,
         [FromBody] UpdateRoadmapProjectCommand command,
@@ -42,6 +46,7 @@ public sealed class ProjectsController(ISender sender) : ApiControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         await sender.Send(new DeleteRoadmapProjectCommand(id), cancellationToken);
@@ -49,6 +54,7 @@ public sealed class ProjectsController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost("{projectId:guid}/products")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> CreateProduct(
         Guid projectId,
         [FromBody] CreateRoadmapProductCommand command,
@@ -59,6 +65,7 @@ public sealed class ProjectsController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("{projectId:guid}/products/{productId:guid}")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> UpdateProduct(
         Guid projectId,
         Guid productId,
@@ -73,6 +80,7 @@ public sealed class ProjectsController(ISender sender) : ApiControllerBase
     }
 
     [HttpDelete("{projectId:guid}/products/{productId:guid}")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> DeleteProduct(
         Guid projectId,
         Guid productId,

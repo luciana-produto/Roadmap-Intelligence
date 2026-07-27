@@ -337,3 +337,32 @@ IF COL_LENGTH(N'dbo.RoadmapDemands', N'SpilloverObservation') IS NULL
 BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD SpilloverObservation NVARCHAR(2000) NULL;
 END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'IsDeleted') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD IsDeleted BIT NOT NULL CONSTRAINT DF_RoadmapDemands_IsDeleted DEFAULT (0);
+END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'DeletedAt') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD DeletedAt DATETIME2 NULL;
+END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'DeletedByEmail') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD DeletedByEmail NVARCHAR(320) NULL;
+END;
+
+IF OBJECT_ID(N'dbo.UserAccess', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.UserAccess (
+        Id UNIQUEIDENTIFIER NOT NULL,
+        Email NVARCHAR(320) NOT NULL,
+        CanEditRoadmap BIT NOT NULL CONSTRAINT DF_UserAccess_CanEditRoadmap DEFAULT (0),
+        CanManageRegistrations BIT NOT NULL CONSTRAINT DF_UserAccess_CanManageRegistrations DEFAULT (0),
+        CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_UserAccess_CreatedAt DEFAULT (SYSUTCDATETIME()),
+        UpdatedAt DATETIME2 NULL,
+        CONSTRAINT PK_UserAccess PRIMARY KEY CLUSTERED (Id),
+        CONSTRAINT UQ_UserAccess_Email UNIQUE (Email)
+    );
+END;

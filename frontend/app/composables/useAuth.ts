@@ -117,6 +117,7 @@ export function useAuth(deps: AuthDeps = {}) {
     finally {
       authStore.clearSession()
       clearSessionCookies()
+      useAccessStore().reset()
       logger.info('Sessão encerrada')
       await push('/login')
     }

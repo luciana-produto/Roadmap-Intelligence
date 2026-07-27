@@ -2,8 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using ProductHub.Application.Access;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap.Interfaces;
+using ProductHub.Infrastructure.Access;
 using ProductHub.Infrastructure.Persistence;
 using ProductHub.Infrastructure.Persistence.Interceptors;
 using ProductHub.Infrastructure.Repositories;
@@ -53,6 +55,11 @@ public static class DependencyInjection
         services.AddScoped<IRoadmapDemandRepository, RoadmapDemandRepository>();
         services.AddScoped<IRoadmapCapacityRepository, RoadmapCapacityRepository>();
         services.AddScoped<IKpiRepository, KpiRepository>();
+
+        // Permissões de acesso (Opção B: cadastro por e-mail + super-admins em config).
+        // A ligação das AccessOptions à configuração é feita no Program.cs (projeto Web,
+        // que já traz o binder de configuração).
+        services.AddScoped<IUserAccessService, UserAccessService>();
 
         return services;
     }

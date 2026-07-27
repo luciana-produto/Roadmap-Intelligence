@@ -224,4 +224,21 @@ public sealed class RoadmapDemandRepository(AppDbContext context)
         CancellationToken cancellationToken = default) =>
         await context.RoadmapDemands
             .FirstOrDefaultAsync(d => d.SuccessorDemandId == successorId, cancellationToken);
+
+    public async Task<IReadOnlyList<RoadmapDemand>> GetDeletedAsync(
+        CancellationToken cancellationToken = default) =>
+        await context.RoadmapDemands
+            .Include(d => d.ProjectLinks)
+            .IgnoreQueryFilters()
+            .Where(d => d.IsDeleted)
+            .AsNoTracking()
+            .OrderByDescending(d => d.DeletedAt)
+            .ToListAsync(cancellationToken);
+
+    public async Task<RoadmapDemand?> GetByIdIncludingDeletedAsync(
+        Guid id,
+        CancellationToken cancellationToken = default) =>
+        await context.RoadmapDemands
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(d => d.Id == id, cancellationToken);
 }

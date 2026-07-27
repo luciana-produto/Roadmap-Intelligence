@@ -1,17 +1,22 @@
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProductHub.API.Security;
 using ProductHub.Application.Roadmap.Commands.BulkMoveDemands;
 using ProductHub.Application.Roadmap.Commands.BulkUpdateDemands;
 using ProductHub.Application.Roadmap.Commands.CreateDemand;
 using ProductHub.Application.Roadmap.Commands.CreateSpillover;
 using ProductHub.Application.Roadmap.Commands.DeleteDemand;
 using ProductHub.Application.Roadmap.Commands.DeleteDemandTradeOff;
+using ProductHub.Application.Roadmap.Commands.PurgeDemand;
 using ProductHub.Application.Roadmap.Commands.ReorderDemand;
+using ProductHub.Application.Roadmap.Commands.RestoreDemand;
 using ProductHub.Application.Roadmap.Commands.UpsertCapacity;
 using ProductHub.Application.Roadmap.Commands.UpdateDemand;
 using ProductHub.Application.Roadmap.DTOs;
 using ProductHub.Application.Roadmap.Queries.GetCapacity;
 using ProductHub.Application.Roadmap.Queries.GetCustomerSuggestions;
+using ProductHub.Application.Roadmap.Queries.GetDeletedDemands;
 using ProductHub.Application.Roadmap.Queries.GetDependencyOptions;
 using ProductHub.Application.Roadmap.Queries.GetRoadmap;
 using ProductHub.Shared.Models;
@@ -64,6 +69,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("capacity")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> UpsertCapacity(
         [FromBody] UpsertRoadmapCapacityCommand command,
         CancellationToken cancellationToken)
@@ -73,6 +79,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost("demands")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> CreateDemand(
         [FromBody] CreateRoadmapDemandCommand command,
         CancellationToken cancellationToken)
@@ -82,6 +89,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("demands/{id:guid}")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> UpdateDemand(
         Guid id,
         [FromBody] UpdateRoadmapDemandCommand command,
@@ -92,6 +100,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpDelete("demands/{id:guid}")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> DeleteDemand(
         Guid id,
         CancellationToken cancellationToken)
@@ -101,6 +110,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpDelete("trade-offs/{id:guid}")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> DeleteTradeOff(
         Guid id,
         CancellationToken cancellationToken)
@@ -110,6 +120,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost("demands/{id:guid}/spillover")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> CreateSpillover(
         Guid id,
         [FromBody] CreateSpilloverCommand command,
@@ -120,6 +131,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("demands/reorder")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> ReorderDemand(
         [FromBody] ReorderRoadmapDemandCommand command,
         CancellationToken cancellationToken)
@@ -129,6 +141,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost("demands/bulk-move")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> BulkMoveDemands(
         [FromBody] BulkMoveDemandsToQuarterCommand command,
         CancellationToken cancellationToken)
@@ -138,6 +151,7 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("demands/bulk-edit")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> BulkUpdateDemands(
         [FromBody] BulkUpdateDemandsCommand command,
         CancellationToken cancellationToken)
@@ -146,4 +160,29 @@ public sealed class RoadmapController(ISender sender) : ApiControllerBase
         return Ok(ApiResponse<IReadOnlyList<RoadmapDemandDto>>.Ok(result, CorrelationId));
     }
 
+    // ─── Lixeira (soft delete) ───────────────────────────────────────────────
+
+    [HttpGet("demands/deleted")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
+    public async Task<IActionResult> GetDeletedDemands(CancellationToken cancellationToken)
+    {
+        var result = await sender.Send(new GetDeletedDemandsQuery(), cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<DeletedDemandDto>>.Ok(result, CorrelationId));
+    }
+
+    [HttpPost("demands/{id:guid}/restore")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
+    public async Task<IActionResult> RestoreDemand(Guid id, CancellationToken cancellationToken)
+    {
+        await sender.Send(new RestoreRoadmapDemandCommand(id), cancellationToken);
+        return Ok(ApiResponse.Ok(CorrelationId));
+    }
+
+    [HttpDelete("demands/{id:guid}/purge")]
+    [Authorize(Policy = AccessPolicies.ManageAccess)]
+    public async Task<IActionResult> PurgeDemand(Guid id, CancellationToken cancellationToken)
+    {
+        await sender.Send(new PurgeRoadmapDemandCommand(id), cancellationToken);
+        return Ok(ApiResponse.Ok(CorrelationId));
+    }
 }

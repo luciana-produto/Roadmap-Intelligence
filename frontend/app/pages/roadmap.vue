@@ -8,6 +8,8 @@ import type { ApiResponse } from '~/types/api'
 import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType, BulkEditRoadmapItemsData, CustomerRename, DeprioritizationReason } from '~/types/roadmap'
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
+import RoadmapDashboards from '~/components/roadmap/RoadmapDashboards.vue'
+import type { DashboardSelection } from '~/types/roadmapDashboards'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 import {
   BACKLOG_QUARTER,
@@ -26,7 +28,11 @@ const route = useRoute()
 const api = useApi()
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
+const accessStore = useAccessStore()
 const toast = useToast()
+
+// Permissão de edição do roadmap. Sem ela, a tela fica somente leitura (ações escondidas/bloqueadas).
+const canEditRoadmap = computed(() => accessStore.canEditRoadmap)
 
 const { projects, demands, dependencyOptions, customerSuggestions, capacitySummary, selectedProject, selectedProjectId, selectedQuarterYear, selectedQuarterNumber, isLoading, isCapacityLoading } = storeToRefs(roadmapStore)
 const { kpis: availableKpis } = storeToRefs(kpiStore)
@@ -76,6 +82,29 @@ const quarterOptions = computed(() =>
     )
   ]
 )
+
+// Facilitador: um "chip" por ano que seleciona/desmarca os 4 quarters daquele ano de uma vez.
+const quarterYearOptions = computed(() =>
+  buildPreRegisteredQuarterYears(currentYear, PRE_REGISTERED_QUARTER_END_YEAR).map(year => ({
+    year,
+    values: [1, 2, 3, 4].map(q => buildQuarterValue(year, q))
+  }))
+)
+
+function isQuarterYearFullySelected(values: string[]) {
+  return values.every(value => filterQuarters.value.includes(value))
+}
+
+function toggleQuarterYear(values: string[]) {
+  if (isQuarterYearFullySelected(values)) {
+    filterQuarters.value = filterQuarters.value.filter(value => !values.includes(value))
+    return
+  }
+  const next = new Set(filterQuarters.value)
+  for (const value of values)
+    next.add(value)
+  filterQuarters.value = [...next]
+}
 
 const planningQuarterOptions = computed(() =>
   quarterOptions.value.filter(option => ![BACKLOG_QUARTER.value, PRIORITIZED_BACKLOG_QUARTER.value].includes(option.value))
@@ -199,6 +228,7 @@ function formatDemandDate(value?: string) {
 }
 
 function openDemandKpiWorkspace(demand: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
   const targetEpicId = demand.itemType === 'Epic' ? demand.id : demand.epicId
   if (!targetEpicId)
     return
@@ -291,6 +321,12 @@ const listProblemLabels: Record<string, string> = {
 }
 
 const listProblemFilter = ref<string[]>([])
+// Filtro dedicado (acionado pelo dashboard): itens com qualquer dependência inconsistente.
+// O filtro de "Problemas" só cobre cross-team; este cobre todas as inconsistências.
+const filterInconsistentDeps = ref(false)
+// Filtros dedicados de motivo (acionados pelos dashboards de motivos), aplicados sobre a lista.
+const filterSpilloverReasons = ref<string[]>([])
+const filterDeprioritizationReasons = ref<string[]>([])
 
 const listProblemFilterLabel = computed(() => {
   if (!listProblemFilter.value.length)
@@ -385,6 +421,68 @@ function toggleListProblemFilter(problem: string) {
 
 function clearListProblemFilter() {
   listProblemFilter.value = []
+  filterInconsistentDeps.value = false
+}
+
+function toggleInconsistentDepsFilter() {
+  filterInconsistentDeps.value = !filterInconsistentDeps.value
+}
+
+function toggleSpilloverReasonFilter(reason: string) {
+  filterSpilloverReasons.value = filterSpilloverReasons.value.includes(reason)
+    ? filterSpilloverReasons.value.filter(item => item !== reason)
+    : [...filterSpilloverReasons.value, reason]
+}
+
+function toggleDeprioritizationReasonFilter(reason: string) {
+  filterDeprioritizationReasons.value = filterDeprioritizationReasons.value.includes(reason)
+    ? filterDeprioritizationReasons.value.filter(item => item !== reason)
+    : [...filterDeprioritizationReasons.value, reason]
+}
+
+// Há algum filtro ativo sobre a lista? (não inclui a seleção de time/quarter do topo)
+const hasActiveListFilters = computed(() =>
+  listColumnFilters.value.length > 0
+  || listProblemFilter.value.length > 0
+  || filterInconsistentDeps.value
+  || filterSpilloverReasons.value.length > 0
+  || filterDeprioritizationReasons.value.length > 0
+)
+
+// Limpa TODOS os filtros da lista (coluna + saúde/problemas + dependências + motivos),
+// mantendo apenas a seleção de time e quarter.
+function clearAllListFilters() {
+  listColumnFilters.value = []
+  listProblemFilter.value = []
+  filterInconsistentDeps.value = false
+  filterSpilloverReasons.value = []
+  filterDeprioritizationReasons.value = []
+}
+
+// Estado ativo dos filtros para destacar o item selecionado no componente de dashboards.
+const dashboardActiveFilters = computed(() => ({
+  statuses: getListMultiFilter('status'),
+  classifications: getTitleFilter().classifications,
+  customers: getListMultiFilter('customers'),
+  types: getQuarterTypeFilter().types,
+  problems: listProblemFilter.value,
+  inconsistentDeps: filterInconsistentDeps.value,
+  spilloverReasons: filterSpilloverReasons.value,
+  deprioritizationReasons: filterDeprioritizationReasons.value
+}))
+
+// Clique num item do dashboard (na planejamento) → aplica/alterna o filtro correspondente na lista.
+function handleDashboardSelect(selection: DashboardSelection) {
+  switch (selection.kind) {
+    case 'status': toggleListMultiFilterValue('status', selection.value); break
+    case 'classification': toggleTitleClassification(selection.value); break
+    case 'customer': toggleListMultiFilterValue('customers', selection.value); break
+    case 'type': toggleTypeFilterValue(selection.value); break
+    case 'problem': toggleListProblemFilter(selection.value); break
+    case 'inconsistentDeps': toggleInconsistentDepsFilter(); break
+    case 'spilloverReason': toggleSpilloverReasonFilter(selection.value); break
+    case 'deprioritizationReason': toggleDeprioritizationReasonFilter(selection.value); break
+  }
 }
 
 function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
@@ -1013,6 +1111,32 @@ const activeCapacityScope = computed(() => {
   }
 })
 
+// Motivo do bloqueio do botão "Capacity" (exibido como tooltip). Vazio quando editável.
+const capacityDisabledReason = computed(() => {
+  if (activeCapacityScope.value) return ''
+
+  const reasons: string[] = []
+
+  if (filterListProjectIds.value.length === 0)
+    reasons.push('selecione um time')
+  else if (filterListProjectIds.value.length > 1)
+    reasons.push('selecione apenas um time (há mais de um selecionado)')
+
+  if (filterQuarters.value.length === 0) {
+    reasons.push('selecione um quarter')
+  }
+  else if (filterQuarters.value.length > 1) {
+    reasons.push('selecione apenas um quarter (há mais de um selecionado)')
+  }
+  else {
+    const { quarterYear, quarterNumber } = parseQuarterValue(filterQuarters.value[0]!)
+    if (isSpecialBacklogQuarter(quarterYear, quarterNumber))
+      reasons.push('o Backlog / Backlog prioritário não possui capacity')
+  }
+
+  return `Configurar capacity indisponível: ${reasons.join('; ')}.`
+})
+
 const capacityProjectName = computed(() =>
   projects.value.find(p => p.id === activeCapacityScope.value?.projectId)?.name ?? 'Projeto'
 )
@@ -1154,94 +1278,6 @@ const capacityUnestimatedLabel = computed(() => {
   return `${count} ${count === 1 ? 'demanda sem estimativa' : 'demandas sem estimativa'}`
 })
 
-const scopedDemandTotalHours = computed(() =>
-  quarterFilteredDemands.value.reduce((total, demand) => total + (demand.hours ?? 0), 0)
-)
-
-const classificationTotals = computed(() => {
-  const totalHours = scopedDemandTotalHours.value
-
-  const totals = new Map<DemandClassification, { classification: DemandClassification, label: string, hours: number, count: number }>()
-
-  for (const demand of quarterFilteredDemands.value) {
-    const classification = String(getEffectiveDemandClassification(demand) ?? '').trim() as DemandClassification
-    if (!classification || !(classification in classificationLabels)) continue
-
-    const current = totals.get(classification) ?? {
-      classification,
-      label: classificationLabels[classification],
-      hours: 0,
-      count: 0
-    }
-
-    current.hours += demand.hours ?? 0
-    current.count += 1
-    totals.set(classification, current)
-  }
-
-  return [...totals.values()]
-    .map(item => ({
-      ...item,
-      percentage: totalHours > 0 ? (item.hours / totalHours) * 100 : 0
-    }))
-    .sort((left, right) => right.hours - left.hours)
-})
-
-const customerTotals = computed(() => {
-  const totalHours = scopedDemandTotalHours.value
-  const totals = new Map<string, { name: string, hours: number, count: number }>()
-
-  for (const demand of quarterFilteredDemands.value) {
-    const customers = getEffectiveDemandCustomers(demand)
-    for (const customer of customers) {
-      const current = totals.get(customer) ?? { name: customer, hours: 0, count: 0 }
-      current.hours += demand.hours ?? 0
-      current.count += 1
-      totals.set(customer, current)
-    }
-  }
-
-  return [...totals.values()]
-    .map(item => ({
-      ...item,
-      percentage: totalHours > 0 ? (item.hours / totalHours) * 100 : 0
-    }))
-    .sort((left, right) => right.hours - left.hours)
-})
-
-const typeTotals = computed(() => {
-  const totalHours = scopedDemandTotalHours.value
-
-  return demandTypes.map(type => {
-    const scopedDemands = quarterFilteredDemands.value.filter(demand => demand.type === type)
-    const hours = scopedDemands.reduce((total, demand) => total + (demand.hours ?? 0), 0)
-
-    return {
-      type,
-      label: typeLabels[type],
-      hours,
-      count: scopedDemands.length,
-      percentage: totalHours > 0 ? (hours / totalHours) * 100 : 0
-    }
-  })
-    .filter(item => item.count > 0)
-    .sort((left, right) => right.hours - left.hours)
-})
-
-const typeSummaryTone: Record<DemandType, string> = {
-  Planned: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-900/20 dark:text-emerald-300 dark:border-emerald-800',
-  Spillover: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:border-amber-800',
-  Unplanned: 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-800',
-  Additional: 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/20 dark:text-blue-300 dark:border-blue-800'
-}
-
-const typeSummaryDot: Record<DemandType, string> = {
-  Planned: 'bg-emerald-500',
-  Spillover: 'bg-amber-500',
-  Unplanned: 'bg-rose-500',
-  Additional: 'bg-blue-500'
-}
-
 watch(activeCapacityScope, async (scope) => {
   if (!scope) {
     roadmapStore.clearCapacity()
@@ -1255,17 +1291,23 @@ watch(activeCapacityScope, async (scope) => {
 watch(selectedProjectId, () => {
   filterProducts.value = []
   setListMultiFilter('status', [])
-  setListMultiFilter('type', [])
-  setListMultiFilter('classification', [])
+  clearTypeFilterPart()
+  clearTitleClassifications()
   setListMultiFilter('products', [])
+  setListMultiFilter('customers', [])
+  filterSpilloverReasons.value = []
+  filterDeprioritizationReasons.value = []
 })
 
 watch(filterListProjectIds, (val) => {
   filterProducts.value = []
   setListMultiFilter('status', [])
-  setListMultiFilter('type', [])
-  setListMultiFilter('classification', [])
+  clearTypeFilterPart()
+  clearTitleClassifications()
   setListMultiFilter('products', [])
+  setListMultiFilter('customers', [])
+  filterSpilloverReasons.value = []
+  filterDeprioritizationReasons.value = []
   localStorage.setItem(CACHE_KEY_PLANNING_PROJECTS, JSON.stringify(val))
 })
 
@@ -1944,6 +1986,9 @@ function destroyListSortable() {
 function initListSortable() {
   destroyListSortable()
 
+  // Sem permissão de edição: não habilita o arrastar para repriorizar.
+  if (!canEditRoadmap.value) return
+
   const tbody = listTableRootRef.value?.querySelector('tbody')
   if (!tbody) return
 
@@ -2277,6 +2322,9 @@ function syncListSectionDividers() {
 
       const grid = document.createElement('div')
       grid.className = 'grid items-start bg-default'
+      // Épico despriorizado: linha inteira com transparência (mantém o tachado no título).
+      if (headerMeta && getPlanningDraftDisplayItem(headerMeta.epic).status === 'Deprioritized')
+        grid.className += ' opacity-50'
       grid.style.gridTemplateColumns = getListGridTemplateColumns()
 
       const createGridCell = (className = 'px-3 py-0.5 align-top') => {
@@ -2565,7 +2613,7 @@ function syncListSectionDividers() {
           else {
             const epicTitle = document.createElement('button')
             epicTitle.type = 'button'
-            epicTitle.className = `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${displayEpic?.status === 'Deprioritized' ? 'line-through text-muted opacity-50' : 'text-highlighted'} ${headerMeta ? getPlanningEditableCellButtonClass(headerMeta.epic) : ''}`
+            epicTitle.className = `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${displayEpic?.status === 'Deprioritized' ? 'line-through text-muted' : 'text-highlighted'} ${headerMeta ? getPlanningEditableCellButtonClass(headerMeta.epic) : ''}`
                   epicTitle.textContent = displayEpic?.title ?? headerMeta?.epic.title ?? config.epicTitle ?? 'Sem épico'
             epicTitle.disabled = !headerMeta || isPlanningInlineSaving(headerMeta.epic.id) || isSavingAllPlanningInlineEdits.value
             if (headerMeta?.epic.description?.trim())
@@ -2713,6 +2761,7 @@ function syncListSectionDividers() {
             button.className = `inline-flex h-6 max-w-full items-center rounded-md border px-1.5 text-[10px] font-medium transition-colors hover:opacity-80 ${headerMeta.kpiSummary.tone}`
             button.textContent = headerMeta.kpiSummary.label
             button.title = headerMeta.kpiSummary.actionLabel
+            button.disabled = !canEditRoadmap.value
             button.addEventListener('click', (event) => {
               event.preventDefault()
               event.stopPropagation()
@@ -3277,7 +3326,8 @@ function syncListSectionDividers() {
               startCreateDemandForEpic(headerMeta.epic)
             })
             createButton.appendChild(createSvgIcon(['M12 5v14', 'M5 12h14'], 'h-4 w-4'))
-            actions.appendChild(createButton)
+            if (canEditRoadmap.value)
+              actions.appendChild(createButton)
 
             const kpiButton = document.createElement('button')
             kpiButton.type = 'button'
@@ -3305,7 +3355,8 @@ function syncListSectionDividers() {
 
             kpiSvg.append(kpiPath1, kpiPath2)
             kpiButton.appendChild(kpiSvg)
-            actions.appendChild(kpiButton)
+            if (canEditRoadmap.value)
+              actions.appendChild(kpiButton)
 
             const colorDetails = document.createElement('details')
             colorDetails.className = 'relative inline-flex shrink-0'
@@ -3359,10 +3410,11 @@ function syncListSectionDividers() {
 
             colorPanel.appendChild(swatchRow)
             colorDetails.appendChild(colorPanel)
-            actions.appendChild(colorDetails)
+            if (canEditRoadmap.value)
+              actions.appendChild(colorDetails)
 
             // Composite epic with no demands: allow converting it back to a simple epic.
-            if (emptyCompositeEpicIds.value.has(headerMeta.epic.id)) {
+            if (canEditRoadmap.value && emptyCompositeEpicIds.value.has(headerMeta.epic.id)) {
               const convertButton = document.createElement('button')
               convertButton.type = 'button'
               convertButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-primary transition-colors hover:text-primary/80'
@@ -3388,7 +3440,22 @@ function syncListSectionDividers() {
 
             // Standard Lucide "pencil" icon (same as used in every other edit action).
             editButton.appendChild(createSvgIcon(['M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z', 'm15 5 4 4'], 'h-4 w-4'))
-            actions.appendChild(editButton)
+            if (canEditRoadmap.value)
+              actions.appendChild(editButton)
+
+            const copyButton = document.createElement('button')
+            copyButton.type = 'button'
+            copyButton.className = 'inline-flex h-6 w-6 items-center justify-center rounded-md text-muted transition-colors hover:text-highlighted'
+            copyButton.title = 'Copiar épico'
+            copyButton.addEventListener('click', (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              openCopyModal(headerMeta.epic)
+            })
+            // Standard Lucide "copy" icon.
+            copyButton.appendChild(createSvgIcon(['M10 8h10a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z', 'M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2'], 'h-4 w-4'))
+            if (canEditRoadmap.value)
+              actions.appendChild(copyButton)
 
             const deleteButton = document.createElement('button')
             deleteButton.type = 'button'
@@ -3426,7 +3493,8 @@ function syncListSectionDividers() {
 
             deleteSvg.append(deletePathTop, deletePathBin, deletePathLid, deletePathLeft, deletePathRight)
             deleteButton.appendChild(deleteSvg)
-            actions.appendChild(deleteButton)
+            if (canEditRoadmap.value)
+              actions.appendChild(deleteButton)
 
             wrapper.appendChild(actions)
             cell.appendChild(wrapper)
@@ -3464,6 +3532,7 @@ const capacityModalOpen = ref(false)
 const isSavingCapacity = ref(false)
 const isSavingDemand = ref(false)
 const editingDemand = ref<RoadmapDemand | null>(null)
+const copySource = ref<RoadmapDemand | null>(null)
 const modalEditFocusField = ref<string | undefined>()
 const createItemType = ref<RoadmapItemType | undefined>()
 const defaultParentDemandId = ref<string | undefined>()
@@ -3553,6 +3622,7 @@ function openCreateModal(
     productIds?: string[]
   }
 ) {
+  if (!canEditRoadmap.value) return
   createItemType.value = itemType
   defaultParentDemandId.value = parentDemandId
   defaultProjectId.value = defaults?.projectId
@@ -3564,12 +3634,28 @@ function openCreateModal(
   createDefaultProductIds.value = defaults?.productIds ?? []
   forceSimpleEpic.value = false
   editingDemand.value = null
+  copySource.value = null
+  modalOpen.value = true
+}
+
+// Copiar demanda/épico: abre a modal em modo criação com os campos do item original
+// pré-preenchidos (título vazio e status Backlog aplicados dentro da modal).
+function openCopyModal(item: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
+  resetCreateModalDefaults()
+  createItemType.value = item.itemType
+  defaultParentDemandId.value = item.parentDemandId
+  forceSimpleEpic.value = false
+  modalEditFocusField.value = undefined
+  editingDemand.value = null
+  copySource.value = item
   modalOpen.value = true
 }
 
 // Adding the first demand to a simple epic turns it into a composite epic: warn the user
 // (its quarter/type/hours/product will be lost) before opening the prefilled demand form.
 function startCreateDemandForEpic(epic: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
   if (epic.isSimple) {
     convertSourceEpic.value = epic
     confirmConvertToCompositeOpen.value = true
@@ -3622,12 +3708,14 @@ function openHierarchyView() {
 }
 
 function openCapacityModal() {
-  if (!activeCapacityScope.value) return
+  if (!canEditRoadmap.value || !activeCapacityScope.value) return
   capacityModalOpen.value = true
 }
 
 function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus, focusField?: string, options?: { forceSimpleEpic?: boolean }) {
+  if (!canEditRoadmap.value) return
   editingDemand.value = nextStatus ? { ...demand, status: nextStatus } : demand
+  copySource.value = null
   defaultParentDemandId.value = undefined
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
@@ -3638,6 +3726,7 @@ function openEditModal(demand: RoadmapDemand, nextStatus?: DemandStatus, focusFi
 }
 
 function promptDelete(id: string) {
+  if (!canEditRoadmap.value) return
   const targetDemand = demands.value.find(demand => demand.id === id)
   if (targetDemand?.itemType === 'Roadmap' && demands.value.some(demand => demand.parentDemandId === id)) {
     toast.add({
@@ -4198,20 +4287,44 @@ const tableDemands = computed(() => {
   })()
 
   const matchesProblemFilter = (item: RoadmapDemand) => {
-    if (!listProblemFilter.value.length)
+    const hasDepFilter = filterInconsistentDeps.value
+    const hasProblemFilter = listProblemFilter.value.length > 0
+    if (!hasDepFilter && !hasProblemFilter)
       return true
+    // Grupo de "problemas/saúde" combina com OU (mesmo comportamento do filtro Problemas):
+    // o item passa se casar com qualquer um dos filtros ativos.
+    if (hasDepFilter && hasInconsistentDependency(item))
+      return true
+    if (!hasProblemFilter)
+      return false
     const problemKeys = getDemandProblemKeys(item)
     if (listProblemFilter.value.includes('__all__'))
       return problemKeys.length > 0
     return listProblemFilter.value.some(p => problemKeys.includes(p))
   }
 
-  const filtered = base.filter(matchesProblemFilter)
+  // Filtros de motivo (transbordo/despriorização): item passa se casar com qualquer motivo
+  // ativo (OU entre motivos e entre os dois grupos, já que os status são mutuamente exclusivos).
+  const matchesReasonFilter = (item: RoadmapDemand) => {
+    const hasSpilloverReasonFilter = filterSpilloverReasons.value.length > 0
+    const hasDeprioReasonFilter = filterDeprioritizationReasons.value.length > 0
+    if (!hasSpilloverReasonFilter && !hasDeprioReasonFilter)
+      return true
+    if (hasSpilloverReasonFilter && item.status === 'Spillover' && !!item.spilloverReason && filterSpilloverReasons.value.includes(item.spilloverReason))
+      return true
+    if (hasDeprioReasonFilter && item.status === 'Deprioritized' && !!item.deprioritizationReason && filterDeprioritizationReasons.value.includes(item.deprioritizationReason))
+      return true
+    return false
+  }
+
+  const matchesExtraFilters = (item: RoadmapDemand) => matchesProblemFilter(item) && matchesReasonFilter(item)
+
+  const filtered = base.filter(matchesExtraFilters)
 
   // Append empty composite epics at the end (in both grouped and non-grouped modes) so they
   // remain findable. They render under the "Épicos inconsistentes - sem demanda" section,
-  // but still respect the active problem filter.
-  const inconsistentEpics = emptyCompositeEpics.value.filter(matchesProblemFilter)
+  // but still respect the active problem/reason filters.
+  const inconsistentEpics = emptyCompositeEpics.value.filter(matchesExtraFilters)
   if (inconsistentEpics.length)
     return [...filtered, ...inconsistentEpics]
 
@@ -4548,7 +4661,7 @@ interface ListColMeta {
   id: string
   label: string
   defaultWidth: number
-  filterType?: 'text' | 'select' | 'multi-select'
+  filterType?: 'text' | 'select' | 'multi-select' | 'text-classification' | 'quarter-type'
   selectOptions?: { label: string; value: string }[]
   allLabel?: string
   itemLabelPlural?: string
@@ -4590,11 +4703,11 @@ const classificationBadgeClass: Record<DemandClassification, string> = {
 
 const LIST_COL_DEFS: ListColMeta[] = [
   { id: 'priority',       label: 'Prioridade',   defaultWidth: 64, disableFilter: true },
-  { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text' },
-  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 112, filterType: 'multi-select', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
+  { id: 'title',          label: 'Demanda',       defaultWidth: 360, filterType: 'text-classification' },
+  { id: 'quarterLabel',   label: 'Quarter / Tipo', defaultWidth: 112, filterType: 'quarter-type', allLabel: 'Todos os quarters', itemLabelPlural: 'quarters' },
   { id: 'products',       label: 'Produtos',      defaultWidth: 148, filterType: 'multi-select', allLabel: 'Todos os produtos', itemLabelPlural: 'produtos', disableSorting: true },
   { id: 'hours',          label: 'Hrs',           defaultWidth: 60, disableFilter: true, alignRight: true },
-  { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'text' },
+  { id: 'customers',      label: 'Clientes',      defaultWidth: 110, filterType: 'multi-select', allLabel: 'Todos os clientes', itemLabelPlural: 'clientes' },
   { id: 'status',         label: 'Status',        defaultWidth: 124, filterType: 'multi-select', selectOptions: STATUS_SELECT_OPTIONS, allLabel: 'Todos os status', itemLabelPlural: 'status' },
   { id: 'conclusion',     label: 'Conclusão',     defaultWidth: 118, disableFilter: true },
   { id: 'kpis',           label: 'KPI',           defaultWidth: 100, disableFilter: true },
@@ -4624,6 +4737,17 @@ const listQuarterFilterOptions = computed(() => {
       seen.add(option.value)
       return true
     })
+    .sort((left, right) => left.label.localeCompare(right.label, 'pt-BR'))
+})
+
+// Clientes presentes no escopo (time/quarter) — usados no filtro multi-seleção da coluna Clientes.
+const listCustomerFilterOptions = computed(() => {
+  const seen = new Set<string>()
+  for (const demand of quarterFilteredDemands.value)
+    for (const customer of getEffectiveDemandCustomers(demand))
+      seen.add(customer)
+  return [...seen]
+    .map(name => ({ value: name, label: name }))
     .sort((left, right) => left.label.localeCompare(right.label, 'pt-BR'))
 })
 
@@ -4683,15 +4807,87 @@ function getListMultiFilterLabel(col: ListColMeta): string {
   const selected = getListMultiFilter(col.id)
   if (!selected.length) return col.allLabel ?? 'Todos'
   if (col.id === 'products') return getListProductsFilterLabel()
-  if (col.id === 'quarterLabel') {
-    if (selected.length === 1) return quarterShortLabel(selected[0]!)
-    if (selected.length === 2) return selected.map(quarterShortLabel).join(', ')
-    return `${selected.length} quarters`
-  }
+  if (col.id === 'customers')
+    return selected.length === 1 ? (selected[0] ?? '1 cliente') : `${selected.length} clientes`
   if (selected.length === 1) {
     return col.selectOptions?.find(option => option.value === selected[0])?.label ?? '1 selecionado'
   }
   return `${selected.length} ${col.itemLabelPlural ?? 'selecionados'}`
+}
+
+// ─── Filtros compostos ────────────────────────────────────────────────────────
+// Coluna "Quarter / Tipo": filtra por quarter E por tipo (valor composto na mesma coluna).
+// Coluna "Demanda": filtra por texto (título/descrição/Jira/épico) E por classificação (lista).
+// Dentro de cada lista a combinação é "OU"; entre atributos diferentes é "E".
+interface QuarterTypeFilter { quarters: string[], types: string[] }
+interface TitleFilter { text: string, classifications: string[] }
+
+const listTypeFilterOptions = demandTypes.map(type => ({ value: type as string, label: typeLabels[type] }))
+const listClassificationFilterOptions = (Object.entries(classificationLabels) as Array<[DemandClassification, string]>)
+  .map(([value, label]) => ({ value, label }))
+
+function getQuarterTypeFilter(): QuarterTypeFilter {
+  const value = listColumnFilters.value.find(f => f.id === 'quarterLabel')?.value as QuarterTypeFilter | undefined
+  return { quarters: value?.quarters ?? [], types: value?.types ?? [] }
+}
+function setQuarterTypeFilter(next: QuarterTypeFilter) {
+  const others = listColumnFilters.value.filter(f => f.id !== 'quarterLabel')
+  listColumnFilters.value = (next.quarters.length || next.types.length)
+    ? [...others, { id: 'quarterLabel', value: next }]
+    : others
+}
+function toggleQuarterFilterValue(value: string) {
+  const current = getQuarterTypeFilter()
+  const quarters = current.quarters.includes(value)
+    ? current.quarters.filter(item => item !== value)
+    : [...current.quarters, value]
+  setQuarterTypeFilter({ ...current, quarters })
+}
+function toggleTypeFilterValue(value: string) {
+  const current = getQuarterTypeFilter()
+  const types = current.types.includes(value)
+    ? current.types.filter(item => item !== value)
+    : [...current.types, value]
+  setQuarterTypeFilter({ ...current, types })
+}
+function clearQuarterFilterPart() {
+  setQuarterTypeFilter({ ...getQuarterTypeFilter(), quarters: [] })
+}
+function clearTypeFilterPart() {
+  setQuarterTypeFilter({ ...getQuarterTypeFilter(), types: [] })
+}
+function getQuarterTypeFilterLabel(): string {
+  const { quarters, types } = getQuarterTypeFilter()
+  const parts: string[] = []
+  if (quarters.length)
+    parts.push(quarters.length === 1 ? quarterShortLabel(quarters[0]!) : `${quarters.length} quarters`)
+  if (types.length)
+    parts.push(types.length === 1 ? typeLabels[types[0] as DemandType] : `${types.length} tipos`)
+  return parts.length ? parts.join(' · ') : 'Todos'
+}
+
+function getTitleFilter(): TitleFilter {
+  const value = listColumnFilters.value.find(f => f.id === 'title')?.value as TitleFilter | undefined
+  return { text: value?.text ?? '', classifications: value?.classifications ?? [] }
+}
+function setTitleFilter(next: TitleFilter) {
+  const others = listColumnFilters.value.filter(f => f.id !== 'title')
+  listColumnFilters.value = (next.text.trim() || next.classifications.length)
+    ? [...others, { id: 'title', value: next }]
+    : others
+}
+function setTitleTextFilter(text: string) {
+  setTitleFilter({ ...getTitleFilter(), text })
+}
+function toggleTitleClassification(value: string) {
+  const current = getTitleFilter()
+  const classifications = current.classifications.includes(value)
+    ? current.classifications.filter(item => item !== value)
+    : [...current.classifications, value]
+  setTitleFilter({ ...current, classifications })
+}
+function clearTitleClassifications() {
+  setTitleFilter({ ...getTitleFilter(), classifications: [] })
 }
 function clearListFilters() {
   listColumnFilters.value = []
@@ -4901,6 +5097,7 @@ function clearAllPlanningInlineDrafts() {
 }
 
 function activatePlanningCell(item: RoadmapDemand, field: PlanningEditableField, scopeKey?: string) {
+  if (!canEditRoadmap.value) return
   const epicEditableFields: PlanningEditableField[] = ['title', 'status', 'classification', 'products', 'customers', 'dueDate']
   const simpleEpicEditableFields: PlanningEditableField[] = [...epicEditableFields, 'hours', 'quarterType']
 
@@ -5659,6 +5856,9 @@ function getListFilterOptions(col: ListColMeta) {
   if (col.id === 'quarterLabel')
     return listQuarterFilterOptions.value
 
+  if (col.id === 'customers')
+    return listCustomerFilterOptions.value
+
   return col.selectOptions ?? []
 }
 
@@ -6119,9 +6319,20 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => left.title.localeCompare(right.title, 'pt-BR')),
     enableColumnFilter: true,
-    filterFn: (row, _colId, filterValue: string) => {
+    filterFn: (row, _colId, filterValue: { text?: string, classifications?: string[] }) => {
       const d = row.original
-      const q = filterValue.trim().toLowerCase()
+      const q = (filterValue?.text ?? '').trim().toLowerCase()
+      const classifications = filterValue?.classifications ?? []
+
+      if (classifications.length) {
+        const classification = getEffectiveDemandClassification(d)
+        if (!classification || !classifications.includes(classification))
+          return false
+      }
+
+      if (!q)
+        return true
+
       const epic = d.epicId ? itemsById.value.get(d.epicId) : null
       const epicIssueLinks = epic?.itemType === 'Epic' ? getDisplayIssueLinks(epic) : []
       return d.title.toLowerCase().includes(q)
@@ -6188,7 +6399,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
                     })
                   : h('button', {
                       type: 'button',
-                      class: `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted opacity-50' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
+                      class: `min-w-0 w-full flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
                       title: d.description || undefined,
                       disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
                       onClick: () => activatePlanningCell(d, 'title')
@@ -6225,7 +6436,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
               })
             : h('button', {
                 type: 'button',
-                class: `min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted opacity-50' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
+                class: `min-w-0 flex-1 truncate rounded-md border px-1 py-0.5 text-left text-[12px] font-medium transition-colors ${isDeprioritized ? 'line-through text-muted' : 'text-highlighted'} ${getPlanningEditableCellButtonClass(d)}`,
                 title: d.description || undefined,
                 disabled: isPlanningInlineSaving(d.id) || isSavingAllPlanningInlineEdits.value,
                 onClick: () => activatePlanningCell(d, 'title')
@@ -6334,7 +6545,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         return h('span', { class: 'text-xs text-muted' }, '—')
 
       const summary = getDemandKpiSummary(row.original)
-      const isClickable = summary.actionLabel !== 'Associe a demanda a um épico'
+      const isClickable = summary.actionLabel !== 'Associe a demanda a um épico' && canEditRoadmap.value
 
       return h('div', { class: 'flex min-w-0 flex-col items-start gap-1' }, [
         h('button', {
@@ -6364,9 +6575,14 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       return left.type.localeCompare(right.type, 'pt-BR')
     }),
     enableColumnFilter: true,
-    filterFn: (row, _colId, filterValue: string[]) => {
-      if (!Array.isArray(filterValue) || !filterValue.length) return true
-      return filterValue.includes(buildQuarterValue(row.original.quarterYear, row.original.quarterNumber))
+    filterFn: (row, _colId, filterValue: { quarters?: string[], types?: string[] }) => {
+      const quarters = filterValue?.quarters ?? []
+      const types = filterValue?.types ?? []
+      if (quarters.length && !quarters.includes(buildQuarterValue(row.original.quarterYear, row.original.quarterNumber)))
+        return false
+      if (types.length && !types.includes(row.original.type))
+        return false
+      return true
     },
     size: 112,
     meta: { style: { td: () => ({ width: listColWidth('quarterLabel', 112) }), th: () => ({ width: listColWidth('quarterLabel', 112) }) } },
@@ -6469,9 +6685,10 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
     enableSorting: true,
     sortingFn: withListGroupSorting((left, right) => formatDemandCustomers(getEffectiveDemandCustomers(left)).localeCompare(formatDemandCustomers(getEffectiveDemandCustomers(right)), 'pt-BR')),
     enableColumnFilter: true,
-    filterFn: (row, _colId, filterValue: string) => {
-      const query = filterValue.trim().toLowerCase()
-      return !query || getEffectiveDemandCustomers(row.original).some(customer => customer.toLowerCase().includes(query))
+    filterFn: (row, _colId, filterValue: string[]) => {
+      if (!Array.isArray(filterValue) || !filterValue.length) return true
+      const customers = getEffectiveDemandCustomers(row.original)
+      return filterValue.some(name => customers.includes(name))
     },
     size: 110,
     meta: { style: { td: () => ({ width: listColWidth('customers', 110) }), th: () => ({ width: listColWidth('customers', 110) }) } },
@@ -6532,7 +6749,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       const kpiSummary = getDemandKpiSummary(demand)
 
       // 2nd: Agendar (backlog only)
-      if (isBacklogDemand(demand)) {
+      if (isBacklogDemand(demand) && canEditRoadmap.value) {
         actionSlots.push(
           h(UPopoverComp, {}, {
             default: () => h(UButtonComp, {
@@ -6553,8 +6770,8 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         )
       }
 
-      // 3rd: KPI
-      if (kpiSummary.actionLabel !== 'Associe a demanda a um épico') {
+      // 3rd: KPI (abrir workspace é edição — só com permissão)
+      if (canEditRoadmap.value && kpiSummary.actionLabel !== 'Associe a demanda a um épico') {
         actionSlots.push(
           h(UButtonComp, {
             size: 'xs',
@@ -6569,7 +6786,7 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
       }
 
       // Nth: Cor da linha
-      if (!isCollapsedRepresentative(demand)) {
+      if (!isCollapsedRepresentative(demand) && canEditRoadmap.value) {
         actionSlots.push(
           h(UPopoverComp, { content: { side: 'left', sideOffset: 8 } }, {
             default: () => h(UButtonComp, {
@@ -6604,23 +6821,38 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
         )
       }
 
-      // 4th: Editar / 5th: Excluir
-      actionSlots.push(
-        h(UButtonComp, {
-          size: 'xs',
-          variant: 'ghost',
-          color: 'neutral',
-          class: 'h-6 w-6 p-0',
-          title: 'Editar demanda',
-          onClick: () => openEditModal(demand)
-        }, {
-          default: () => h(UIconComp, { name: 'i-lucide-pencil', class: 'h-4 w-4' })
-        })
-      )
+      // 4th: Editar / 5th: Copiar / 6th: Excluir — só com permissão de edição
+      if (canEditRoadmap.value) {
+        actionSlots.push(
+          h(UButtonComp, {
+            size: 'xs',
+            variant: 'ghost',
+            color: 'neutral',
+            class: 'h-6 w-6 p-0',
+            title: 'Editar demanda',
+            onClick: () => openEditModal(demand)
+          }, {
+            default: () => h(UIconComp, { name: 'i-lucide-pencil', class: 'h-4 w-4' })
+          })
+        )
 
-      actionSlots.push(
-        h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'h-6 w-6 p-0', title: 'Excluir demanda', onClick: () => promptDelete(demand.id) })
-      )
+        actionSlots.push(
+          h(UButtonComp, {
+            size: 'xs',
+            variant: 'ghost',
+            color: 'neutral',
+            class: 'h-6 w-6 p-0',
+            title: 'Copiar demanda',
+            onClick: () => openCopyModal(demand)
+          }, {
+            default: () => h(UIconComp, { name: 'i-lucide-copy', class: 'h-4 w-4' })
+          })
+        )
+
+        actionSlots.push(
+          h(UButtonComp, { icon: 'i-lucide-trash-2', size: 'xs', variant: 'ghost', color: 'error', class: 'h-6 w-6 p-0', title: 'Excluir demanda', onClick: () => promptDelete(demand.id) })
+        )
+      }
 
       return h('div', {
         class: 'group absolute inset-0 flex items-center justify-center'
@@ -6700,18 +6932,26 @@ onUnmounted(() => {
 })
 
 async function initializeRoadmapPage() {
+  // Parâmetros vindos da home (dashboard): abrem a planejamento já filtrada e têm
+  // precedência sobre os filtros em cache. Esquema: ?teams=&quarters=&dfk=&dfv=
+  const queryStr = (key: string) => (typeof route.query[key] === 'string' ? route.query[key] as string : null)
+  const urlTeams = queryStr('teams')?.split(',').map(v => v.trim()).filter(Boolean) ?? null
+  const urlQuarters = queryStr('quarters')?.split(',').map(v => v.trim()).filter(Boolean) ?? null
+  const dfKind = queryStr('dfk')
+  const dfValue = queryStr('dfv')
+
   // Restore filters that don't require loaded data first (quarter + display mode).
   const cachedQuarters = readCacheJson<string[]>(CACHE_KEY_PLANNING_QUARTERS)
-  filterQuarters.value = cachedQuarters?.length ? cachedQuarters : [`${currentQuarterNumber}-${currentYear}`]
+  filterQuarters.value = urlQuarters ?? (cachedQuarters?.length ? cachedQuarters : [`${currentQuarterNumber}-${currentYear}`])
 
   const cachedGroupByEpic = readCacheJson<boolean>(CACHE_KEY_PLANNING_GROUP_BY_EPIC)
   if (cachedGroupByEpic !== null) groupDemandsByEpic.value = cachedGroupByEpic
 
   await roadmapStore.fetchProjects()
 
-  // Validate cached project IDs against loaded projects.
+  // Validate project IDs (da URL ou do cache) against loaded projects.
   const cachedProjectIds = readCacheJson<string[]>(CACHE_KEY_PLANNING_PROJECTS)
-  filterListProjectIds.value = (cachedProjectIds ?? []).filter(id => projects.value.some(p => p.id === id))
+  filterListProjectIds.value = (urlTeams ?? cachedProjectIds ?? []).filter(id => projects.value.some(p => p.id === id))
 
   const queryProjectId = typeof route.query.projectId === 'string'
     ? route.query.projectId
@@ -6728,8 +6968,27 @@ async function initializeRoadmapPage() {
     roadmapStore.fetchCustomerSuggestions()
   ])
 
+  // Aplica o filtro do item clicado no dashboard da home. Feito por último: o watcher de
+  // filterListProjectIds (que zera filtros ao trocar de time) já rodou, então este sobrevive.
+  applyDashboardQueryFilter(dfKind, dfValue)
+
   if (activeDemandKpiId.value)
     await kpiStore.fetchKpis()
+}
+
+// Aplica na lista o filtro correspondente ao item de dashboard vindo na URL (dfk/dfv).
+function applyDashboardQueryFilter(kind: string | null, value: string | null) {
+  if (!kind) return
+  switch (kind) {
+    case 'status': if (value) toggleListMultiFilterValue('status', value); break
+    case 'classification': if (value) toggleTitleClassification(value); break
+    case 'customer': if (value) toggleListMultiFilterValue('customers', value); break
+    case 'type': if (value) toggleTypeFilterValue(value); break
+    case 'problem': if (value) toggleListProblemFilter(value); break
+    case 'inconsistentDeps': toggleInconsistentDepsFilter(); break
+    case 'spilloverReason': if (value) toggleSpilloverReasonFilter(value); break
+    case 'deprioritizationReason': if (value) toggleDeprioritizationReasonFilter(value); break
+  }
 }
 
 void initializeRoadmapPage()
@@ -6863,7 +7122,7 @@ watch(activeDemandKpiId, async (value) => {
               @click="openHierarchyView"
             />
           </div>
-          <UDropdownMenu :items="createMenuItems">
+          <UDropdownMenu v-if="canEditRoadmap" :items="createMenuItems">
             <UButton icon="i-lucide-plus" label="Novo Item" />
           </UDropdownMenu>
         </div>
@@ -6937,7 +7196,23 @@ watch(activeDemandKpiId, async (value) => {
               <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
             </button>
             <template #content>
-              <div class="py-1 min-w-[260px] max-h-72 overflow-y-auto">
+              <div class="min-w-[260px]">
+                <!-- Facilitador por ano: seleciona todos os quarters do ano de uma vez -->
+                <div class="flex flex-wrap items-center gap-1.5 border-b border-default px-3 py-2">
+                  <span class="text-[11px] font-medium text-muted">Anos:</span>
+                  <button
+                    v-for="group in quarterYearOptions"
+                    :key="`year-${group.year}`"
+                    type="button"
+                    class="rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors"
+                    :class="isQuarterYearFullySelected(group.values) ? 'border-primary/50 bg-primary/10 text-primary' : 'border-default text-highlighted hover:border-primary/40'"
+                    :title="`Selecionar todos os quarters de ${group.year}`"
+                    @click="toggleQuarterYear(group.values)"
+                  >
+                    {{ group.year }}
+                  </button>
+                </div>
+                <div class="py-1 max-h-72 overflow-y-auto">
                 <button
                   class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
                   :class="filterQuarters.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
@@ -6958,6 +7233,7 @@ watch(activeDemandKpiId, async (value) => {
                   <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
                   {{ opt.label }}
                 </button>
+                </div>
               </div>
             </template>
           </UPopover>
@@ -7077,16 +7353,21 @@ watch(activeDemandKpiId, async (value) => {
             </template>
           </UPopover>
 
-          <UButton
-            type="button"
-            size="xs"
-            color="neutral"
-            variant="soft"
-            icon="i-lucide-sliders-horizontal"
-            label="Capacity"
-            :disabled="!activeCapacityScope"
-            @click="openCapacityModal"
-          />
+          <!-- Wrapper com title: em navegadores como o Chrome o botão desabilitado não exibe
+               tooltip; o span (com o botão sem pointer-events quando bloqueado) garante o hover. -->
+          <span v-if="canEditRoadmap" :title="capacityDisabledReason || undefined" class="inline-flex">
+            <UButton
+              type="button"
+              size="xs"
+              color="neutral"
+              variant="soft"
+              icon="i-lucide-sliders-horizontal"
+              label="Capacity"
+              :disabled="!activeCapacityScope"
+              :class="{ 'pointer-events-none': !activeCapacityScope }"
+              @click="openCapacityModal"
+            />
+          </span>
         </div>
       </div>
 
@@ -7143,6 +7424,115 @@ watch(activeDemandKpiId, async (value) => {
                     class="w-full rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40"
                     @input="setListColFilter(col.id, ($event.target as HTMLInputElement).value)"
                   >
+
+                  <!-- Coluna "Demanda": texto (título) + filtro de classificação (lista) -->
+                  <div v-else-if="col.filterType === 'text-classification'" class="flex items-center gap-1">
+                    <input
+                      :value="getTitleFilter().text"
+                      type="text"
+                      :placeholder="col.label"
+                      class="w-full min-w-0 flex-1 rounded-md border border-default bg-default px-2 py-1 text-xs text-highlighted outline-none transition-colors placeholder:text-muted focus:border-primary/40"
+                      @input="setTitleTextFilter(($event.target as HTMLInputElement).value)"
+                    >
+                    <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
+                      <button
+                        type="button"
+                        class="inline-flex h-[26px] w-7 shrink-0 items-center justify-center rounded-md border transition-colors hover:border-primary/40"
+                        :class="getTitleFilter().classifications.length ? 'border-primary/50 bg-primary/5 text-primary' : 'border-default bg-default text-muted'"
+                        title="Filtrar por classificação"
+                      >
+                        <UIcon name="i-lucide-list-filter" class="h-3.5 w-3.5" />
+                      </button>
+                      <template #content>
+                        <div class="min-w-48 space-y-1 p-1">
+                          <p class="px-2.5 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Classificação</p>
+                          <button
+                            type="button"
+                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                            :class="getTitleFilter().classifications.length === 0 ? 'text-primary' : 'text-highlighted'"
+                            @click="clearTitleClassifications"
+                          >
+                            <UIcon v-if="getTitleFilter().classifications.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                            <span v-else class="inline-block h-4 w-4 shrink-0" />
+                            Todas
+                          </button>
+                          <button
+                            v-for="option in listClassificationFilterOptions"
+                            :key="`classification-${option.value}`"
+                            type="button"
+                            class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                            :class="getTitleFilter().classifications.includes(option.value) ? 'text-primary' : 'text-highlighted'"
+                            @click="toggleTitleClassification(option.value)"
+                          >
+                            <UIcon v-if="getTitleFilter().classifications.includes(option.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                            <span v-else class="inline-block h-4 w-4 shrink-0" />
+                            {{ option.label }}
+                          </button>
+                        </div>
+                      </template>
+                    </UPopover>
+                  </div>
+
+                  <!-- Coluna "Quarter / Tipo": um popover com as seções Quarter e Tipo -->
+                  <UPopover v-else-if="col.filterType === 'quarter-type'" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+                    <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
+                      <span class="flex-1 truncate text-left text-highlighted">{{ getQuarterTypeFilterLabel() }}</span>
+                      <UIcon name="i-lucide-chevron-down" class="h-3.5 w-3.5 shrink-0 text-muted" />
+                    </button>
+                    <template #content>
+                      <div class="min-w-48 space-y-1 p-1">
+                        <p class="px-2.5 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Quarter</p>
+                        <button
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                          :class="getQuarterTypeFilter().quarters.length === 0 ? 'text-primary' : 'text-highlighted'"
+                          @click="clearQuarterFilterPart"
+                        >
+                          <UIcon v-if="getQuarterTypeFilter().quarters.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          Todos os quarters
+                        </button>
+                        <button
+                          v-for="option in listQuarterFilterOptions"
+                          :key="`quarter-${option.value}`"
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                          :class="getQuarterTypeFilter().quarters.includes(option.value) ? 'text-primary' : 'text-highlighted'"
+                          @click="toggleQuarterFilterValue(option.value)"
+                        >
+                          <UIcon v-if="getQuarterTypeFilter().quarters.includes(option.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ option.label }}
+                        </button>
+
+                        <div class="my-1 border-t border-default" />
+
+                        <p class="px-2.5 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Tipo</p>
+                        <button
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                          :class="getQuarterTypeFilter().types.length === 0 ? 'text-primary' : 'text-highlighted'"
+                          @click="clearTypeFilterPart"
+                        >
+                          <UIcon v-if="getQuarterTypeFilter().types.length === 0" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          Todos os tipos
+                        </button>
+                        <button
+                          v-for="option in listTypeFilterOptions"
+                          :key="`type-${option.value}`"
+                          type="button"
+                          class="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-elevated"
+                          :class="getQuarterTypeFilter().types.includes(option.value) ? 'text-primary' : 'text-highlighted'"
+                          @click="toggleTypeFilterValue(option.value)"
+                        >
+                          <UIcon v-if="getQuarterTypeFilter().types.includes(option.value)" name="i-lucide-check" class="h-4 w-4 shrink-0" />
+                          <span v-else class="inline-block h-4 w-4 shrink-0" />
+                          {{ option.label }}
+                        </button>
+                      </div>
+                    </template>
+                  </UPopover>
 
                   <UPopover v-else-if="col.filterType === 'multi-select'" :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
                     <button class="flex w-full items-center gap-1.5 rounded-md border border-default bg-default px-2 py-1 text-xs transition-colors hover:border-primary/40">
@@ -7208,6 +7598,7 @@ watch(activeDemandKpiId, async (value) => {
               :columns="listTanstackColumns"
               :get-row-id="(row: RoadmapDemand) => row.id"
               :column-sizing-options="{ enableColumnResizing: true, columnResizeMode: 'onChange' }"
+              :meta="{ class: { tr: (row: any) => getPlanningDraftDisplayItem(row.original).status === 'Deprioritized' ? 'opacity-50' : '' } }"
               :ui="{ base: 'w-full table-fixed', thead: 'hidden', td: 'border-b border-default px-3 py-0.5 align-top overflow-hidden' }"
             >
               <template #status-cell="{ row }">
@@ -7446,7 +7837,7 @@ watch(activeDemandKpiId, async (value) => {
                     type="button"
                     class="rounded-md border text-[10px] font-semibold transition-colors"
                     :class="[
-                      row.original.excludeFromCapacity || row.original.status === 'Deprioritized' ? 'line-through text-muted opacity-50' : (getPlanningInlineDraft(row.original).hoursRed ? 'text-red-500' : 'text-highlighted'),
+                      row.original.status === 'Deprioritized' ? 'line-through text-muted' : row.original.excludeFromCapacity ? 'line-through text-muted opacity-50' : (getPlanningInlineDraft(row.original).hoursRed ? 'text-red-500' : 'text-highlighted'),
                       isPlanningInlineDirty(row.original) ? 'border-primary/40 ring-1 ring-primary/10 hover:border-primary/60 hover:bg-primary/5' : 'border-transparent hover:border-primary/30 hover:bg-elevated'
                     ]"
                     :disabled="isPlanningInlineSaving(row.original.id) || isSavingAllPlanningInlineEdits"
@@ -7533,112 +7924,29 @@ watch(activeDemandKpiId, async (value) => {
       </div>
 
       <section class="-mt-1 space-y-3">
-        <div>
-          <p class="text-sm font-semibold text-highlighted">Resumo do Quarter</p>
-          <p class="text-xs text-muted">Totalizadores ordenados pelas maiores cargas horárias das demandas visíveis no quarter.</p>
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <p class="text-sm font-semibold text-highlighted">Resumo do Quarter</p>
+            <p class="text-xs text-muted">Totalizadores por carga horária. Clique em qualquer item para filtrar a lista acima (clique de novo para remover).</p>
+          </div>
+          <UButton
+            v-if="hasActiveListFilters"
+            size="xs"
+            color="neutral"
+            variant="soft"
+            icon="i-lucide-filter-x"
+            label="Limpar filtros"
+            class="shrink-0"
+            @click="clearAllListFilters"
+          />
         </div>
 
-
-        <div class="grid items-stretch gap-4 xl:grid-cols-3">
-          <UCard class="flex h-full flex-col ring-default xl:h-[24rem]" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
-            <div class="-mt-1 flex items-center gap-2 border-b border-default px-2.5 py-1.5">
-              <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300">
-                <UIcon name="i-lucide-chart-pie" class="h-4.5 w-4.5" />
-              </div>
-              <div>
-                <p class="text-sm font-semibold text-highlighted">Classificação</p>
-              </div>
-            </div>
-
-            <div v-if="classificationTotals.length" class="space-y-3 px-3.5 py-3.5">
-              <div v-for="item in classificationTotals" :key="item.classification" class="space-y-1.5">
-                <div class="flex items-center gap-2">
-                  <span class="h-2.5 w-2.5 rounded-full" :class="classificationBadgeClass[item.classification]" />
-                  <span class="flex-1 truncate text-sm font-medium text-highlighted">{{ item.label }}</span>
-                  <span class="text-[11px] text-muted">{{ item.hours.toLocaleString('pt-BR') }}h</span>
-                  <span class="text-xs font-semibold text-highlighted">{{ item.percentage.toFixed(1) }}%</span>
-                  <span class="rounded-full bg-elevated px-2 py-0.5 text-[11px] text-muted">{{ item.count }} dem.</span>
-                </div>
-                <div class="h-1.5 overflow-hidden rounded-full bg-elevated">
-                  <div class="h-full rounded-full bg-primary transition-all duration-300" :style="{ width: `${Math.min(item.percentage, 100)}%` }" />
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="px-3.5 py-5 text-sm text-muted">
-              Nenhuma demanda com classificação no quarter selecionado.
-            </div>
-          </UCard>
-
-          <UCard class="flex h-full flex-col ring-default xl:h-[24rem]" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
-            <div class="-mt-1 flex items-center gap-2 border-b border-default px-2.5 py-1.5">
-              <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-300">
-                <UIcon name="i-lucide-users" class="h-4.5 w-4.5" />
-              </div>
-              <div>
-                <p class="text-sm font-semibold text-highlighted">Demandas por Cliente</p>
-              </div>
-            </div>
-
-            <div v-if="customerTotals.length" class="flex min-h-0 flex-1 flex-col px-3.5 py-3.5">
-              <div class="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1 pb-3">
-                <div v-for="item in customerTotals" :key="item.name" class="rounded-lg border border-default bg-elevated/20 px-2.5 py-2">
-                  <div class="flex items-center gap-2">
-                    <p class="flex-1 truncate text-sm font-medium text-highlighted">{{ item.name }}</p>
-                    <span class="text-[11px] text-muted">{{ item.hours.toLocaleString('pt-BR') }}h</span>
-                    <span class="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                      {{ item.percentage.toFixed(1) }}%
-                    </span>
-                    <span class="rounded-full bg-blue-100 px-2 py-0.5 text-[11px] font-semibold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                      {{ item.count }} dem.
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="px-3.5 py-5 text-sm text-muted">
-              Nenhum cliente associado nas demandas deste quarter.
-            </div>
-          </UCard>
-
-          <UCard class="flex h-full flex-col ring-default xl:h-[24rem]" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
-            <div class="-mt-1 flex items-center gap-2 border-b border-default px-2.5 py-1.5">
-              <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300">
-                <UIcon name="i-lucide-tags" class="h-4.5 w-4.5" />
-              </div>
-              <div>
-                <p class="text-sm font-semibold text-highlighted">Demandas por Tipo</p>
-              </div>
-            </div>
-
-            <div v-if="typeTotals.length" class="space-y-3 px-3.5 py-3.5">
-              <div v-for="item in typeTotals" :key="item.type" class="flex items-center justify-between gap-3 rounded-xl border border-default bg-default px-3 py-2.5 shadow-sm">
-                <div class="flex min-w-0 items-center gap-3">
-                  <div class="flex h-8 w-8 items-center justify-center rounded-full border" :class="typeSummaryTone[item.type]">
-                    <span class="h-2.5 w-2.5 rounded-full" :class="typeSummaryDot[item.type]" />
-                  </div>
-                  <div class="min-w-0">
-                    <p class="truncate text-sm font-semibold text-highlighted">{{ item.label }}</p>
-                    <p class="mt-0.5 text-[11px] text-muted">{{ item.hours.toLocaleString('pt-BR') }}h totais</p>
-                  </div>
-                </div>
-                <div class="flex items-center gap-2">
-                  <span class="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">
-                    {{ item.percentage.toFixed(1) }}%
-                  </span>
-                  <span class="rounded-full bg-elevated px-3 py-1 text-xs font-semibold text-highlighted">
-                    {{ item.count }} demandas
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            <div v-else class="px-4 py-6 text-sm text-muted">
-              Nenhum tipo de demanda registrado neste quarter.
-            </div>
-          </UCard>
-        </div>
+        <RoadmapDashboards
+          :demands="quarterFilteredDemands"
+          :all-demands="demands"
+          :active-filters="dashboardActiveFilters"
+          @select="handleDashboardSelect"
+        />
       </section>
 
       <div
@@ -7670,7 +7978,7 @@ watch(activeDemandKpiId, async (value) => {
       leave-to-class="translate-y-3 opacity-0"
     >
       <div
-        v-if="viewMode === 'list' && (selectedPlanningItemCount || movablePlanningItems.length)"
+        v-if="canEditRoadmap && viewMode === 'list' && (selectedPlanningItemCount || movablePlanningItems.length)"
         class="pointer-events-none fixed inset-x-0 z-50 flex justify-center px-4"
         :class="planningPendingEditCount ? 'bottom-28' : 'bottom-6'"
       >
@@ -7819,6 +8127,7 @@ watch(activeDemandKpiId, async (value) => {
       :dependency-options="dependencyOptions"
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
+      :copy-source="copySource"
       :default-item-type="createItemType"
       :default-parent-demand-id="defaultParentDemandId"
       :default-project-id="defaultProjectId ?? (filterListProjectIds.length === 1 ? filterListProjectIds[0] : selectedProjectId) ?? undefined"

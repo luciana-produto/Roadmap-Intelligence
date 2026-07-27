@@ -56,4 +56,10 @@ public interface IRoadmapDemandRepository : IRepository<RoadmapDemand>
         CancellationToken cancellationToken = default);
 
     Task<RoadmapDemand?> GetOriginalBySuccessorIdAsync(Guid successorId, CancellationToken cancellationToken = default);
+
+    /// <summary>Itens na lixeira (excluídos logicamente), ignorando o filtro global.</summary>
+    Task<IReadOnlyList<RoadmapDemand>> GetDeletedAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Busca por id incluindo itens excluídos (rastreado), para restaurar/excluir de vez.</summary>
+    Task<RoadmapDemand?> GetByIdIncludingDeletedAsync(Guid id, CancellationToken cancellationToken = default);
 }

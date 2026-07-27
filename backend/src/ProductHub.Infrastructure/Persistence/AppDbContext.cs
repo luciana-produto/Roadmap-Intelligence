@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using ProductHub.Domain.Access;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap;
 using ProductHub.Infrastructure.Persistence.Interceptors;
@@ -21,6 +22,7 @@ public class AppDbContext(
     public DbSet<DemandKpiLink> DemandKpiLinks => Set<DemandKpiLink>();
     public DbSet<KpiMeasurement> KpiMeasurements => Set<KpiMeasurement>();
     public DbSet<DemandTradeOff> DemandTradeOffs => Set<DemandTradeOff>();
+    public DbSet<UserAccess> UserAccesses => Set<UserAccess>();
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
         optionsBuilder.AddInterceptors(auditInterceptor);

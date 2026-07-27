@@ -99,19 +99,34 @@ const userMenuItems = computed(() => [[
   }
 ]])
 
-const navLinks: NavLinkItem[] = [
-  { label: 'Home', icon: 'i-lucide-layout-dashboard', to: '/home' },
-  { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' },
-  {
-    label: 'Cadastros',
-    icon: 'i-lucide-package',
-    children: [
-      { label: 'Times e Produtos', to: '/products' },
-      { label: 'KPIs', to: '/kpis' }
-    ]
-  },
-  { label: 'Indicadores', icon: 'i-lucide-trending-up', disabled: true, badge: 'Em breve' }
-]
+const access = useAccessStore()
+
+const navLinks = computed<NavLinkItem[]>(() => {
+  const links: NavLinkItem[] = [
+    { label: 'Home', icon: 'i-lucide-layout-dashboard', to: '/home' },
+    { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' }
+  ]
+
+  if (access.canEditRoadmap)
+    links.push({ label: 'Lixeira Roadmap', icon: 'i-lucide-trash-2', to: '/lixeira' })
+
+  if (access.canManageRegistrations) {
+    links.push({
+      label: 'Cadastros',
+      icon: 'i-lucide-package',
+      children: [
+        { label: 'Times e Produtos', to: '/products' },
+        { label: 'KPIs', to: '/kpis' }
+      ]
+    })
+  }
+
+  if (access.canManageAccess)
+    links.push({ label: 'Acessos', icon: 'i-lucide-shield-check', to: '/acessos' })
+
+  links.push({ label: 'Indicadores', icon: 'i-lucide-trending-up', disabled: true, badge: 'Em breve' })
+  return links
+})
 
 const expandedNavGroups = ref<Record<string, boolean>>({
   Cadastros: route.path.startsWith('/products') || route.path.startsWith('/kpis')

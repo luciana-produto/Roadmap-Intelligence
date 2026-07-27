@@ -19,8 +19,14 @@ export const useApi = () => {
   }
 
   const handleError = (error: unknown, correlationId: string) => {
-    const err = error as { data?: { title?: string, detail?: string, correlationId?: string }, status?: number }
-    const detail = err?.data?.detail ?? AppConstants.MESSAGES.GENERIC_ERROR
+    const err = error as { data?: { title?: string, detail?: string, correlationId?: string, errors?: Record<string, string[]> }, status?: number }
+    // Erros de validação trazem mensagens específicas em `errors`; preferimos elas ao detail genérico.
+    const fieldMessages = err?.data?.errors
+      ? Object.values(err.data.errors).flat().filter(Boolean)
+      : []
+    const detail = fieldMessages.length
+      ? fieldMessages.join('\n')
+      : (err?.data?.detail ?? AppConstants.MESSAGES.GENERIC_ERROR)
     const serverCorrelationId = err?.data?.correlationId ?? correlationId
 
     logger.error('Falha em requisição HTTP', {

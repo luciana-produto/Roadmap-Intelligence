@@ -99,6 +99,7 @@ const props = defineProps<{
   dependencyOptions: DemandDependencyOption[]
   customerSuggestions: string[]
   demand?: RoadmapDemand | null
+  copySource?: RoadmapDemand | null
   defaultProjectId?: string
   defaultQuarterYear?: number
   defaultQuarterNumber?: number
@@ -234,12 +235,15 @@ const productsForSimpleEpic = computed(() => {
     .flatMap(p => p.products)
 })
 
+const isCopy = computed(() => !isEdit.value && !!props.copySource)
+
 const title = computed(() => {
   if (!hasSelectedItemType.value)
-    return isEdit.value ? 'Editar item' : 'Novo Item'
+    return isEdit.value ? 'Editar item' : (isCopy.value ? 'Copiar item' : 'Novo Item')
 
   const itemLabel = itemTypeLabels[form.itemType as RoadmapItemType]
-  return isEdit.value ? `Editar ${itemLabel}` : `Novo ${itemLabel}`
+  if (isEdit.value) return `Editar ${itemLabel}`
+  return isCopy.value ? `Copiar ${itemLabel}` : `Novo ${itemLabel}`
 })
 
 const currentYear = new Date().getFullYear()
@@ -790,6 +794,57 @@ function populateFormFromDemand(demand: RoadmapDemand) {
   })
 }
 
+// Cópia de uma demanda/épico: cria um item novo com todos os campos iguais ao original,
+// exceto título (vazio) e status (Backlog). Clientes são copiados; dependências, vínculos
+// de KPI e issues do Jira NÃO são copiados (apontariam para os mesmos registros do original).
+function populateFormForCopy(source: RoadmapDemand) {
+  isHydratingForm.value = true
+  includeCrossProjectRoadmaps.value = false
+  includeCrossProjectEpics.value = false
+
+  form.itemType = source.itemType
+  form.parentDemandId = source.parentDemandId
+  form.title = ''
+  form.description = source.description ?? ''
+  form.projectId = source.projectId ?? ''
+  form.projectIds = source.projectIds ?? (source.projectId ? [source.projectId] : [])
+  form.quarterYear = source.quarterYear
+  form.quarterNumber = source.quarterNumber
+  form.type = source.type
+  form.classification = source.classification
+  form.productIds = source.products.map(p => p.productId)
+  form.status = 'Backlog'
+  form.observation = source.observation ?? ''
+  form.deprioritizationReason = undefined
+  form.replacementDemandId = undefined
+  form.spilloverReason = undefined
+  form.spilloverObservation = ''
+  form.jiraIssue = ''
+  form.issueLinks = []
+  form.hours = source.hours ?? undefined
+  form.isSimple = source.isSimple ?? false
+  epicModeDecided.value = true
+  form.customers = source.customers ? [...source.customers] : []
+  customerRenameSource.value = null
+  pendingCustomerRenames.value = []
+  form.dependencyDemandIds = []
+  form.blockedReason = ''
+  form.promisedDate = ''
+  form.deliveryDate = ''
+  form.problemClarity = source.itemType === 'Epic' ? source.problemClarity ?? undefined : undefined
+  form.hasNoKpi = source.hasNoKpi ?? false
+  form.noKpiClassification = source.noKpiClassification ?? undefined
+  kpiLinkEdits.value = []
+  kpiMeasurements.value = []
+  measurementDrafts.value = {}
+  customerInput.value = ''
+  syncSingleProductSelection()
+
+  queueMicrotask(() => {
+    isHydratingForm.value = false
+  })
+}
+
 function resetFormForCreate() {
   includeCrossProjectRoadmaps.value = false
   includeCrossProjectEpics.value = false
@@ -837,7 +892,7 @@ function resetFormForCreate() {
 }
 
 watch(
-  () => [props.open, props.demand?.id ?? null] as const,
+  () => [props.open, props.demand?.id ?? null, props.copySource?.id ?? null] as const,
   ([open]) => {
     if (!open) return
 
@@ -858,6 +913,9 @@ watch(
         form.isSimple = true
         epicModeDecided.value = true
       }
+    }
+    else if (props.copySource) {
+      populateFormForCopy(props.copySource)
     }
     else {
       resetFormForCreate()

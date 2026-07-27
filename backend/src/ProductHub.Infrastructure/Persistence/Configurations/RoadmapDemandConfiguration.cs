@@ -15,6 +15,13 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
 
         builder.HasKey(x => x.Id);
 
+        // Soft delete: por padrão todas as consultas ignoram itens excluídos.
+        // A Lixeira usa IgnoreQueryFilters() para enxergá-los.
+        builder.Property(x => x.IsDeleted).IsRequired();
+        builder.Property(x => x.DeletedAt);
+        builder.Property(x => x.DeletedByEmail).HasMaxLength(320);
+        builder.HasQueryFilter(x => !x.IsDeleted);
+
         builder.Property(x => x.Title)
             .IsRequired()
             .HasMaxLength(200);

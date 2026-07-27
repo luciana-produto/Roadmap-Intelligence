@@ -44,6 +44,11 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
+    // Exclusão lógica (soft delete): item sai das telas mas fica na "Lixeira" para restauração.
+    public bool IsDeleted { get; private set; }
+    public DateTime? DeletedAt { get; private set; }
+    public string? DeletedByEmail { get; private set; }
+
     public IReadOnlyList<RoadmapDemandProduct> Products => _products.AsReadOnly();
     public IReadOnlyList<RoadmapDemandProject> ProjectLinks => _projectLinks.AsReadOnly();
     public Quarter Quarter => Quarter.Create(QuarterYear, QuarterNumber);
@@ -265,6 +270,20 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
 
     public void ClearSuccessor() =>
         SuccessorDemandId = null;
+
+    public void SoftDelete(string? deletedByEmail)
+    {
+        IsDeleted = true;
+        DeletedAt = DateTime.UtcNow;
+        DeletedByEmail = deletedByEmail;
+    }
+
+    public void Restore()
+    {
+        IsDeleted = false;
+        DeletedAt = null;
+        DeletedByEmail = null;
+    }
 
     public void SetStatus(DemandStatus status)
     {

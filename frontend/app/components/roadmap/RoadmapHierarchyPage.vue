@@ -40,6 +40,10 @@ const toast = useToast()
 const api = useApi()
 const roadmapStore = useRoadmapStore()
 const kpiStore = useKpiStore()
+const accessStore = useAccessStore()
+
+// Permissão de edição do roadmap. Sem ela, a hierarquia fica somente leitura.
+const canEditRoadmap = computed(() => accessStore.canEditRoadmap)
 
 const { projects, dependencyOptions, customerSuggestions } = storeToRefs(roadmapStore)
 const { kpis: availableKpis } = storeToRefs(kpiStore)
@@ -52,6 +56,7 @@ const projectFilterOptions = computed(() =>
 
 const modalOpen = ref(false)
 const editingDemand = ref<RoadmapDemand | null>(null)
+const copySource = ref<RoadmapDemand | null>(null)
 const createItemType = ref<RoadmapItemType | undefined>()
 const defaultParentDemandId = ref<string | undefined>()
 const defaultProjectId = ref<string | undefined>()
@@ -1741,6 +1746,7 @@ function confirmHierarchyStatusModal() {
 }
 
 function activateHierarchyCell(item: RoadmapDemand, field: HierarchyEditableField) {
+  if (!canEditRoadmap.value) return
   if (field === 'hours' && item.itemType !== 'Demand' && !item.isSimple)
     return
 
@@ -2109,6 +2115,7 @@ function openCreateModal(
     productIds?: string[]
   }
 ) {
+  if (!canEditRoadmap.value) return
   createItemType.value = itemType
   defaultParentDemandId.value = parentDemandId
   defaultProjectId.value = defaults?.projectId
@@ -2120,13 +2127,16 @@ function openCreateModal(
   defaultProductIds.value = defaults?.productIds ?? []
   forceSimpleEpic.value = false
   editingDemand.value = null
+  copySource.value = null
   modalOpen.value = true
 }
 
 const modalEditFocusField = ref<string | undefined>()
 
 function openEditModal(item: RoadmapDemand, options?: { forceSimpleEpic?: boolean, focusField?: string }) {
+  if (!canEditRoadmap.value) return
   editingDemand.value = item
+  copySource.value = null
   defaultParentDemandId.value = undefined
   defaultProjectId.value = undefined
   defaultProjectIds.value = []
@@ -2136,9 +2146,26 @@ function openEditModal(item: RoadmapDemand, options?: { forceSimpleEpic?: boolea
   modalOpen.value = true
 }
 
+// Copiar demanda/épico: abre a modal em modo criação com os campos do item original
+// pré-preenchidos (título vazio e status Backlog aplicados dentro da modal).
+function openCopyModal(item: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
+  resetCreateModalDefaults()
+  createItemType.value = item.itemType
+  defaultParentDemandId.value = item.parentDemandId
+  defaultProjectId.value = undefined
+  defaultProjectIds.value = []
+  forceSimpleEpic.value = false
+  modalEditFocusField.value = undefined
+  editingDemand.value = null
+  copySource.value = item
+  modalOpen.value = true
+}
+
 // Adding the first demand to a simple epic turns it into a composite epic: warn the user
 // (its quarter/type/hours/product will be lost) before opening the prefilled demand form.
 function promptCreateDemandInSimpleEpic(epic: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
   convertSourceEpic.value = epic
   confirmConvertToCompositeOpen.value = true
 }
@@ -2354,6 +2381,7 @@ function handleTradeOffDeleted(tradeOffId: string) {
 }
 
 function promptDelete(item: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
   if (item.itemType === 'Roadmap' && hierarchyDemands.value.some(demand => demand.parentDemandId === item.id)) {
     toast.add({
       title: 'Exclusão não permitida',
@@ -2443,6 +2471,7 @@ async function handleSubmit(data: DemandFormData) {
 }
 
 function openKpiWorkspace(item: RoadmapDemand) {
+  if (!canEditRoadmap.value) return
   const targetEpic = getKpiTargetEpic(item)
   if (!targetEpic)
     return
@@ -2593,7 +2622,7 @@ onUnmounted(() => {
             Roadmap
           </UButton>
         </div>
-        <UDropdownMenu :items="createMenuItems">
+        <UDropdownMenu v-if="canEditRoadmap" :items="createMenuItems">
           <UButton icon="i-lucide-plus" label="Novo Item" />
         </UDropdownMenu>
       </div>
@@ -2983,7 +3012,7 @@ onUnmounted(() => {
                     <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
                       <div class="group absolute inset-0 flex items-center justify-center">
                         <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
-                        <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <div v-if="canEditRoadmap" class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                           <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Novo épico" @click.stop="openCreateModal('Epic', group.roadmap.id, { projectIds: getItemProjectIds(group.roadmap) })" />
                           <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar roadmap" @click.stop="openEditModal(group.roadmap)" />
                           <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir roadmap" @click.stop="promptDelete(group.roadmap)" />
@@ -3274,7 +3303,7 @@ onUnmounted(() => {
                     </td>
                     <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                       <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
-                        <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
+                        <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epicEntry.epic).tone" :disabled="!canEditRoadmap" :title="getKpiSummary(epicEntry.epic).actionLabel" @click="openKpiWorkspace(epicEntry.epic)">
                           {{ getKpiSummary(epicEntry.epic).label }}
                         </button>
                         <span v-if="getKpiSecondaryLabel(epicEntry.epic)" class="text-[11px] text-muted">
@@ -3287,11 +3316,14 @@ onUnmounted(() => {
                       <div class="group absolute inset-0 flex items-center justify-center">
                         <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
                         <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epicEntry.epic)" />
-                          <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epicEntry.epic)" />
-                          <UButton v-if="!epicEntry.epic.isSimple && !getDemandsForEpic(epicEntry.epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-minimize-2" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epicEntry.epic)" />
-                          <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epicEntry.epic)" />
-                          <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epicEntry.epic)" />
+                          <UButton v-if="canEditRoadmap" size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epicEntry.epic)" />
+                          <template v-if="canEditRoadmap">
+                            <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epicEntry.epic)" />
+                            <UButton v-if="!epicEntry.epic.isSimple && !getDemandsForEpic(epicEntry.epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-minimize-2" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epicEntry.epic)" />
+                            <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epicEntry.epic)" />
+                            <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" class="h-6 w-6 p-0" title="Copiar épico" @click.stop="openCopyModal(epicEntry.epic)" />
+                            <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epicEntry.epic)" />
+                          </template>
                         </div>
                       </div>
                     </td>
@@ -3502,8 +3534,9 @@ onUnmounted(() => {
                     <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
                       <div class="group absolute inset-0 flex items-center justify-center">
                         <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
-                        <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                        <div v-if="canEditRoadmap" class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                           <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar demanda" @click.stop="openEditModal(demand)" />
+                          <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" class="h-6 w-6 p-0" title="Copiar demanda" @click.stop="openCopyModal(demand)" />
                           <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Remover demanda" @click.stop="promptDelete(demand)" />
                         </div>
                       </div>
@@ -3766,7 +3799,7 @@ onUnmounted(() => {
                 </td>
                 <td class="border-b border-default px-2 py-0.5 align-top" :style="{ width: getHierarchyColWidth('kpi') }">
                   <div class="flex min-w-0 flex-col items-start gap-1" :class="getHierarchyReadonlyCellClass()">
-                    <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
+                    <button type="button" class="inline-flex items-center rounded-md border px-1 py-0 text-[9px] font-medium transition-colors hover:opacity-80" :class="getKpiSummary(epic).tone" :disabled="!canEditRoadmap" :title="getKpiSummary(epic).actionLabel" @click="openKpiWorkspace(epic)">
                       {{ getKpiSummary(epic).label }}
                     </button>
                     <span v-if="getKpiSecondaryLabel(epic)" class="text-[11px] text-muted">
@@ -3778,11 +3811,14 @@ onUnmounted(() => {
                   <div class="group absolute inset-0 flex items-center justify-center">
                     <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
                     <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
-                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epic)" />
-                      <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epic)" />
-                      <UButton v-if="!epic.isSimple && !getDemandsForEpic(epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-minimize-2" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epic)" />
-                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epic)" />
-                      <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epic)" />
+                      <UButton v-if="canEditRoadmap" size="xs" variant="ghost" color="primary" icon="i-lucide-line-chart" class="h-6 w-6 p-0" title="Abrir KPIs do épico" @click.stop="openKpiWorkspace(epic)" />
+                      <template v-if="canEditRoadmap">
+                        <UButton size="xs" variant="ghost" color="primary" icon="i-lucide-plus" class="h-6 w-6 p-0" title="Nova demanda" @click.stop="startCreateDemandForEpic(epic)" />
+                        <UButton v-if="!epic.isSimple && !getDemandsForEpic(epic.id).length" size="xs" variant="ghost" color="primary" icon="i-lucide-minimize-2" class="h-6 w-6 p-0" title="Transformar em épico simples" @click.stop="promptConvertEpicToSimple(epic)" />
+                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar épico" @click.stop="openEditModal(epic)" />
+                        <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" class="h-6 w-6 p-0" title="Copiar épico" @click.stop="openCopyModal(epic)" />
+                        <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Excluir épico" @click.stop="promptDelete(epic)" />
+                      </template>
                     </div>
                   </div>
                 </td>
@@ -3985,8 +4021,9 @@ onUnmounted(() => {
                 <td class="border-b border-default relative overflow-visible !p-0" :style="{ width: getHierarchyColWidth('actions') }">
                   <div class="group absolute inset-0 flex items-center justify-center">
                     <span class="pointer-events-none select-none text-[10px] text-muted/40 transition-opacity group-hover:opacity-0">···</span>
-                    <div class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
+                    <div v-if="canEditRoadmap" class="pointer-events-none absolute inset-y-0 right-0 z-30 flex items-center gap-0.5 rounded-md border border-default/60 bg-default/95 px-1 opacity-0 shadow-md backdrop-blur-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100">
                       <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-pencil" class="h-6 w-6 p-0" title="Editar demanda" @click.stop="openEditModal(demand)" />
+                      <UButton size="xs" variant="ghost" color="neutral" icon="i-lucide-copy" class="h-6 w-6 p-0" title="Copiar demanda" @click.stop="openCopyModal(demand)" />
                       <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash-2" class="h-6 w-6 p-0" title="Remover demanda" @click.stop="promptDelete(demand)" />
                     </div>
                   </div>
@@ -4044,6 +4081,7 @@ onUnmounted(() => {
       :dependency-options="dependencyOptions"
       :customer-suggestions="customerSuggestions"
       :demand="editingDemand"
+      :copy-source="copySource"
       :default-item-type="createItemType"
       :default-parent-demand-id="defaultParentDemandId"
       :default-project-id="defaultProjectId ?? currentPrimaryProjectId ?? undefined"

@@ -1,5 +1,7 @@
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using ProductHub.API.Security;
 using ProductHub.Application.Roadmap.Commands.CreateDemandKpiMeasurement;
 using ProductHub.Application.Roadmap.Commands.DeleteDemandKpiMeasurement;
 using ProductHub.Application.Roadmap.Commands.CreateKpi;
@@ -25,6 +27,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> Create(
         [FromBody] CreateKpiCommand command,
         CancellationToken cancellationToken)
@@ -34,6 +37,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> Update(
         Guid id,
         [FromBody] UpdateKpiCommand command,
@@ -44,6 +48,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Policy = AccessPolicies.Registrations)]
     public async Task<IActionResult> Delete(
         Guid id,
         CancellationToken cancellationToken)
@@ -53,6 +58,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("demands/{demandId:guid}/links")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> UpdateDemandKpiLinks(
         Guid demandId,
         [FromBody] UpdateDemandKpiLinksCommand command,
@@ -72,6 +78,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpPost("demands/{demandId:guid}/measurements")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> CreateDemandKpiMeasurement(
         Guid demandId,
         [FromBody] CreateDemandKpiMeasurementCommand command,
@@ -82,6 +89,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpPut("measurements/{id:guid}")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> UpdateDemandKpiMeasurement(
         Guid id,
         [FromBody] UpdateDemandKpiMeasurementCommand command,
@@ -92,6 +100,7 @@ public sealed class KpiController(ISender sender) : ApiControllerBase
     }
 
     [HttpDelete("measurements/{id:guid}")]
+    [Authorize(Policy = AccessPolicies.RoadmapEdit)]
     public async Task<IActionResult> DeleteDemandKpiMeasurement(
         Guid id,
         CancellationToken cancellationToken)

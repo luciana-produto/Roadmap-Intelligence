@@ -12,20 +12,31 @@ const { redirectToSso, persistSession } = useAuth()
 const authStore = useAuthStore()
 const router = useRouter()
 
-function devLogin() {
+// Dev Logins (local only): cada variante usa um token distinto, que o backend mapeia para
+// um e-mail com permissões vindas da configuração (Authorization:*Emails).
+const devLogins = [
+  { token: 'dev-session',           email: 'dev@producthub.local',           first: 'Dev', last: 'View',      label: 'Dev Login (local only)' },
+  { token: 'dev-session-roadmap',   email: 'dev-roadmap@producthub.local',   first: 'Dev', last: 'Roadmap',   label: 'Dev Login · Roadmap edição (local only)' },
+  { token: 'dev-session-cadastros', email: 'dev-cadastros@producthub.local', first: 'Dev', last: 'Cadastros', label: 'Dev Login · Cadastros (local only)' },
+  { token: 'dev-session-full',      email: 'dev-full@producthub.local',      first: 'Dev', last: 'Full',      label: 'Dev Login · Full (local only)' }
+]
+
+function devLogin(entry: typeof devLogins[number]) {
   const devUser: SsoUser = {
-    id: 'dev-user',
-    name: 'Dev User',
-    email: 'dev@producthub.local',
-    firstName: 'Dev',
-    lastName: 'User',
-    groups: ['admin'],
+    id: entry.email,
+    name: `${entry.first} ${entry.last}`,
+    email: entry.email,
+    firstName: entry.first,
+    lastName: entry.last,
+    groups: [],
     loginTime: new Date().toISOString(),
     tenantKey: 'dev',
     tenantDisplayName: 'Ambiente Dev'
   }
-  authStore.setSession('dev-session', devUser)
-  persistSession('dev-session', devUser)
+  authStore.setSession(entry.token, devUser)
+  persistSession(entry.token, devUser)
+  // Zera permissões da sessão anterior para o middleware buscar as da nova sessão.
+  useAccessStore().reset()
   router.push('/home')
 }
 
@@ -148,18 +159,20 @@ function handleLogin() {
         </span>
       </div>
 
-      <!-- Dev login -->
+      <!-- Dev logins -->
       <div
         v-if="$config.public.apiBase?.includes('localhost')"
-        class="mt-6 pt-5"
+        class="mt-6 pt-5 space-y-2"
         style="border-top: 1px solid rgba(255,255,255,0.06);"
       >
         <button
+          v-for="entry in devLogins"
+          :key="entry.token"
           class="w-full h-9 rounded-lg text-xs font-medium cursor-pointer transition-all"
           style="color: rgba(255,255,255,0.25); border: 1px dashed rgba(255,255,255,0.1);"
-          @click="devLogin"
+          @click="devLogin(entry)"
         >
-          Dev Login (local only)
+          {{ entry.label }}
         </button>
       </div>
     </div>

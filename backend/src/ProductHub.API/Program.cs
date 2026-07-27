@@ -7,6 +7,8 @@ using System.Reflection;
 using ProductHub.API.Middleware;
 using ProductHub.API.Security;
 using ProductHub.Application;
+using ProductHub.Application.Access;
+using ProductHub.Application.Common;
 using ProductHub.Infrastructure;
 using ProductHub.Infrastructure.Persistence;
 using ProductHub.Infrastructure.Persistence.Seed;
@@ -37,11 +39,18 @@ try
     builder.Services.AddApplication();
     builder.Services.AddInfrastructure(builder.Configuration, builder.Environment);
 
+    // Liga as permissões de acesso (super-admins) à seção "Authorization" da configuração.
+    builder.Services.Configure<AccessOptions>(builder.Configuration.GetSection(AccessOptions.SectionName));
+
     builder.Services.AddControllers();
     builder.Services.AddOpenApi();
 
     builder.Services.AddHttpClient();
     builder.Services.AddMemoryCache();
+
+    // Usuário atual (para auditoria de quem excluiu itens, etc.).
+    builder.Services.AddHttpContextAccessor();
+    builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
     builder.Services
         .AddAuthentication(SsoAuthenticationHandler.SchemeName)
@@ -61,10 +70,32 @@ try
 
     // Por padrão, todo endpoint exige um usuário autenticado.
     // Endpoints públicos (health, OpenAPI) usam .AllowAnonymous() explicitamente.
+    // Policies adicionais exigem permissões específicas (roadmap edição / cadastros / gerir acessos).
+    builder.Services.AddScoped<IAuthorizationHandler, PermissionAuthorizationHandler>();
     builder.Services.AddAuthorization(options =>
+    {
         options.FallbackPolicy = new AuthorizationPolicyBuilder()
             .RequireAuthenticatedUser()
-            .Build());
+            .Build();
+
+        options.AddPolicy(AccessPolicies.RoadmapEdit, policy =>
+        {
+            policy.RequireAuthenticatedUser();
+            policy.AddRequirements(new PermissionRequirement(AccessPolicies.PermissionRoadmapEdit));
+        });
+
+        options.AddPolicy(AccessPolicies.Registrations, policy =>
+        {
+            policy.RequireAuthenticatedUser();
+            policy.AddRequirements(new PermissionRequirement(AccessPolicies.PermissionRegistrations));
+        });
+
+        options.AddPolicy(AccessPolicies.ManageAccess, policy =>
+        {
+            policy.RequireAuthenticatedUser();
+            policy.AddRequirements(new PermissionRequirement(AccessPolicies.PermissionManageAccess));
+        });
+    });
 
     builder.Services.AddCors(options =>
         options.AddPolicy("AllowFrontend", policy =>

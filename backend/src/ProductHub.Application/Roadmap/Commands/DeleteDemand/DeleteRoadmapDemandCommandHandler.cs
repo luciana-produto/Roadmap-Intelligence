@@ -1,4 +1,5 @@
 using MediatR;
+using ProductHub.Application.Common;
 using ProductHub.Application.Common.Exceptions;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap;
@@ -8,12 +9,14 @@ namespace ProductHub.Application.Roadmap.Commands.DeleteDemand;
 
 public sealed class DeleteRoadmapDemandCommandHandler(
     IRoadmapDemandRepository demandRepository,
+    ICurrentUserService currentUser,
     IUnitOfWork unitOfWork)
     : IRequestHandler<DeleteRoadmapDemandCommand>
 {
     public async Task Handle(DeleteRoadmapDemandCommand request, CancellationToken cancellationToken)
     {
-        var demand = await demandRepository.GetByIdAsync(request.Id, cancellationToken)
+        // Rastreado (para atualizar); o filtro global garante que não é possível "excluir" o já excluído.
+        var demand = await demandRepository.GetByIdForUpdateAsync(request.Id, cancellationToken)
             ?? throw new NotFoundException("RoadmapDemand", request.Id);
 
         if (demand.ItemType != RoadmapItemType.Demand
@@ -28,15 +31,8 @@ public sealed class DeleteRoadmapDemandCommandHandler(
             ]);
         }
 
-        // If this demand is a spillover, clear the SuccessorDemandId on the original
-        var original = await demandRepository.GetOriginalBySuccessorIdAsync(request.Id, cancellationToken);
-        original?.ClearSuccessor();
-
-        // Remove every dependency link involving this item (both directions) so the deletion doesn't
-        // violate the foreign key — the dependency is simply dropped from the other side.
-        await demandRepository.RemoveAllDependenciesInvolvingAsync(request.Id, cancellationToken);
-
-        demandRepository.Remove(demand);
+        // Exclusão lógica: preserva dependências, spillover e vínculos para permitir a restauração.
+        demand.SoftDelete(currentUser.Email);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 }

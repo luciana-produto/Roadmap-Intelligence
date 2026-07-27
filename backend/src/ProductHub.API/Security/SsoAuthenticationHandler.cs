@@ -34,8 +34,17 @@ public sealed class SsoAuthenticationOptions : AuthenticationSchemeOptions
 public sealed class SsoAuthenticationHandler : AuthenticationHandler<SsoAuthenticationOptions>
 {
     public const string SchemeName = "Sso";
-    private const string DevSessionId = "dev-session";
     private static readonly TimeSpan CacheDuration = TimeSpan.FromMinutes(5);
+
+    // Sessões de desenvolvimento local (só quando AllowDevSession). Cada token mapeia para um
+    // e-mail distinto; as permissões desses e-mails vêm da configuração (Authorization:*Emails).
+    private static readonly Dictionary<string, (string Email, string Name)> DevSessions = new(StringComparer.Ordinal)
+    {
+        ["dev-session"] = ("dev@producthub.local", "Dev User"),
+        ["dev-session-roadmap"] = ("dev-roadmap@producthub.local", "Dev Roadmap"),
+        ["dev-session-cadastros"] = ("dev-cadastros@producthub.local", "Dev Cadastros"),
+        ["dev-session-full"] = ("dev-full@producthub.local", "Dev Full")
+    };
 
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IMemoryCache _cache;
@@ -58,9 +67,9 @@ public sealed class SsoAuthenticationHandler : AuthenticationHandler<SsoAuthenti
         if (string.IsNullOrWhiteSpace(sessionId))
             return AuthenticateResult.NoResult();
 
-        // Bypass de desenvolvimento local: mantém o "Dev Login (local only)" funcionando.
-        if (Options.AllowDevSession && sessionId == DevSessionId)
-            return Success(BuildDevPrincipal());
+        // Bypass de desenvolvimento local: mantém os "Dev Login (local only)" funcionando.
+        if (Options.AllowDevSession && DevSessions.TryGetValue(sessionId, out var dev))
+            return Success(BuildDevPrincipal(dev.Email, dev.Name));
 
         if (_cache.TryGetValue(CacheKey(sessionId), out ClaimsPrincipal? cached) && cached is not null)
             return Success(cached);
@@ -141,14 +150,13 @@ public sealed class SsoAuthenticationHandler : AuthenticationHandler<SsoAuthenti
         return new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName));
     }
 
-    private static ClaimsPrincipal BuildDevPrincipal()
+    private static ClaimsPrincipal BuildDevPrincipal(string email, string name)
     {
         var claims = new List<Claim>
         {
-            new(ClaimTypes.NameIdentifier, "dev-user"),
-            new(ClaimTypes.Email, "dev@producthub.local"),
-            new(ClaimTypes.Name, "Dev User"),
-            new(ClaimTypes.Role, "admin")
+            new(ClaimTypes.NameIdentifier, email),
+            new(ClaimTypes.Email, email),
+            new(ClaimTypes.Name, name)
         };
 
         return new ClaimsPrincipal(new ClaimsIdentity(claims, SchemeName));
