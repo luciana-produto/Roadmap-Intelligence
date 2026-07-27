@@ -3,7 +3,7 @@ using ProductHub.Domain.Interfaces;
 
 namespace ProductHub.Domain.Roadmap;
 
-public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
+public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
 {
     private List<RoadmapDemandProduct> _products = [];
     private List<RoadmapDemandProject> _projectLinks = [];
@@ -43,6 +43,9 @@ public sealed class RoadmapDemand : AggregateRoot, IAuditableEntity
     public string? SpilloverObservation { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
+    // Auditoria de usuário (preenchida pelo interceptor): quem criou e quem alterou por último.
+    public string? CreatedByEmail { get; set; }
+    public string? UpdatedByEmail { get; set; }
 
     // Exclusão lógica (soft delete): item sai das telas mas fica na "Lixeira" para restauração.
     public bool IsDeleted { get; private set; }

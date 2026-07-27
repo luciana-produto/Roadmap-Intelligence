@@ -20,7 +20,8 @@ public static class DependencyInjection
         IConfiguration configuration,
         IHostEnvironment environment)
     {
-        services.AddSingleton<AuditSaveChangesInterceptor>();
+        // Scoped porque agora captura o usuário atual (ICurrentUserService, scoped) para auditoria.
+        services.AddScoped<AuditSaveChangesInterceptor>();
 
         var connectionString = configuration.GetConnectionString("SqlServer");
         var useInMemoryFallback = environment.IsDevelopment() && string.IsNullOrWhiteSpace(connectionString);
@@ -45,7 +46,8 @@ public static class DependencyInjection
                     sqlOptions.CommandTimeout(AppConstants.Database.CommandTimeoutSeconds);
                 });
 
-            options.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
+            // O interceptor de auditoria é adicionado via AppDbContext.OnConfiguring
+            // (injetado no construtor), evitando resolver um serviço scoped pelo provider raiz.
         });
 
         services.AddScoped<DbContext>(sp => sp.GetRequiredService<AppDbContext>());

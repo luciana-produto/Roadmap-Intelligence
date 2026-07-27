@@ -337,7 +337,7 @@ const spilloverReasonOptions = [
   { value: 'QualityIssues', label: 'Problemas de qualidade' }
 ] as const
 
-type DemandFormTab = 'general' | 'status'
+type DemandFormTab = 'general' | 'status' | 'logs'
 
 const resultTabs = computed(() => {
   const tabs: Array<{ value: DemandFormTab, label: string }> = [
@@ -347,8 +347,23 @@ const resultTabs = computed(() => {
   if (hasSelectedItemType.value && !isRoadmap.value)
     tabs.push({ value: 'status', label: 'Status' })
 
+  // Aba de logs só faz sentido em item já existente (edição).
+  if (isEdit.value)
+    tabs.push({ value: 'logs', label: 'Logs' })
+
   return tabs
 })
+
+function formatLogDateTime(value?: string | null) {
+  if (!value) return '—'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('pt-BR')
+}
+
+const logCreatedByEmail = computed(() => props.demand?.createdByEmail || '—')
+const logCreatedAt = computed(() => formatLogDateTime(props.demand?.createdAt))
+const logUpdatedByEmail = computed(() => props.demand?.updatedByEmail || '—')
+const logUpdatedAt = computed(() => props.demand?.updatedAt ? formatLogDateTime(props.demand.updatedAt) : '—')
 
 const customerInput = ref('')
 const dependencySearch = ref('')
@@ -2020,7 +2035,7 @@ async function handleSubmit() {
           </button>
         </div>
 
-        <template v-if="!hasStatusTab || activeTab === 'general'">
+        <template v-if="activeTab === 'general' || (!hasStatusTab && activeTab !== 'logs')">
         <section class="space-y-4">
           <div v-if="!isDemand">
             <h3 class="text-sm font-semibold text-highlighted">Dados do item</h3>
@@ -2940,6 +2955,53 @@ async function handleSubmit() {
               </p>
             </article>
           </section>
+        </section>
+        </template>
+
+        <template v-else-if="activeTab === 'logs'">
+        <section class="space-y-4">
+          <div>
+            <h3 class="text-sm font-semibold text-highlighted">Logs</h3>
+            <p class="text-xs text-muted">Registro de criação e da última alteração deste item.</p>
+          </div>
+
+          <div class="rounded-lg border border-default bg-elevated/30 p-3">
+            <div class="flex items-center gap-2">
+              <UIcon name="i-lucide-circle-plus" class="h-4 w-4 text-primary" />
+              <p class="text-sm font-medium text-highlighted">Criação</p>
+            </div>
+            <dl class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <dt class="text-xs text-muted">Usuário</dt>
+                <dd class="text-sm text-highlighted">{{ logCreatedByEmail }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-muted">Data/hora</dt>
+                <dd class="text-sm text-highlighted">{{ logCreatedAt }}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="rounded-lg border border-default bg-elevated/30 p-3">
+            <div class="flex items-center gap-2">
+              <UIcon name="i-lucide-pencil" class="h-4 w-4 text-amber-500" />
+              <p class="text-sm font-medium text-highlighted">Última alteração</p>
+            </div>
+            <dl class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div>
+                <dt class="text-xs text-muted">Usuário</dt>
+                <dd class="text-sm text-highlighted">{{ logUpdatedByEmail }}</dd>
+              </div>
+              <div>
+                <dt class="text-xs text-muted">Data/hora</dt>
+                <dd class="text-sm text-highlighted">{{ logUpdatedAt }}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <p class="text-[11px] text-muted">
+            Itens criados antes desta funcionalidade podem não ter o usuário registrado.
+          </p>
         </section>
         </template>
 

@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
+using ProductHub.Application.Common;
 using ProductHub.Domain.Interfaces;
 
 namespace ProductHub.Infrastructure.Persistence.Interceptors;
 
-public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
+public sealed class AuditSaveChangesInterceptor(ICurrentUserService currentUser) : SaveChangesInterceptor
 {
     public override InterceptionResult<int> SavingChanges(
         DbContextEventData eventData,
@@ -23,17 +24,30 @@ public sealed class AuditSaveChangesInterceptor : SaveChangesInterceptor
         return base.SavingChangesAsync(eventData, result, cancellationToken);
     }
 
-    private static void ApplyAuditFields(DbContext? context)
+    private void ApplyAuditFields(DbContext? context)
     {
         if (context is null) return;
+
+        var now = DateTime.UtcNow;
+        var email = currentUser.Email;
 
         foreach (var entry in context.ChangeTracker.Entries<IAuditableEntity>())
         {
             if (entry.State == EntityState.Added)
-                entry.Entity.CreatedAt = DateTime.UtcNow;
+                entry.Entity.CreatedAt = now;
 
             if (entry.State is EntityState.Added or EntityState.Modified)
-                entry.Entity.UpdatedAt = DateTime.UtcNow;
+                entry.Entity.UpdatedAt = now;
+        }
+
+        // Auditoria de usuário: só nas entidades que a suportam (ex.: RoadmapDemand).
+        foreach (var entry in context.ChangeTracker.Entries<IUserAuditableEntity>())
+        {
+            if (entry.State == EntityState.Added)
+                entry.Entity.CreatedByEmail = email;
+
+            if (entry.State is EntityState.Added or EntityState.Modified)
+                entry.Entity.UpdatedByEmail = email;
         }
     }
 }

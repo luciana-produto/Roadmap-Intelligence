@@ -164,6 +164,8 @@ export interface RoadmapDemand {
   kpiMeasurements: KpiMeasurement[]
   createdAt: string
   updatedAt?: string
+  createdByEmail?: string | null
+  updatedByEmail?: string | null
 }
 
 export interface RoadmapCapacitySummary {

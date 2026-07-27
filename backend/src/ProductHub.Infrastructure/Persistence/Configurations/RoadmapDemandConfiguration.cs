@@ -22,6 +22,10 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
         builder.Property(x => x.DeletedByEmail).HasMaxLength(320);
         builder.HasQueryFilter(x => !x.IsDeleted);
 
+        // Auditoria de usuário (criação / última alteração).
+        builder.Property(x => x.CreatedByEmail).HasMaxLength(320);
+        builder.Property(x => x.UpdatedByEmail).HasMaxLength(320);
+
         builder.Property(x => x.Title)
             .IsRequired()
             .HasMaxLength(200);

@@ -353,6 +353,16 @@ BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD DeletedByEmail NVARCHAR(320) NULL;
 END;
 
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'CreatedByEmail') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD CreatedByEmail NVARCHAR(320) NULL;
+END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'UpdatedByEmail') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD UpdatedByEmail NVARCHAR(320) NULL;
+END;
+
 IF OBJECT_ID(N'dbo.UserAccess', N'U') IS NULL
 BEGIN
     CREATE TABLE dbo.UserAccess (

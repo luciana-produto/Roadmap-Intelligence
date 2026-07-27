@@ -87,7 +87,9 @@ public sealed record RoadmapDemandDto(
     string? RowColor = null,
     bool IsSimple = false,
     string? SpilloverReason = null,
-    string? SpilloverObservation = null);
+    string? SpilloverObservation = null,
+    string? CreatedByEmail = null,
+    string? UpdatedByEmail = null);
 
 public sealed record RoadmapCapacityDto(
     Guid? Id,

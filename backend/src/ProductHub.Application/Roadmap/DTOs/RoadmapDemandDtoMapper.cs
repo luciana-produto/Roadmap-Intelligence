@@ -162,7 +162,9 @@ internal static class RoadmapDemandDtoMapper
             demand.RowColor,
             demand.IsSimple,
             demand.SpilloverReason?.ToString(),
-            demand.SpilloverObservation);
+            demand.SpilloverObservation,
+            demand.CreatedByEmail,
+            demand.UpdatedByEmail);
     }
 
     private static string FormatQuarterLabel(int quarterYear, int quarterNumber)
