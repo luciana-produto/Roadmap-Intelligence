@@ -38,9 +38,11 @@ export type SpilloverReason =
   | 'QualityIssues'
 
 export type KpiType = 'Business' | 'Product'
-export type KpiLever = 'Growth' | 'Efficiency' | 'Customer'
-export type KpiObjective = 'Increase' | 'Decrease'
-export type ImpactType = 'Increase' | 'Decrease'
+export type KpiCategory = 'Financial' | 'Growth' | 'Efficiency'
+export type KpiIndicator = 'Mrr' | 'Stores' | 'Time' | 'Clicks' | 'StepsScreens'
+export type KpiUnit = 'Currency' | 'Number' | 'Percentage' | 'TimeSeconds'
+export type KpiOperation = 'HigherIsBetter' | 'LowerIsBetter'
+export type ImpactType = 'Increase' | 'Decrease' | 'Maintain'
 export type ConfidenceLevel = 'High' | 'Medium' | 'Low'
 export type MeasurementResult = 'Positive' | 'Negative' | 'Neutral'
 
@@ -254,12 +256,11 @@ export interface Kpi {
   projectId?: string
   name: string
   type: KpiType
-  lever: KpiLever
-  objective: KpiObjective
+  category: KpiCategory
+  indicator: KpiIndicator
+  operation: KpiOperation
+  allowedUnits: KpiUnit[]
   description?: string
-  calculation?: string
-  target?: number
-  currentValue?: number
   linkedDemandsCount: number
   createdAt: string
   updatedAt?: string
@@ -268,12 +269,11 @@ export interface Kpi {
 export interface KpiFormData {
   name: string
   type: KpiType
-  lever: KpiLever
-  objective: KpiObjective
+  category: KpiCategory
+  indicator: KpiIndicator
+  operation: KpiOperation
+  allowedUnits: KpiUnit[]
   description?: string
-  calculation?: string
-  target?: number
-  currentValue?: number
 }
 
 export interface DemandKpiLink {
@@ -282,6 +282,7 @@ export interface DemandKpiLink {
   kpiId: string
   kpiName: string
   impactType: ImpactType
+  unit: KpiUnit
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
   observation?: string
@@ -290,7 +291,7 @@ export interface DemandKpiLink {
 
 export interface DemandKpiLinkInput {
   kpiId: string
-  impactType: ImpactType
+  unit: KpiUnit
   estimatedImpact?: number
   confidenceLevel: ConfidenceLevel
   observation?: string

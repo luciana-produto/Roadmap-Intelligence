@@ -158,6 +158,11 @@ function toggleNavGroup(label: string) {
   expandedNavGroups.value[label] = !isNavGroupExpanded(label)
 }
 
+// Ao navegar por uma opção, recolhe a sidebar do desktop automaticamente.
+function handleDesktopNavigate() {
+  isSidebarCollapsed.value = true
+}
+
 function handleMobileNavGroupToggle(label: string) {
   expandedNavGroups.value[label] = !isNavGroupExpanded(label)
 }
@@ -273,6 +278,7 @@ const mainContentWidthClass = computed(() =>
                 :class="route.path === child.to
                   ? 'bg-white/10 text-white'
                   : 'text-white/65 hover:bg-white/6 hover:text-white'"
+                @click="handleDesktopNavigate"
               >
                 <span>{{ child.label }}</span>
               </NuxtLink>
@@ -290,6 +296,7 @@ const mainContentWidthClass = computed(() =>
                 ? 'bg-white/12 text-white'
                 : 'text-white/75 hover:bg-white/8 hover:text-white'
             ]"
+            @click="handleDesktopNavigate"
           >
             <UIcon :name="link.icon" class="w-4 h-4 shrink-0" />
             <span v-if="!isSidebarCollapsed">{{ link.label }}</span>

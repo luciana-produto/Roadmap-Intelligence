@@ -1,6 +1,7 @@
 using MediatR;
 using ProductHub.Application.Common.Exceptions;
 using ProductHub.Application.Roadmap.DTOs;
+using ProductHub.Application.Roadmap.Mapping;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap;
 using ProductHub.Domain.Roadmap.Interfaces;
@@ -38,12 +39,28 @@ public sealed class UpdateDemandKpiLinksCommandHandler(
 
         var links = request.Links.Select(input =>
         {
-            Enum.TryParse<ImpactType>(input.ImpactType, true, out var impactType);
             Enum.TryParse<ConfidenceLevel>(input.ConfidenceLevel, true, out var confidence);
+            Enum.TryParse<KpiUnit>(input.Unit, true, out var unit);
+
+            var kpi = kpis[input.KpiId];
+
+            // A direção do impacto é derivada da operação cadastrada no KPI.
+            var impactType = KpiMapping.ImpactTypeFromOperation(kpi.Operation);
+
+            // A unidade escolhida precisa estar entre as unidades permitidas do KPI.
+            if (kpi.AllowedUnits.Count > 0 && !kpi.AllowedUnits.Contains(unit))
+            {
+                throw new ValidationException([
+                    new ValidationFailure(nameof(input.Unit),
+                        $"A unidade selecionada não é permitida para o KPI \"{kpi.Name}\".")
+                ]);
+            }
+
             return DemandKpiLink.FromRepository(
                 request.DemandId,
                 input.KpiId,
                 impactType,
+                unit,
                 input.EstimatedImpact,
                 confidence,
                 input.Observation,
@@ -62,6 +79,7 @@ public sealed class UpdateDemandKpiLinksCommandHandler(
             link.KpiId,
             kpiNamesById.GetValueOrDefault(link.KpiId, string.Empty),
             link.ImpactType.ToString(),
+            link.Unit.ToString(),
             link.EstimatedImpact,
             link.ConfidenceLevel.ToString(),
             link.Observation,

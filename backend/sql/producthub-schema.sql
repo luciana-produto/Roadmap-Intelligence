@@ -180,12 +180,11 @@ BEGIN
         ProjectId UNIQUEIDENTIFIER NULL,
         Name NVARCHAR(200) NOT NULL,
         Type NVARCHAR(50) NOT NULL,
-        Lever NVARCHAR(50) NOT NULL,
-        Objective NVARCHAR(50) NOT NULL,
+        Category NVARCHAR(30) NOT NULL,
+        Indicator NVARCHAR(30) NOT NULL,
+        Operation NVARCHAR(30) NOT NULL CONSTRAINT DF_Kpis_Operation DEFAULT ('HigherIsBetter'),
+        AllowedUnits NVARCHAR(200) NOT NULL CONSTRAINT DF_Kpis_AllowedUnits DEFAULT (''),
         Description NVARCHAR(2000) NULL,
-        Calculation NVARCHAR(500) NULL,
-        Target DECIMAL(18, 4) NULL,
-        CurrentValue DECIMAL(18, 4) NULL,
         CreatedAt DATETIME2 NOT NULL CONSTRAINT DF_Kpis_CreatedAt DEFAULT (SYSUTCDATETIME()),
         UpdatedAt DATETIME2 NULL,
         Version INT NOT NULL CONSTRAINT DF_Kpis_Version DEFAULT (0),
@@ -227,6 +226,7 @@ BEGIN
         DemandId UNIQUEIDENTIFIER NOT NULL,
         KpiId UNIQUEIDENTIFIER NOT NULL,
         ImpactType NVARCHAR(50) NOT NULL,
+        Unit NVARCHAR(30) NOT NULL CONSTRAINT DF_DemandKpiLinks_Unit DEFAULT ('Number'),
         EstimatedImpact DECIMAL(18, 4) NULL,
         ConfidenceLevel NVARCHAR(50) NOT NULL,
         Observation NVARCHAR(1000) NULL,
@@ -376,3 +376,54 @@ BEGIN
         CONSTRAINT UQ_UserAccess_Email UNIQUE (Email)
     );
 END;
+
+-- ─── Reformulação do cadastro de KPI (Categoria/Indicador/Unidades) ──────────
+-- Novos campos em bancos existentes.
+IF COL_LENGTH(N'dbo.Kpis', N'Category') IS NULL
+BEGIN
+    ALTER TABLE dbo.Kpis ADD Category NVARCHAR(30) NULL;
+END;
+
+IF COL_LENGTH(N'dbo.Kpis', N'Indicator') IS NULL
+BEGIN
+    ALTER TABLE dbo.Kpis ADD Indicator NVARCHAR(30) NULL;
+END;
+
+IF COL_LENGTH(N'dbo.Kpis', N'AllowedUnits') IS NULL
+BEGIN
+    ALTER TABLE dbo.Kpis ADD AllowedUnits NVARCHAR(200) NULL;
+END;
+
+-- Operação (direção de melhoria) do cadastro do KPI; default para linhas existentes.
+IF COL_LENGTH(N'dbo.Kpis', N'Operation') IS NULL
+BEGIN
+    ALTER TABLE dbo.Kpis ADD Operation NVARCHAR(30) NOT NULL
+        CONSTRAINT DF_Kpis_Operation DEFAULT ('HigherIsBetter');
+END;
+
+IF COL_LENGTH(N'dbo.DemandKpiLinks', N'Unit') IS NULL
+BEGIN
+    ALTER TABLE dbo.DemandKpiLinks ADD Unit NVARCHAR(30) NULL;
+END;
+
+-- Reset dos KPIs do modelo antigo (sem Category = dados de teste pré-reformulação).
+-- Os vínculos/medições são removidos automaticamente pelas FKs ON DELETE CASCADE.
+-- Executado via SQL dinâmico: a coluna Category pode ter sido criada acima no
+-- mesmo batch, e o SQL Server compila o batch inteiro antes de executar
+-- (a referência estática à coluna falharia com "Invalid column name 'Category'").
+IF COL_LENGTH(N'dbo.Kpis', N'Category') IS NOT NULL
+BEGIN
+    EXEC(N'DELETE FROM dbo.Kpis WHERE Category IS NULL;');
+END;
+
+-- Remove colunas antigas (não usadas mais).
+IF COL_LENGTH(N'dbo.Kpis', N'Lever') IS NOT NULL
+    ALTER TABLE dbo.Kpis DROP COLUMN Lever;
+IF COL_LENGTH(N'dbo.Kpis', N'Objective') IS NOT NULL
+    ALTER TABLE dbo.Kpis DROP COLUMN Objective;
+IF COL_LENGTH(N'dbo.Kpis', N'Calculation') IS NOT NULL
+    ALTER TABLE dbo.Kpis DROP COLUMN Calculation;
+IF COL_LENGTH(N'dbo.Kpis', N'Target') IS NOT NULL
+    ALTER TABLE dbo.Kpis DROP COLUMN Target;
+IF COL_LENGTH(N'dbo.Kpis', N'CurrentValue') IS NOT NULL
+    ALTER TABLE dbo.Kpis DROP COLUMN CurrentValue;

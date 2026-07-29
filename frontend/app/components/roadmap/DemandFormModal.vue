@@ -14,7 +14,7 @@ import type {
   Kpi,
   DemandKpiLink,
   DemandKpiLinkInput,
-  ImpactType,
+  KpiUnit,
   ConfidenceLevel,
   KpiMeasurement,
   MeasurementResult,
@@ -44,10 +44,7 @@ type DemandFormState = Omit<DemandFormData, 'classification' | 'quarterYear' | '
   quarterNumber: number | null
 }
 
-type ImpactDisplayType = 'Percentage' | 'Number' | 'Currency'
-
 type EditableDemandKpiLink = DemandKpiLinkInput & {
-  impactDisplayType: ImpactDisplayType
   estimatedImpactInput: string
 }
 
@@ -656,11 +653,12 @@ const tradeOffHistory = computed(() =>
   (props.demand?.tradeOffHistory ?? []).filter(tradeOff => !removedTradeOffIds.value.includes(tradeOff.id))
 )
 
-const impactTypeOptions = [
-  { value: 'Percentage', label: 'Percentual' },
-  { value: 'Number', label: 'Número' },
-  { value: 'Currency', label: 'Valor R$' }
-]
+const kpiUnitLabels: Record<KpiUnit, string> = {
+  Currency: 'Valor R$',
+  Number: 'Número',
+  Percentage: 'Percentual %',
+  TimeSeconds: 'Tempo (segundos)'
+}
 
 const confidenceLevelOptions = [
   { value: 'High', label: 'Alta' },
@@ -796,7 +794,7 @@ function populateFormFromDemand(demand: RoadmapDemand) {
   form.noKpiClassification = demand.noKpiClassification ?? undefined
   kpiLinkEdits.value = (demand.kpiLinks ?? []).map(l => toEditableKpiLink({
     kpiId: l.kpiId,
-    impactType: l.impactType,
+    unit: l.unit,
     estimatedImpact: l.estimatedImpact,
     confidenceLevel: l.confidenceLevel
   }))
@@ -1506,11 +1504,11 @@ function parseMaskedNumber(value: string | number | null | undefined) {
   return Number.isNaN(parsed) ? undefined : parsed
 }
 
-function formatEstimatedImpact(value: number | undefined, displayType: ImpactDisplayType) {
+function formatEstimatedImpact(value: number | undefined, unit: KpiUnit) {
   if (value == null)
     return ''
 
-  if (displayType === 'Currency') {
+  if (unit === 'Currency') {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: 'BRL',
@@ -1519,17 +1517,17 @@ function formatEstimatedImpact(value: number | undefined, displayType: ImpactDis
     }).format(value)
   }
 
-  if (displayType === 'Percentage') {
-    return `${new Intl.NumberFormat('pt-BR', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2
-    }).format(value)}%`
-  }
-
-  return new Intl.NumberFormat('pt-BR', {
+  const number = new Intl.NumberFormat('pt-BR', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2
   }).format(value)
+
+  if (unit === 'Percentage')
+    return `${number}%`
+  if (unit === 'TimeSeconds')
+    return `${number}s`
+
+  return number
 }
 
 function formatMeasurementValue(value: number) {
@@ -1550,28 +1548,46 @@ function formatMeasurementDate(value: string) {
   return new Intl.DateTimeFormat('pt-BR').format(new Date(year, month - 1, day))
 }
 
+function allowedUnitsForKpi(kpiId: string): KpiUnit[] {
+  const kpi = (props.availableKpis ?? []).find(k => k.id === kpiId)
+  return kpi?.allowedUnits ?? []
+}
+
 function toEditableKpiLink(link?: Partial<DemandKpiLinkInput>): EditableDemandKpiLink {
   const estimatedImpact = link?.estimatedImpact
-  const impactDisplayType: ImpactDisplayType = 'Number'
+  const allowed = link?.kpiId ? allowedUnitsForKpi(link.kpiId) : []
+  const unit: KpiUnit = link?.unit ?? allowed[0] ?? 'Number'
 
   return {
     kpiId: link?.kpiId ?? '',
-    impactType: link?.impactType ?? 'Increase',
+    unit,
     estimatedImpact,
     confidenceLevel: link?.confidenceLevel ?? 'Medium',
-    impactDisplayType,
-    estimatedImpactInput: formatEstimatedImpact(estimatedImpact, impactDisplayType)
+    estimatedImpactInput: formatEstimatedImpact(estimatedImpact, unit)
   }
 }
 
-function updateImpactDisplayType(index: number, value: string | undefined) {
+// Ao trocar o KPI do vínculo, garante que a unidade esteja entre as permitidas do KPI.
+function updateLinkKpi(index: number, kpiId: string) {
+  const link = kpiLinkEdits.value[index]
+  if (!link)
+    return
+  link.kpiId = kpiId
+  const allowed = allowedUnitsForKpi(kpiId)
+  if (allowed.length > 0 && !allowed.includes(link.unit)) {
+    link.unit = allowed[0]!
+    link.estimatedImpactInput = formatEstimatedImpact(link.estimatedImpact, link.unit)
+  }
+}
+
+function updateLinkUnit(index: number, value: string | undefined) {
   const link = kpiLinkEdits.value[index]
   if (!link)
     return
 
-  const nextType = (value ?? 'Number') as ImpactDisplayType
-  link.impactDisplayType = nextType
-  link.estimatedImpactInput = formatEstimatedImpact(link.estimatedImpact, nextType)
+  const nextUnit = (value ?? 'Number') as KpiUnit
+  link.unit = nextUnit
+  link.estimatedImpactInput = formatEstimatedImpact(link.estimatedImpact, nextUnit)
 }
 
 function updateEstimatedImpactInput(index: number, value: string | number | null | undefined) {
@@ -1584,7 +1600,12 @@ function updateEstimatedImpactInput(index: number, value: string | number | null
   link.estimatedImpact = parsed
   link.estimatedImpactInput = parsed == null
     ? ''
-    : formatEstimatedImpact(parsed, link.impactDisplayType)
+    : formatEstimatedImpact(parsed, link.unit)
+}
+
+// Opções de unidade para o vínculo = unidades permitidas do KPI selecionado.
+function unitOptionsForLink(kpiId: string) {
+  return allowedUnitsForKpi(kpiId).map(u => ({ value: u, label: kpiUnitLabels[u] }))
 }
 
 function addKpiLink() {
@@ -1617,10 +1638,6 @@ function getKpiById(kpiId: string) {
   return (props.availableKpis ?? []).find(kpi => kpi.id === kpiId)
 }
 
-function getKpiObjectiveLabel(kpiId: string) {
-  return getKpiById(kpiId)?.objective === 'Decrease' ? 'Reduzir' : 'Aumentar'
-}
-
 function getKpiConfidenceSummary(confidenceLevel: ConfidenceLevel) {
   switch (confidenceLevel) {
     case 'High':
@@ -1632,16 +1649,6 @@ function getKpiConfidenceSummary(confidenceLevel: ConfidenceLevel) {
   }
 }
 
-function getKpiArticle(kpiName: string, includePreposition: boolean) {
-  const normalized = kpiName.trim().toLowerCase()
-  const feminineStarts = ['taxa', 'receita', 'margem', 'nota', 'média', 'quantidade', 'conversão', 'retenção']
-
-  if (feminineStarts.some(word => normalized.startsWith(word)))
-    return includePreposition ? 'da' : 'a'
-
-  return includePreposition ? 'do' : 'o'
-}
-
 function getKpiImpactSummary(link: EditableDemandKpiLink) {
   if (!link.kpiId)
     return null
@@ -1650,12 +1657,11 @@ function getKpiImpactSummary(link: EditableDemandKpiLink) {
   if (!kpi)
     return null
 
-  const impactDefined = link.estimatedImpact != null
-  const impactValue = !impactDefined
-    ? '[NÃO DEFINIDO]'
-    : formatEstimatedImpact(link.estimatedImpact, link.impactDisplayType)
+  const impactValue = link.estimatedImpact == null
+    ? '[IMPACTO ESTIMADO]'
+    : formatEstimatedImpact(link.estimatedImpact, link.unit)
 
-  return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, impactDefined)} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
+  return `${impactValue} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
 }
 
 function getPersistedKpiImpactSummary(link: DemandKpiLink) {
@@ -1664,10 +1670,10 @@ function getPersistedKpiImpactSummary(link: DemandKpiLink) {
     return null
 
   const impactValue = link.estimatedImpact == null
-    ? '[NÃO DEFINIDO]'
-    : formatMeasurementValue(link.estimatedImpact)
+    ? '[IMPACTO ESTIMADO]'
+    : formatEstimatedImpact(link.estimatedImpact, link.unit)
 
-  return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, link.estimatedImpact != null)} ${kpi.name}`
+  return `${impactValue} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
 }
 
 function getMeasurementResultLabel(result: MeasurementResult) {

@@ -1,5 +1,6 @@
 using MediatR;
 using ProductHub.Application.Roadmap.DTOs;
+using ProductHub.Application.Roadmap.Mapping;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap;
 using ProductHub.Domain.Roadmap.Interfaces;
@@ -16,36 +17,24 @@ public sealed class CreateKpiCommandHandler(
         CancellationToken cancellationToken)
     {
         Enum.TryParse<KpiType>(request.Type, true, out var type);
-        Enum.TryParse<KpiLever>(request.Lever, true, out var lever);
-        Enum.TryParse<KpiObjective>(request.Objective, true, out var objective);
+        Enum.TryParse<KpiCategory>(request.Category, true, out var category);
+        Enum.TryParse<KpiIndicator>(request.Indicator, true, out var indicator);
+        Enum.TryParse<KpiOperation>(request.Operation, true, out var operation);
+        var allowedUnits = KpiMapping.ParseUnits(request.AllowedUnits);
 
         var kpi = Kpi.Create(
             null,
             request.Name,
             type,
-            lever,
-            objective,
-            request.Description,
-            request.Calculation,
-            request.Target,
-            request.CurrentValue);
+            category,
+            indicator,
+            operation,
+            allowedUnits,
+            request.Description);
 
         await kpiRepository.AddAsync(kpi, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new KpiDto(
-            kpi.Id,
-            kpi.ProjectId,
-            kpi.Name,
-            kpi.Type.ToString(),
-            kpi.Lever.ToString(),
-            kpi.Objective.ToString(),
-            kpi.Description,
-            kpi.Calculation,
-            kpi.Target,
-            kpi.CurrentValue,
-            0,
-            kpi.CreatedAt,
-            kpi.UpdatedAt);
+        return KpiMapping.ToDto(kpi, 0);
     }
 }

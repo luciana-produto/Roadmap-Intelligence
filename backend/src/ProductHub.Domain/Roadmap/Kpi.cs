@@ -8,12 +8,11 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
     public Guid? ProjectId { get; private set; }
     public string Name { get; private set; } = default!;
     public KpiType Type { get; private set; }
-    public KpiLever Lever { get; private set; }
-    public KpiObjective Objective { get; private set; }
+    public KpiCategory Category { get; private set; }
+    public KpiIndicator Indicator { get; private set; }
+    public KpiOperation Operation { get; private set; }
+    public IReadOnlyList<KpiUnit> AllowedUnits { get; private set; } = [];
     public string? Description { get; private set; }
-    public string? Calculation { get; private set; }
-    public decimal? Target { get; private set; }
-    public decimal? CurrentValue { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 
@@ -23,44 +22,43 @@ public sealed class Kpi : AggregateRoot, IAuditableEntity
         Guid? projectId,
         string name,
         KpiType type,
-        KpiLever lever,
-        KpiObjective objective,
-        string? description = null,
-        string? calculation = null,
-        decimal? target = null,
-        decimal? currentValue = null)
+        KpiCategory category,
+        KpiIndicator indicator,
+        KpiOperation operation,
+        IEnumerable<KpiUnit>? allowedUnits,
+        string? description = null)
     {
         return new Kpi
         {
             ProjectId = projectId,
             Name = name,
             Type = type,
-            Lever = lever,
-            Objective = objective,
-            Description = description,
-            Calculation = calculation,
-            Target = target,
-            CurrentValue = currentValue
+            Category = category,
+            Indicator = indicator,
+            Operation = operation,
+            AllowedUnits = NormalizeUnits(allowedUnits),
+            Description = description
         };
     }
 
     public void Update(
         string name,
         KpiType type,
-        KpiLever lever,
-        KpiObjective objective,
-        string? description = null,
-        string? calculation = null,
-        decimal? target = null,
-        decimal? currentValue = null)
+        KpiCategory category,
+        KpiIndicator indicator,
+        KpiOperation operation,
+        IEnumerable<KpiUnit>? allowedUnits,
+        string? description = null)
     {
         Name = name;
         Type = type;
-        Lever = lever;
-        Objective = objective;
+        Category = category;
+        Indicator = indicator;
+        Operation = operation;
+        AllowedUnits = NormalizeUnits(allowedUnits);
         Description = description;
-        Calculation = calculation;
-        Target = target;
-        CurrentValue = currentValue;
     }
+
+    private static IReadOnlyList<KpiUnit> NormalizeUnits(IEnumerable<KpiUnit>? units) =>
+        (units ?? []).Distinct().ToList();
 }

@@ -11,17 +11,24 @@ public sealed class CreateKpiCommandValidator : AbstractValidator<CreateKpiComma
         RuleFor(x => x.Type)
             .NotEmpty()
             .Must(t => Enum.TryParse<KpiType>(t, true, out _))
-            .WithMessage("Type must be Business or Product.");
-        RuleFor(x => x.Lever)
+            .WithMessage("Tipo deve ser Negócio (Business) ou Produto (Product).");
+        RuleFor(x => x.Category)
             .NotEmpty()
-            .Must(l => Enum.TryParse<KpiLever>(l, true, out _))
-            .WithMessage("Lever must be Growth, Efficiency or Customer.");
-        RuleFor(x => x.Objective)
+            .Must(c => Enum.TryParse<KpiCategory>(c, true, out _))
+            .WithMessage("Categoria deve ser Financeiro, Crescimento ou Eficiência.");
+        RuleFor(x => x.Indicator)
             .NotEmpty()
-            .Must(o => Enum.TryParse<KpiObjective>(o, true, out _))
-            .WithMessage("Objective must be Increase or Decrease.");
+            .Must(i => Enum.TryParse<KpiIndicator>(i, true, out _))
+            .WithMessage("Indicador inválido.");
+        RuleFor(x => x.Operation)
+            .NotEmpty()
+            .Must(o => Enum.TryParse<KpiOperation>(o, true, out _))
+            .WithMessage("Operação deve ser \"Quanto maior melhor\" ou \"Quanto menor melhor\".");
+        RuleFor(x => x.AllowedUnits)
+            .NotEmpty()
+            .WithMessage("Selecione ao menos uma unidade permitida.")
+            .Must(units => units != null && units.All(u => Enum.TryParse<KpiUnit>(u, true, out _)))
+            .WithMessage("Unidade permitida inválida.");
         RuleFor(x => x.Description).MaximumLength(2000);
-        RuleFor(x => x.Calculation).MaximumLength(500);
-        RuleFor(x => x.Target).GreaterThanOrEqualTo(0).When(x => x.Target.HasValue);
     }
 }

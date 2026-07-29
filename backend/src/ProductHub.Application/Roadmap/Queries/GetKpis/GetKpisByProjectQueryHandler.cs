@@ -1,5 +1,6 @@
 using MediatR;
 using ProductHub.Application.Roadmap.DTOs;
+using ProductHub.Application.Roadmap.Mapping;
 using ProductHub.Domain.Roadmap.Interfaces;
 
 namespace ProductHub.Application.Roadmap.Queries.GetKpis;
@@ -27,19 +28,6 @@ public sealed class GetKpisQueryHandler(IKpiRepository kpiRepository)
             .GroupBy(l => l.KpiId)
             .ToDictionary(g => g.Key, g => g.Count());
 
-        return kpis.Select(kpi => new KpiDto(
-            kpi.Id,
-            kpi.ProjectId,
-            kpi.Name,
-            kpi.Type.ToString(),
-            kpi.Lever.ToString(),
-            kpi.Objective.ToString(),
-            kpi.Description,
-            kpi.Calculation,
-            kpi.Target,
-            kpi.CurrentValue,
-            linkCountByKpi.GetValueOrDefault(kpi.Id, 0),
-            kpi.CreatedAt,
-            kpi.UpdatedAt));
+        return kpis.Select(kpi => KpiMapping.ToDto(kpi, linkCountByKpi.GetValueOrDefault(kpi.Id, 0)));
     }
 }

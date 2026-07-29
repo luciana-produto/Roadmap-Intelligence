@@ -7,9 +7,8 @@ public sealed record UpdateKpiCommand(
     Guid Id,
     string Name,
     string Type,
-    string Lever,
-    string Objective,
-    string? Description = null,
-    string? Calculation = null,
-    decimal? Target = null,
-    decimal? CurrentValue = null) : IRequest<KpiDto>;
+    string Category,
+    string Indicator,
+    string Operation,
+    IReadOnlyList<string> AllowedUnits,
+    string? Description = null) : IRequest<KpiDto>;

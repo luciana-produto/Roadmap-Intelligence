@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { TableColumn } from '@nuxt/ui'
-import type { Kpi, KpiFormData, KpiType, KpiLever, KpiObjective } from '~/types/roadmap'
+import type { Kpi, KpiFormData, KpiType, KpiCategory, KpiIndicator, KpiUnit, KpiOperation } from '~/types/roadmap'
 
 useSeoMeta({ title: 'KPIs · ProductHub' })
 
@@ -23,15 +23,30 @@ const kpiTypeOptions: KpiSelectOption<KpiType>[] = [
   { value: 'Product', label: 'Produto' }
 ]
 
-const kpiLeverOptions: KpiSelectOption<KpiLever>[] = [
-  { value: 'Growth', label: 'Crescer' },
-  { value: 'Efficiency', label: 'Eficiência' },
-  { value: 'Customer', label: 'Cliente' }
+const kpiCategoryOptions: KpiSelectOption<KpiCategory>[] = [
+  { value: 'Financial', label: 'Financeiro' },
+  { value: 'Growth', label: 'Crescimento' },
+  { value: 'Efficiency', label: 'Eficiência' }
 ]
 
-const kpiObjectiveOptions: KpiSelectOption<KpiObjective>[] = [
-  { value: 'Increase', label: 'Aumentar' },
-  { value: 'Decrease', label: 'Reduzir' }
+const kpiIndicatorOptions: KpiSelectOption<KpiIndicator>[] = [
+  { value: 'Mrr', label: 'MRR' },
+  { value: 'Stores', label: 'Lojas' },
+  { value: 'Time', label: 'Tempo' },
+  { value: 'Clicks', label: 'Cliques' },
+  { value: 'StepsScreens', label: 'Etapas/Telas' }
+]
+
+const kpiOperationOptions: KpiSelectOption<KpiOperation>[] = [
+  { value: 'HigherIsBetter', label: 'Quanto maior melhor' },
+  { value: 'LowerIsBetter', label: 'Quanto menor melhor' }
+]
+
+const kpiUnitOptions: KpiSelectOption<KpiUnit>[] = [
+  { value: 'Currency', label: 'Valor R$' },
+  { value: 'Number', label: 'Número' },
+  { value: 'Percentage', label: 'Percentual %' },
+  { value: 'TimeSeconds', label: 'Tempo (segundos)' }
 ]
 
 const kpiTypeLabels: Record<KpiType, string> = {
@@ -39,15 +54,30 @@ const kpiTypeLabels: Record<KpiType, string> = {
   Product: 'Produto'
 }
 
-const kpiLeverLabels: Record<KpiLever, string> = {
-  Growth: 'Crescer',
-  Efficiency: 'Eficiência',
-  Customer: 'Cliente'
+const kpiCategoryLabels: Record<KpiCategory, string> = {
+  Financial: 'Financeiro',
+  Growth: 'Crescimento',
+  Efficiency: 'Eficiência'
 }
 
-const kpiObjectiveLabels: Record<KpiObjective, string> = {
-  Increase: 'Aumentar',
-  Decrease: 'Reduzir'
+const kpiIndicatorLabels: Record<KpiIndicator, string> = {
+  Mrr: 'MRR',
+  Stores: 'Lojas',
+  Time: 'Tempo',
+  Clicks: 'Cliques',
+  StepsScreens: 'Etapas/Telas'
+}
+
+const kpiOperationLabels: Record<KpiOperation, string> = {
+  HigherIsBetter: 'Quanto maior melhor',
+  LowerIsBetter: 'Quanto menor melhor'
+}
+
+const kpiUnitLabels: Record<KpiUnit, string> = {
+  Currency: 'Valor R$',
+  Number: 'Número',
+  Percentage: 'Percentual %',
+  TimeSeconds: 'Tempo (segundos)'
 }
 
 const kpiTypeBadgeColor: Record<KpiType, string> = {
@@ -55,20 +85,20 @@ const kpiTypeBadgeColor: Record<KpiType, string> = {
   Product: 'success'
 }
 
-const kpiLeverBadgeColor: Record<KpiLever, string> = {
-  Growth: 'success',
-  Efficiency: 'info',
-  Customer: 'warning'
+const kpiCategoryBadgeColor: Record<KpiCategory, string> = {
+  Financial: 'success',
+  Growth: 'info',
+  Efficiency: 'warning'
 }
 
 // ─── Table columns ───────────────────────────────────────────────────────────
 const columns: TableColumn<Kpi>[] = [
   { accessorKey: 'name', header: 'Nome' },
   { accessorKey: 'type', header: 'Tipo' },
-  { accessorKey: 'lever', header: 'Alavanca' },
-  { accessorKey: 'objective', header: 'Objetivo' },
-  { accessorKey: 'target', header: 'Meta' },
-  { accessorKey: 'currentValue', header: 'Valor Atual' },
+  { accessorKey: 'category', header: 'Categoria' },
+  { accessorKey: 'indicator', header: 'Indicador' },
+  { accessorKey: 'operation', header: 'Operação' },
+  { accessorKey: 'allowedUnits', header: 'Unidades' },
   { accessorKey: 'linkedDemandsCount', header: 'Demandas' },
   { accessorKey: 'actions', header: '' }
 ]
@@ -83,12 +113,11 @@ function emptyForm(): KpiFormData {
   return {
     name: '',
     type: 'Business',
-    lever: 'Growth',
-    objective: 'Increase',
-    description: '',
-    calculation: '',
-    target: undefined,
-    currentValue: undefined
+    category: 'Financial',
+    indicator: 'Mrr',
+    operation: 'HigherIsBetter',
+    allowedUnits: [],
+    description: ''
   }
 }
 
@@ -103,14 +132,20 @@ function openEdit(kpi: Kpi) {
   formData.value = {
     name: kpi.name,
     type: kpi.type,
-    lever: kpi.lever,
-    objective: kpi.objective,
-    description: kpi.description ?? '',
-    calculation: kpi.calculation ?? '',
-    target: kpi.target,
-    currentValue: kpi.currentValue
+    category: kpi.category,
+    indicator: kpi.indicator,
+    operation: kpi.operation,
+    allowedUnits: [...(kpi.allowedUnits ?? [])],
+    description: kpi.description ?? ''
   }
   showFormModal.value = true
+}
+
+function toggleAllowedUnit(unit: KpiUnit) {
+  const units = formData.value.allowedUnits
+  formData.value.allowedUnits = units.includes(unit)
+    ? units.filter(u => u !== unit)
+    : [...units, unit]
 }
 
 function optionByValue<T extends string>(options: KpiSelectOption<T>[], value: T): KpiSelectOption<T> {
@@ -124,22 +159,29 @@ const selectedTypeOption = computed({
   }
 })
 
-const selectedLeverOption = computed({
-  get: () => optionByValue(kpiLeverOptions, formData.value.lever),
-  set: (option: KpiSelectOption<KpiLever> | null) => {
-    formData.value.lever = option?.value ?? 'Growth'
+const selectedCategoryOption = computed({
+  get: () => optionByValue(kpiCategoryOptions, formData.value.category),
+  set: (option: KpiSelectOption<KpiCategory> | null) => {
+    formData.value.category = option?.value ?? 'Financial'
   }
 })
 
-const selectedObjectiveOption = computed({
-  get: () => optionByValue(kpiObjectiveOptions, formData.value.objective),
-  set: (option: KpiSelectOption<KpiObjective> | null) => {
-    formData.value.objective = option?.value ?? 'Increase'
+const selectedIndicatorOption = computed({
+  get: () => optionByValue(kpiIndicatorOptions, formData.value.indicator),
+  set: (option: KpiSelectOption<KpiIndicator> | null) => {
+    formData.value.indicator = option?.value ?? 'Mrr'
+  }
+})
+
+const selectedOperationOption = computed({
+  get: () => optionByValue(kpiOperationOptions, formData.value.operation),
+  set: (option: KpiSelectOption<KpiOperation> | null) => {
+    formData.value.operation = option?.value ?? 'HigherIsBetter'
   }
 })
 
 const submitDisabled = computed(() =>
-  isSubmitting.value || !formData.value.name
+  isSubmitting.value || !formData.value.name || formData.value.allowedUnits.length === 0
 )
 
 async function submitForm() {
@@ -189,7 +231,7 @@ async function executeDelete() {
 // ─── Filters ─────────────────────────────────────────────────────────────────
 const searchQuery = ref('')
 const filterType = ref<KpiType | ''>('')
-const filterLever = ref<KpiLever | ''>('')
+const filterCategory = ref<KpiCategory | ''>('')
 
 const filteredKpis = computed(() => {
   let result = kpis.value
@@ -198,27 +240,22 @@ const filteredKpis = computed(() => {
     result = result.filter(k => k.name.toLowerCase().includes(q) || k.description?.toLowerCase().includes(q))
   }
   if (filterType.value) result = result.filter(k => k.type === filterType.value)
-  if (filterLever.value) result = result.filter(k => k.lever === filterLever.value)
+  if (filterCategory.value) result = result.filter(k => k.category === filterCategory.value)
   return result
 })
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
 const summary = computed(() => {
   const total = kpis.value.length
-  const withTarget = kpis.value.filter(k => k.target != null).length
-  const onTrack = kpis.value.filter(k => k.target != null && k.currentValue != null && k.currentValue >= k.target).length
   const linked = kpis.value.filter(k => k.linkedDemandsCount > 0).length
-  return { total, withTarget, onTrack, linked }
+  const business = kpis.value.filter(k => k.type === 'Business').length
+  const product = kpis.value.filter(k => k.type === 'Product').length
+  return { total, linked, business, product }
 })
 
-function formatNumber(val?: number): string {
-  if (val == null) return '—'
-  return val.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
-}
-
-function getProgressPercent(kpi: Kpi): number | null {
-  if (kpi.target == null || kpi.target === 0 || kpi.currentValue == null) return null
-  return Math.min(Math.round((kpi.currentValue / kpi.target) * 100), 100)
+function allowedUnitsLabel(units?: KpiUnit[]): string {
+  if (!units || units.length === 0) return '—'
+  return units.map(u => kpiUnitLabels[u]).join(', ')
 }
 </script>
 
@@ -244,12 +281,12 @@ function getProgressPercent(kpi: Kpi): number | null {
         <div class="text-2xl font-bold text-highlighted">{{ summary.total }}</div>
       </UCard>
       <UCard :ui="{ body: 'p-4' }">
-        <div class="text-sm text-muted">Com Meta</div>
-        <div class="text-2xl font-bold text-highlighted">{{ summary.withTarget }}</div>
+        <div class="text-sm text-muted">De Negócio</div>
+        <div class="text-2xl font-bold text-highlighted">{{ summary.business }}</div>
       </UCard>
       <UCard :ui="{ body: 'p-4' }">
-        <div class="text-sm text-muted">Atingindo Meta</div>
-        <div class="text-2xl font-bold text-success">{{ summary.onTrack }}</div>
+        <div class="text-sm text-muted">De Produto</div>
+        <div class="text-2xl font-bold text-highlighted">{{ summary.product }}</div>
       </UCard>
       <UCard :ui="{ body: 'p-4' }">
         <div class="text-sm text-muted">Vinculados a Demandas</div>
@@ -271,8 +308,8 @@ function getProgressPercent(kpi: Kpi): number | null {
         class="w-44"
       />
       <USelectMenu
-        v-model="filterLever"
-        :items="[{ value: '', label: 'Todas as alavancas' }, ...kpiLeverOptions]"
+        v-model="filterCategory"
+        :items="[{ value: '', label: 'Todas as categorias' }, ...kpiCategoryOptions]"
         class="w-44"
       />
     </div>
@@ -301,32 +338,22 @@ function getProgressPercent(kpi: Kpi): number | null {
         </UBadge>
       </template>
 
-      <template #lever-cell="{ row }">
-        <UBadge :color="(kpiLeverBadgeColor[row.original.lever] as any)" variant="subtle" size="sm">
-          {{ kpiLeverLabels[row.original.lever] }}
+      <template #category-cell="{ row }">
+        <UBadge :color="(kpiCategoryBadgeColor[row.original.category] as any)" variant="subtle" size="sm">
+          {{ kpiCategoryLabels[row.original.category] }}
         </UBadge>
       </template>
 
-      <template #objective-cell="{ row }">
-        <span class="text-sm text-highlighted">{{ kpiObjectiveLabels[row.original.objective] }}</span>
+      <template #indicator-cell="{ row }">
+        <span class="text-sm text-highlighted">{{ kpiIndicatorLabels[row.original.indicator] }}</span>
       </template>
 
-      <template #target-cell="{ row }">
-        <span class="text-sm">{{ formatNumber(row.original.target) }}</span>
+      <template #operation-cell="{ row }">
+        <span class="text-sm text-muted">{{ kpiOperationLabels[row.original.operation] }}</span>
       </template>
 
-      <template #currentValue-cell="{ row }">
-        <div class="flex items-center gap-2">
-          <span class="text-sm">{{ formatNumber(row.original.currentValue) }}</span>
-          <UBadge
-            v-if="getProgressPercent(row.original) != null"
-            :color="getProgressPercent(row.original)! >= 100 ? 'success' : getProgressPercent(row.original)! >= 70 ? 'warning' : 'error'"
-            variant="subtle"
-            size="xs"
-          >
-            {{ getProgressPercent(row.original) }}%
-          </UBadge>
-        </div>
+      <template #allowedUnits-cell="{ row }">
+        <span class="text-sm text-muted">{{ allowedUnitsLabel(row.original.allowedUnits) }}</span>
       </template>
 
       <template #linkedDemandsCount-cell="{ row }">
@@ -390,38 +417,51 @@ function getProgressPercent(kpi: Kpi): number | null {
                 class="w-full"
               />
             </UFormField>
-            <UFormField label="Alavanca" required>
+            <UFormField label="Categoria" required>
               <USelectMenu
-                v-model="selectedLeverOption"
-                :items="kpiLeverOptions"
+                v-model="selectedCategoryOption"
+                :items="kpiCategoryOptions"
                 class="w-full"
               />
             </UFormField>
-            <UFormField label="Objetivo" required>
+            <UFormField label="Indicador" required>
               <USelectMenu
-                v-model="selectedObjectiveOption"
-                :items="kpiObjectiveOptions"
+                v-model="selectedIndicatorOption"
+                :items="kpiIndicatorOptions"
                 class="w-full"
               />
             </UFormField>
           </div>
+
+          <UFormField label="Operação" required>
+            <USelectMenu
+              v-model="selectedOperationOption"
+              :items="kpiOperationOptions"
+              class="w-full"
+            />
+          </UFormField>
+
+          <UFormField label="Unidades permitidas" required>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="unit in kpiUnitOptions"
+                :key="unit.value"
+                type="button"
+                class="rounded-lg border px-3 py-1.5 text-sm font-medium transition-colors"
+                :class="formData.allowedUnits.includes(unit.value)
+                  ? 'border-primary/50 bg-primary/10 text-primary'
+                  : 'border-default text-highlighted hover:border-primary/40'"
+                @click="toggleAllowedUnit(unit.value)"
+              >
+                {{ unit.label }}
+              </button>
+            </div>
+            <p class="mt-1.5 text-xs text-muted">Selecione uma ou mais unidades que o KPI aceita.</p>
+          </UFormField>
 
           <UFormField label="Descrição">
             <UTextarea v-model="formData.description" placeholder="Descrição do indicador..." :rows="4" class="w-full" />
           </UFormField>
-
-          <UFormField label="Como calcular?">
-            <UTextarea v-model="formData.calculation" placeholder="Fórmula ou método de cálculo..." :rows="4" class="w-full" />
-          </UFormField>
-
-          <div class="grid grid-cols-2 gap-4">
-            <UFormField label="Meta">
-              <UInput v-model.number="formData.target" type="number" step="0.01" placeholder="0" class="w-full" />
-            </UFormField>
-            <UFormField label="Valor Atual">
-              <UInput v-model.number="formData.currentValue" type="number" step="0.01" placeholder="0" class="w-full" />
-            </UFormField>
-          </div>
         </div>
       </template>
 

@@ -16,6 +16,11 @@ public sealed class DemandKpiLinkConfiguration : IEntityTypeConfiguration<Demand
             .HasConversion<string>()
             .IsRequired();
 
+        builder.Property(x => x.Unit)
+            .HasConversion<string>()
+            .HasMaxLength(30)
+            .IsRequired();
+
         builder.Property(x => x.ConfidenceLevel)
             .HasConversion<string>()
             .IsRequired();

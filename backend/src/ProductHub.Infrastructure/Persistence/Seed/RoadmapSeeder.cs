@@ -596,30 +596,30 @@ public static class RoadmapSeeder
 
         var kpis = new[]
         {
-            Kpi.Create(projectId, "Taxa de Churn Mensal", KpiType.Business, KpiLever.Customer, KpiObjective.Decrease,
-                "Percentual de clientes que cancelaram no mês",
-                "(Clientes cancelados / Total clientes início do mês) x 100",
-                2.5m, 3.1m),
-            Kpi.Create(projectId, "Receita Recorrente Mensal (MRR)", KpiType.Business, KpiLever.Growth, KpiObjective.Increase,
-                "Receita mensal recorrente de assinaturas ativas",
-                "Soma de todas assinaturas ativas no mês",
-                850000m, 780000m),
-            Kpi.Create(projectId, "Taxa de Adoção da Funcionalidade", KpiType.Product, KpiLever.Customer, KpiObjective.Increase,
-                "Percentual de usuários elegíveis que utilizam a funcionalidade lançada",
-                "(Usuários ativos da funcionalidade / Usuários elegíveis) x 100",
-                45m, 18m),
-            Kpi.Create(projectId, "Tempo Médio de Onboarding", KpiType.Product, KpiLever.Efficiency, KpiObjective.Decrease,
-                "Tempo médio para concluir o onboarding de novos clientes",
-                "Média de dias entre assinatura e ativação completa",
-                12m, 18m),
-            Kpi.Create(projectId, "Taxa de Compliance Fiscal", KpiType.Business, KpiLever.Efficiency, KpiObjective.Increase,
-                "Percentual de rotinas fiscais executadas sem inconsistências",
-                "(Rotinas fiscais sem erro / Rotinas fiscais totais) x 100",
-                98.5m, 96.9m),
-            Kpi.Create(projectId, "NPS do Produto", KpiType.Product, KpiLever.Customer, KpiObjective.Increase,
-                "Nível de satisfação dos clientes com a experiência do produto",
-                "% promotores - % detratores",
-                62m, 54m)
+            Kpi.Create(projectId, "Taxa de Churn Mensal", KpiType.Business, KpiCategory.Growth, KpiIndicator.Mrr,
+                KpiOperation.LowerIsBetter,
+                new[] { KpiUnit.Percentage },
+                "Percentual de clientes que cancelaram no mês"),
+            Kpi.Create(projectId, "Receita Recorrente Mensal (MRR)", KpiType.Business, KpiCategory.Financial, KpiIndicator.Mrr,
+                KpiOperation.HigherIsBetter,
+                new[] { KpiUnit.Currency },
+                "Receita mensal recorrente de assinaturas ativas"),
+            Kpi.Create(projectId, "Taxa de Adoção da Funcionalidade", KpiType.Product, KpiCategory.Growth, KpiIndicator.Clicks,
+                KpiOperation.HigherIsBetter,
+                new[] { KpiUnit.Percentage, KpiUnit.Number },
+                "Percentual de usuários elegíveis que utilizam a funcionalidade lançada"),
+            Kpi.Create(projectId, "Tempo Médio de Onboarding", KpiType.Product, KpiCategory.Efficiency, KpiIndicator.Time,
+                KpiOperation.LowerIsBetter,
+                new[] { KpiUnit.TimeSeconds },
+                "Tempo médio para concluir o onboarding de novos clientes"),
+            Kpi.Create(projectId, "Taxa de Compliance Fiscal", KpiType.Business, KpiCategory.Efficiency, KpiIndicator.StepsScreens,
+                KpiOperation.HigherIsBetter,
+                new[] { KpiUnit.Percentage },
+                "Percentual de rotinas fiscais executadas sem inconsistências"),
+            Kpi.Create(projectId, "NPS do Produto", KpiType.Product, KpiCategory.Growth, KpiIndicator.Clicks,
+                KpiOperation.HigherIsBetter,
+                new[] { KpiUnit.Number },
+                "Nível de satisfação dos clientes com a experiência do produto")
         };
 
         foreach (var kpi in kpis)
@@ -628,26 +628,29 @@ public static class RoadmapSeeder
         await context.SaveChangesAsync();
 
         var kpiByName = kpis.ToDictionary(k => k.Name, StringComparer.OrdinalIgnoreCase);
-        var linkSeeds = new (string ItemKey, string KpiName, ImpactType Impact, decimal? EstimatedImpact, ConfidenceLevel Confidence, string? Observation)[]
+        var linkSeeds = new (string ItemKey, string KpiName, decimal? EstimatedImpact, ConfidenceLevel Confidence, string? Observation)[]
         {
-            ("CROSS-EP-IDENTITY", "Taxa de Churn Mensal", ImpactType.Decrease, 0.3m, ConfidenceLevel.Medium, "Redução esperada com a padronização do SSO."),
-            ("CROSS-EP-IDENTITY", "Tempo Médio de Onboarding", ImpactType.Decrease, 5m, ConfidenceLevel.High, "Fluxo mais simples reduz o tempo de ativação."),
-            ("CROSS-EP-COMPLIANCE", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.5m, ConfidenceLevel.High, null),
-            ("CROSS-EP-OPERATIONS", "NPS do Produto", ImpactType.Increase, 3m, ConfidenceLevel.Medium, "A redução de fricção deve melhorar a percepção do fluxo."),
-            ("CROSS-EP-OPERATIONS", "Taxa de Adoção da Funcionalidade", ImpactType.Increase, 4m, ConfidenceLevel.Medium, "Homologação mais estável acelera adoção em clientes ativos."),
-            ("RET-EP-FISCAL", "Taxa de Compliance Fiscal", ImpactType.Increase, 0.7m, ConfidenceLevel.High, null),
-            ("RET-EP-FISCAL", "Receita Recorrente Mensal (MRR)", ImpactType.Increase, 15000m, ConfidenceLevel.Medium, null)
+            ("CROSS-EP-IDENTITY", "Taxa de Churn Mensal", 0.3m, ConfidenceLevel.Medium, "Redução esperada com a padronização do SSO."),
+            ("CROSS-EP-IDENTITY", "Tempo Médio de Onboarding", 5m, ConfidenceLevel.High, "Fluxo mais simples reduz o tempo de ativação."),
+            ("CROSS-EP-COMPLIANCE", "Taxa de Compliance Fiscal", 0.5m, ConfidenceLevel.High, null),
+            ("CROSS-EP-OPERATIONS", "NPS do Produto", 3m, ConfidenceLevel.Medium, "A redução de fricção deve melhorar a percepção do fluxo."),
+            ("CROSS-EP-OPERATIONS", "Taxa de Adoção da Funcionalidade", 4m, ConfidenceLevel.Medium, "Homologação mais estável acelera adoção em clientes ativos."),
+            ("RET-EP-FISCAL", "Taxa de Compliance Fiscal", 0.7m, ConfidenceLevel.High, null),
+            ("RET-EP-FISCAL", "Receita Recorrente Mensal (MRR)", 15000m, ConfidenceLevel.Medium, null)
         };
 
-        foreach (var (itemKey, kpiName, impact, estimated, confidence, observation) in linkSeeds)
+        foreach (var (itemKey, kpiName, estimated, confidence, observation) in linkSeeds)
         {
             if (!itemIdsByKey.TryGetValue(itemKey, out var itemId))
                 continue;
             if (!kpiByName.TryGetValue(kpiName, out var kpi))
                 continue;
 
+            // Direção do impacto derivada da operação cadastrada no KPI.
+            var impact = kpi.Operation == KpiOperation.LowerIsBetter ? ImpactType.Decrease : ImpactType.Increase;
+            var seedUnit = kpi.AllowedUnits.Count > 0 ? kpi.AllowedUnits[0] : KpiUnit.Number;
             await context.DemandKpiLinks.AddAsync(
-                DemandKpiLink.FromRepository(itemId, kpi.Id, impact, estimated, confidence, observation));
+                DemandKpiLink.FromRepository(itemId, kpi.Id, impact, seedUnit, estimated, confidence, observation));
         }
 
         await context.SaveChangesAsync();

@@ -9,16 +9,15 @@ import type {
   DemandKpiLink,
   DemandKpiLinkInput,
   ConfidenceLevel,
+  KpiOperation,
+  KpiUnit,
   KpiMeasurement,
   MeasurementResult,
   CreateDemandKpiMeasurementInput,
   UpdateDemandKpiMeasurementInput
 } from '~/types/roadmap'
 
-type ImpactDisplayType = 'Percentage' | 'Number' | 'Currency'
-
 type EditableDemandKpiLink = DemandKpiLinkInput & {
-  impactDisplayType: ImpactDisplayType
   estimatedImpactInput: string
   observationInput: string
 }
@@ -71,11 +70,25 @@ const deleteConfirmation = ref<{ type: 'kpi-link' | 'measurement', id: string } 
 
 type AutomaticMeasurementResult = MeasurementResult
 
-const impactTypeOptions = [
-  { value: 'Percentage', label: 'Percentual' },
-  { value: 'Number', label: 'Número' },
-  { value: 'Currency', label: 'Valor R$' }
-]
+const kpiUnitLabels: Record<KpiUnit, string> = {
+  Currency: 'Valor R$',
+  Number: 'Número',
+  Percentage: 'Percentual %',
+  TimeSeconds: 'Tempo (segundos)'
+}
+
+function allowedUnitsForKpi(kpiId: string): KpiUnit[] {
+  return (props.availableKpis ?? []).find(k => k.id === kpiId)?.allowedUnits ?? []
+}
+
+function unitOptionsForKpi(kpiId: string) {
+  return allowedUnitsForKpi(kpiId).map(u => ({ value: u, label: kpiUnitLabels[u] }))
+}
+
+const kpiOperationLabels: Record<KpiOperation, string> = {
+  HigherIsBetter: 'Quanto maior melhor',
+  LowerIsBetter: 'Quanto menor melhor'
+}
 
 const confidenceLevelOptions = [
   { value: 'High', label: 'Alta' },
@@ -88,15 +101,18 @@ const kpiTypeLabels = {
   Product: 'Produto'
 } as const
 
-const kpiLeverLabels = {
-  Growth: 'Crescer',
-  Efficiency: 'Eficiência',
-  Customer: 'Cliente'
+const kpiCategoryLabels = {
+  Financial: 'Financeiro',
+  Growth: 'Crescimento',
+  Efficiency: 'Eficiência'
 } as const
 
-const kpiObjectiveLabels = {
-  Increase: 'Aumentar',
-  Decrease: 'Reduzir'
+const kpiIndicatorLabels = {
+  Mrr: 'MRR',
+  Stores: 'Lojas',
+  Time: 'Tempo',
+  Clicks: 'Cliques',
+  StepsScreens: 'Etapas/Telas'
 } as const
 
 const noKpiClassificationOptions = [
@@ -233,10 +249,13 @@ function computeAutomaticMeasurementResult(kpiId: string, measuredValue: number)
   if (link?.estimatedImpact == null || !kpi)
     return 'Neutral'
 
-  if (kpi.objective === 'Increase')
-    return measuredValue >= link.estimatedImpact ? 'Positive' : 'Negative'
+  // A direção esperada vem da "Operação" do cadastro do KPI (fonte de verdade):
+  // "Quanto maior melhor" => atingir/superar a meta é positivo;
+  // "Quanto menor melhor" => ficar igual/abaixo da meta é positivo.
+  if (kpi.operation === 'LowerIsBetter')
+    return measuredValue <= link.estimatedImpact ? 'Positive' : 'Negative'
 
-  return measuredValue <= link.estimatedImpact ? 'Positive' : 'Negative'
+  return measuredValue >= link.estimatedImpact ? 'Positive' : 'Negative'
 }
 
 function normalizeDecimalInput(value: string) {
@@ -280,11 +299,11 @@ function parseMaskedNumber(value: string | number | null | undefined) {
   return Number.isNaN(parsed) ? undefined : parsed
 }
 
-function formatEstimatedImpact(value: number | undefined, displayType: ImpactDisplayType) {
+function formatEstimatedImpact(value: number | undefined, unit: KpiUnit) {
   if (value == null)
     return ''
 
-  if (displayType === 'Currency') {
+  if (unit === 'Currency') {
     return new Intl.NumberFormat('pt-BR', {
       style: 'currency',
       currency: 'BRL',
@@ -293,17 +312,17 @@ function formatEstimatedImpact(value: number | undefined, displayType: ImpactDis
     }).format(value)
   }
 
-  if (displayType === 'Percentage') {
-    return `${new Intl.NumberFormat('pt-BR', {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2
-    }).format(value)}%`
-  }
-
-  return new Intl.NumberFormat('pt-BR', {
+  const number = new Intl.NumberFormat('pt-BR', {
     minimumFractionDigits: 0,
     maximumFractionDigits: 2
   }).format(value)
+
+  if (unit === 'Percentage')
+    return `${number}%`
+  if (unit === 'TimeSeconds')
+    return `${number}s`
+
+  return number
 }
 
 function formatMeasurementValue(value: number) {
@@ -332,27 +351,25 @@ function formatMeasurementDate(value: string) {
 
 function toEditableKpiLink(link?: Partial<DemandKpiLinkInput>): EditableDemandKpiLink {
   const estimatedImpact = link?.estimatedImpact
-  const impactDisplayType: ImpactDisplayType = 'Number'
+  const allowed = link?.kpiId ? allowedUnitsForKpi(link.kpiId) : []
+  const unit: KpiUnit = link?.unit ?? allowed[0] ?? 'Number'
 
   return {
     kpiId: link?.kpiId ?? '',
-    impactType: link?.impactType ?? 'Increase',
+    unit,
     estimatedImpact,
     confidenceLevel: link?.confidenceLevel ?? 'Medium',
     measurementReferenceUrl: link?.measurementReferenceUrl ?? '',
-    impactDisplayType,
     estimatedImpactInput: formatEstimatedImpactInput(estimatedImpact),
     observationInput: link?.observation ?? ''
   }
 }
 
-function updateImpactDisplayType(index: number, value: string | undefined) {
-  const link = kpiLinkDrafts.value[index]
-  if (!link)
+function updateDraftUnit(draftId: string, value: string | undefined) {
+  const draft = kpiLinkDrafts.value.find(item => item.draftId === draftId)
+  if (!draft)
     return
-
-  const nextType = (value ?? 'Number') as ImpactDisplayType
-  link.impactDisplayType = nextType
+  draft.unit = (value ?? 'Number') as KpiUnit
 }
 
 function updateEstimatedImpactInput(index: number, value: string | number | null | undefined) {
@@ -417,6 +434,10 @@ function updateDraftKpiId(draftId: string, value: string | undefined) {
     return
 
   draft.kpiId = value ?? ''
+  // Ajusta a unidade para uma permitida pelo KPI escolhido.
+  const allowed = allowedUnitsForKpi(draft.kpiId)
+  if (allowed.length > 0 && !allowed.includes(draft.unit))
+    draft.unit = allowed[0]!
 }
 
 function updateDraftObservation(draftId: string, value: string | number | null | undefined) {
@@ -452,9 +473,6 @@ function getKpiById(kpiId: string) {
   return (props.availableKpis ?? []).find(kpi => kpi.id === kpiId)
 }
 
-function getKpiObjectiveLabel(kpiId: string) {
-  return getKpiById(kpiId)?.objective === 'Decrease' ? 'Reduzir' : 'Aumentar'
-}
 
 function getKpiConfidenceSummary(confidenceLevel: ConfidenceLevel) {
   switch (confidenceLevel) {
@@ -467,16 +485,6 @@ function getKpiConfidenceSummary(confidenceLevel: ConfidenceLevel) {
   }
 }
 
-function getKpiArticle(kpiName: string, includePreposition: boolean) {
-  const normalized = kpiName.trim().toLowerCase()
-  const feminineStarts = ['taxa', 'receita', 'margem', 'nota', 'média', 'quantidade', 'conversão', 'retenção']
-
-  if (feminineStarts.some(word => normalized.startsWith(word)))
-    return includePreposition ? 'da' : 'a'
-
-  return includePreposition ? 'do' : 'o'
-}
-
 function getKpiImpactSummary(link: EditableDemandKpiLink) {
   if (!link.kpiId)
     return null
@@ -485,12 +493,11 @@ function getKpiImpactSummary(link: EditableDemandKpiLink) {
   if (!kpi)
     return null
 
-  const impactDefined = link.estimatedImpact != null
-  const impactValue = !impactDefined
-    ? '[NÃO DEFINIDO]'
-    : formatEstimatedImpact(link.estimatedImpact, link.impactDisplayType)
+  const impactValue = link.estimatedImpact == null
+    ? '[IMPACTO ESTIMADO]'
+    : formatEstimatedImpact(link.estimatedImpact, link.unit)
 
-  return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, impactDefined)} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
+  return `${impactValue} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
 }
 
 function getPersistedKpiImpactSummary(link: DemandKpiLink) {
@@ -499,10 +506,10 @@ function getPersistedKpiImpactSummary(link: DemandKpiLink) {
     return null
 
   const impactValue = link.estimatedImpact == null
-    ? '[NÃO DEFINIDO]'
-    : formatMeasurementValue(link.estimatedImpact)
+    ? '[IMPACTO ESTIMADO]'
+    : formatEstimatedImpact(link.estimatedImpact, link.unit)
 
-  return `${getKpiObjectiveLabel(link.kpiId)} ${impactValue} ${getKpiArticle(kpi.name, link.estimatedImpact != null)} ${kpi.name}`
+  return `${impactValue} ${kpi.name} ${getKpiConfidenceSummary(link.confidenceLevel)}`
 }
 
 function getDisplayedMeasurementResult(kpiId: string, measurement: KpiMeasurement) {
@@ -626,7 +633,7 @@ async function saveKpiSetup() {
       ? []
       : persistedKpiLinks.value.map(link => ({
           kpiId: link.kpiId,
-          impactType: link.impactType,
+          unit: link.unit,
           estimatedImpact: link.estimatedImpact,
           confidenceLevel: link.confidenceLevel,
           observation: link.observation,
@@ -729,7 +736,7 @@ async function saveKpiLinkDraft(draftId: string) {
     const nextLinks = [
       ...persistedKpiLinks.value.map(link => ({
         kpiId: link.kpiId,
-        impactType: link.impactType,
+        unit: link.unit,
         estimatedImpact: link.estimatedImpact,
         confidenceLevel: link.confidenceLevel,
         observation: link.observation,
@@ -737,7 +744,7 @@ async function saveKpiLinkDraft(draftId: string) {
       })),
       {
         kpiId: draft.kpiId,
-        impactType: draft.impactType,
+        unit: draft.unit,
         estimatedImpact: draft.estimatedImpact,
         confidenceLevel: draft.confidenceLevel,
         observation: draft.observationInput || undefined,
@@ -769,7 +776,7 @@ async function executeDeletePersistedKpiLink(linkId: string) {
       .filter(link => link.id !== linkId)
       .map(link => ({
         kpiId: link.kpiId,
-        impactType: link.impactType,
+        unit: link.unit,
         estimatedImpact: link.estimatedImpact,
         confidenceLevel: link.confidenceLevel,
         observation: link.observation,
@@ -795,7 +802,7 @@ function startEditPersistedKpiLink(link: DemandKpiLink) {
     draftId: link.id,
     ...toEditableKpiLink({
       kpiId: link.kpiId,
-      impactType: link.impactType,
+      unit: link.unit,
       estimatedImpact: link.estimatedImpact,
       confidenceLevel: link.confidenceLevel,
       observation: link.observation,
@@ -829,7 +836,7 @@ async function savePersistedKpiLink(linkId: string) {
       if (link.id !== linkId) {
         return {
           kpiId: link.kpiId,
-          impactType: link.impactType,
+          unit: link.unit,
           estimatedImpact: link.estimatedImpact,
           confidenceLevel: link.confidenceLevel,
           observation: link.observation,
@@ -839,7 +846,7 @@ async function savePersistedKpiLink(linkId: string) {
 
       return {
         kpiId: draft.kpiId,
-        impactType: draft.impactType,
+        unit: draft.unit,
         estimatedImpact: draft.estimatedImpact,
         confidenceLevel: draft.confidenceLevel,
         observation: draft.observationInput || undefined,
@@ -872,7 +879,7 @@ async function saveMeasurementReference(linkId: string) {
       if (link.id !== linkId) {
         return {
           kpiId: link.kpiId,
-          impactType: link.impactType,
+          unit: link.unit,
           estimatedImpact: link.estimatedImpact,
           confidenceLevel: link.confidenceLevel,
           observation: link.observation,
@@ -882,7 +889,7 @@ async function saveMeasurementReference(linkId: string) {
 
       return {
         kpiId: link.kpiId,
-        impactType: link.impactType,
+        unit: link.unit,
         estimatedImpact: link.estimatedImpact,
         confidenceLevel: link.confidenceLevel,
         observation: link.observation,
@@ -1302,7 +1309,7 @@ async function executeDeleteMeasurement(measurementId: string) {
 
               <div
                 v-else
-                class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-start"
+                class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-start"
               >
                 <div class="space-y-1">
                   <div class="flex items-center gap-1.5 text-sm">
@@ -1329,12 +1336,12 @@ async function executeDeleteMeasurement(measurementId: string) {
                   />
                 </div>
 
-                <UFormField label="Tipo de impacto">
+                <UFormField label="Unidade">
                   <USelect
-                    :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.impactDisplayType ?? 'Number'"
-                    :items="impactTypeOptions"
+                    :model-value="kpiLinkDrafts.find(item => item.draftId === link.id)?.unit ?? 'Number'"
+                    :items="unitOptionsForKpi(kpiLinkDrafts.find(item => item.draftId === link.id)?.kpiId ?? link.kpiId)"
                     class="w-full"
-                    @update:model-value="(value) => updateImpactDisplayType(getDraftIndex(link.id), value as string | undefined)"
+                    @update:model-value="(value) => updateDraftUnit(link.id, value as string | undefined)"
                   />
                 </UFormField>
 
@@ -1408,7 +1415,7 @@ async function executeDeleteMeasurement(measurementId: string) {
             :key="draft.draftId"
             class="rounded-xl border border-dashed border-primary/30 bg-primary/5 p-3"
           >
-            <div class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.7fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-start">
+            <div class="grid gap-3 rounded-lg border border-default bg-default p-3 md:grid-cols-[minmax(0,1.3fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_auto] md:items-start">
               <div class="space-y-1">
                 <div class="flex items-center gap-1.5 text-sm">
                   <span class="text-highlighted">KPI relacionado</span>
@@ -1433,23 +1440,25 @@ async function executeDeleteMeasurement(measurementId: string) {
                 />
               </div>
 
-              <UFormField label="Tipo de impacto">
+              <UFormField label="Unidade">
                 <USelect
-                  :model-value="draft.impactDisplayType"
-                  :items="impactTypeOptions"
+                  :model-value="draft.unit"
+                  :items="unitOptionsForKpi(draft.kpiId)"
                   class="w-full"
-                  @update:model-value="(value) => updateImpactDisplayType(getDraftIndex(draft.draftId), value as string | undefined)"
+                  @update:model-value="(value) => updateDraftUnit(draft.draftId, value as string | undefined)"
                 />
               </UFormField>
 
               <UFormField label="Impacto estimado">
                 <UInput
                   :model-value="draft.estimatedImpactInput"
-                  :placeholder="draft.impactDisplayType === 'Percentage'
+                  :placeholder="draft.unit === 'Percentage'
                     ? 'Ex: 12,5%'
-                    : draft.impactDisplayType === 'Currency'
+                    : draft.unit === 'Currency'
                       ? 'Ex: R$ 1.500,00'
-                      : 'Ex: 1500'"
+                      : draft.unit === 'TimeSeconds'
+                        ? 'Ex: 30'
+                        : 'Ex: 1500'"
                   class="w-full"
                   @update:model-value="(value) => updateEstimatedImpactInput(getDraftIndex(draft.draftId), value)"
                 />
@@ -1857,8 +1866,9 @@ async function executeDeleteMeasurement(measurementId: string) {
               </div>
               <div class="flex flex-wrap gap-2 text-xs">
                 <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Tipo: {{ kpiTypeLabels[kpi.type] }}</span>
-                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Alavanca: {{ kpiLeverLabels[kpi.lever] }}</span>
-                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Objetivo: {{ kpiObjectiveLabels[kpi.objective] }}</span>
+                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Categoria: {{ kpiCategoryLabels[kpi.category] }}</span>
+                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Indicador: {{ kpiIndicatorLabels[kpi.indicator] }}</span>
+                <span class="rounded-full border border-default bg-elevated px-2 py-1 text-muted">Operação: {{ kpiOperationLabels[kpi.operation] }}</span>
               </div>
             </div>
 
@@ -1868,8 +1878,8 @@ async function executeDeleteMeasurement(measurementId: string) {
                 <p class="text-sm text-highlighted">{{ kpi.description || '—' }}</p>
               </div>
               <div class="space-y-1">
-                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-muted">Como calcular</p>
-                <p class="text-sm text-highlighted">{{ kpi.calculation || '—' }}</p>
+                <p class="text-xs font-semibold uppercase tracking-[0.08em] text-muted">Unidades permitidas</p>
+                <p class="text-sm text-highlighted">{{ kpi.allowedUnits.map((u) => kpiUnitLabels[u]).join(', ') || '—' }}</p>
               </div>
             </div>
           </article>

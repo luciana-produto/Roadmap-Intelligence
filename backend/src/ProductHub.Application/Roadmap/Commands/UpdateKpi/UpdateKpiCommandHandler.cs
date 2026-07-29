@@ -1,6 +1,7 @@
 using MediatR;
 using ProductHub.Application.Common.Exceptions;
 using ProductHub.Application.Roadmap.DTOs;
+using ProductHub.Application.Roadmap.Mapping;
 using ProductHub.Domain.Interfaces;
 using ProductHub.Domain.Roadmap;
 using ProductHub.Domain.Roadmap.Interfaces;
@@ -20,36 +21,24 @@ public sealed class UpdateKpiCommandHandler(
             ?? throw new NotFoundException("Kpi", request.Id);
 
         Enum.TryParse<KpiType>(request.Type, true, out var type);
-        Enum.TryParse<KpiLever>(request.Lever, true, out var lever);
-        Enum.TryParse<KpiObjective>(request.Objective, true, out var objective);
+        Enum.TryParse<KpiCategory>(request.Category, true, out var category);
+        Enum.TryParse<KpiIndicator>(request.Indicator, true, out var indicator);
+        Enum.TryParse<KpiOperation>(request.Operation, true, out var operation);
+        var allowedUnits = KpiMapping.ParseUnits(request.AllowedUnits);
 
         kpi.Update(
             request.Name,
             type,
-            lever,
-            objective,
-            request.Description,
-            request.Calculation,
-            request.Target,
-            request.CurrentValue);
+            category,
+            indicator,
+            operation,
+            allowedUnits,
+            request.Description);
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         var linkedCount = (await kpiRepository.GetKpiLinksByKpiIdAsync(kpi.Id, cancellationToken)).Count;
 
-        return new KpiDto(
-            kpi.Id,
-            kpi.ProjectId,
-            kpi.Name,
-            kpi.Type.ToString(),
-            kpi.Lever.ToString(),
-            kpi.Objective.ToString(),
-            kpi.Description,
-            kpi.Calculation,
-            kpi.Target,
-            kpi.CurrentValue,
-            linkedCount,
-            kpi.CreatedAt,
-            kpi.UpdatedAt);
+        return KpiMapping.ToDto(kpi, linkedCount);
     }
 }

@@ -13,10 +13,10 @@ public sealed class UpdateDemandKpiLinksCommandValidator
         RuleForEach(x => x.Links).ChildRules(link =>
         {
             link.RuleFor(l => l.KpiId).NotEmpty();
-            link.RuleFor(l => l.ImpactType)
+            link.RuleFor(l => l.Unit)
                 .NotEmpty()
-                .Must(t => Enum.TryParse<ImpactType>(t, true, out _))
-                .WithMessage("ImpactType must be Increase or Decrease.");
+                .Must(u => Enum.TryParse<KpiUnit>(u, true, out _))
+                .WithMessage("Unidade inválida.");
             link.RuleFor(l => l.ConfidenceLevel)
                 .NotEmpty()
                 .Must(c => Enum.TryParse<ConfidenceLevel>(c, true, out _))

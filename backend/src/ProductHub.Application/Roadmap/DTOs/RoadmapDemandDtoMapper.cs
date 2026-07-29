@@ -50,6 +50,7 @@ internal static class RoadmapDemandDtoMapper
                 link.KpiId,
                 kpiNamesById != null && kpiNamesById.TryGetValue(link.KpiId, out var kpiName) ? kpiName : string.Empty,
                 link.ImpactType.ToString(),
+                link.Unit.ToString(),
                 link.EstimatedImpact,
                 link.ConfidenceLevel.ToString(),
                 link.Observation,
