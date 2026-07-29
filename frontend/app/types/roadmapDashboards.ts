@@ -7,7 +7,7 @@ export type DashboardSelection =
   | { kind: 'classification', value: DemandClassification }
   | { kind: 'customer', value: string }
   | { kind: 'type', value: DemandType }
-  | { kind: 'problem', value: 'overdueOpen' | 'deliveredLate' | 'noJira' }
+  | { kind: 'problem', value: 'overdueOpen' | 'deliveredLate' | 'noJira' | 'noKpi' | 'doneNoKpi' }
   | { kind: 'inconsistentDeps' }
   | { kind: 'spilloverReason', value: string }
   | { kind: 'deprioritizationReason', value: string }

@@ -103,12 +103,19 @@ const access = useAccessStore()
 
 const navLinks = computed<NavLinkItem[]>(() => {
   const links: NavLinkItem[] = [
-    { label: 'Home', icon: 'i-lucide-layout-dashboard', to: '/home' },
-    { label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' }
+    { label: 'Home', icon: 'i-lucide-layout-dashboard', to: '/home' }
   ]
 
+  // Roadmap vira um grupo pai (Roadmap + Lixeira Roadmap). A Lixeira só entra
+  // quando o usuário tem permissão de edição do roadmap.
+  const roadmapChildren: NavLinkChild[] = [{ label: 'Roadmap', to: '/roadmap' }]
   if (access.canEditRoadmap)
-    links.push({ label: 'Lixeira Roadmap', icon: 'i-lucide-trash-2', to: '/lixeira' })
+    roadmapChildren.push({ label: 'Lixeira Roadmap', to: '/lixeira' })
+
+  if (roadmapChildren.length > 1)
+    links.push({ label: 'Roadmap', icon: 'i-lucide-map', children: roadmapChildren })
+  else
+    links.push({ label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' })
 
   if (access.canManageRegistrations) {
     links.push({
@@ -121,20 +128,44 @@ const navLinks = computed<NavLinkItem[]>(() => {
     })
   }
 
+  links.push({
+    label: 'Apuração de KPIs',
+    icon: 'i-lucide-trending-up',
+    children: [
+      { label: 'Dashboard KPIs', to: '/dashboard-kpis' },
+      { label: 'Apuração KPIs', to: '/apuracao-kpis' }
+    ]
+  })
+
   if (access.canManageAccess)
     links.push({ label: 'Acessos', icon: 'i-lucide-shield-check', to: '/acessos' })
 
-  links.push({ label: 'Indicadores', icon: 'i-lucide-trending-up', disabled: true, badge: 'Em breve' })
   return links
 })
 
+function isRoadmapPath(path: string) {
+  return path.startsWith('/roadmap') || path.startsWith('/lixeira')
+}
+function isCadastrosPath(path: string) {
+  return path.startsWith('/products') || path === '/kpis' || path.startsWith('/kpis/')
+}
+function isApuracaoPath(path: string) {
+  return path.startsWith('/dashboard-kpis') || path.startsWith('/apuracao-kpis')
+}
+
 const expandedNavGroups = ref<Record<string, boolean>>({
-  Cadastros: route.path.startsWith('/products') || route.path.startsWith('/kpis')
+  'Roadmap': isRoadmapPath(route.path),
+  'Cadastros': isCadastrosPath(route.path),
+  'Apuração de KPIs': isApuracaoPath(route.path)
 })
 
 watch(() => route.path, (path) => {
-  if (path.startsWith('/products') || path.startsWith('/kpis'))
+  if (isRoadmapPath(path))
+    expandedNavGroups.value.Roadmap = true
+  if (isCadastrosPath(path))
     expandedNavGroups.value.Cadastros = true
+  if (isApuracaoPath(path))
+    expandedNavGroups.value['Apuração de KPIs'] = true
 })
 
 function isNavLinkActive(link: NavLinkItem) {

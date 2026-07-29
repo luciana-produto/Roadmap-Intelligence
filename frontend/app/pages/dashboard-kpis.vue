@@ -10,13 +10,14 @@ import {
 } from '~/utils/roadmapQuarter'
 import { buildPlanningDashboardUrl } from '~/utils/roadmapDashboardLink'
 import type { DashboardSelection } from '~/types/roadmapDashboards'
-import RoadmapDashboards from '~/components/roadmap/RoadmapDashboards.vue'
+import KpiApuracaoDashboards from '~/components/roadmap/KpiApuracaoDashboards.vue'
 
-useSeoMeta({ title: 'Dashboard · ProductHub' })
+useSeoMeta({ title: 'Dashboard KPIs · ProductHub' })
 
-const authStore = useAuthStore()
 const roadmapStore = useRoadmapStore()
+const kpiStore = useKpiStore()
 const { projects, demands, isLoading, selectedProjectId, selectedQuarterYear, selectedQuarterNumber } = storeToRefs(roadmapStore)
+const { kpis } = storeToRefs(kpiStore)
 
 const now = new Date()
 const currentYear = now.getFullYear()
@@ -26,12 +27,13 @@ const filterTeams = ref<string[]>([])
 const filterQuarters = ref<string[]>([1, 2, 3, 4].map(q => buildQuarterValue(currentYear, q)))
 
 onMounted(async () => {
-  // Garante que a home carregue TODOS os times e quarters (filtragem é feita no cliente).
+  // Carrega TODOS os times e quarters (filtragem é feita no cliente), como na home.
   selectedProjectId.value = null
   selectedQuarterYear.value = null
   selectedQuarterNumber.value = null
   await roadmapStore.fetchProjects()
   await roadmapStore.fetchDemands()
+  await kpiStore.fetchKpis()
 })
 
 const sortedProjects = computed(() =>
@@ -96,7 +98,7 @@ function toggleQuarterYear(values: string[]) {
   filterQuarters.value = [...next]
 }
 
-// ─── Escopo (mesma regra da planejamento: demandas + épicos simples) ─────────────
+// ─── Escopo (mesma regra da home: demandas + épicos simples) ─────────────────────
 const scopedDemands = computed(() => {
   const base = demands.value.filter(item => item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple))
   const teamFiltered = filterTeams.value.length
@@ -108,7 +110,7 @@ const scopedDemands = computed(() => {
   return teamFiltered.filter(d => filterQuarters.value.includes(buildQuarterValue(d.quarterYear, d.quarterNumber)))
 })
 
-// Ao clicar num item do dashboard, abre uma nova aba com a planejamento filtrada.
+// Totalizadores: abre uma nova aba com a planejamento filtrada pelo problema clicado.
 function handleSelect(selection: DashboardSelection) {
   const url = buildPlanningDashboardUrl({
     teams: filterTeams.value,
@@ -117,6 +119,16 @@ function handleSelect(selection: DashboardSelection) {
   })
   window.open(url, '_blank')
 }
+
+// Comparativo/resultados: abre o workspace de KPIs do épico numa nova aba.
+function handleOpenEpic(epicId: string) {
+  const epic = demands.value.find(item => item.id === epicId)
+  const projectId = epic?.projectId ?? epic?.projectIds?.[0] ?? ''
+  const params = new URLSearchParams({ kpiDemandId: epicId })
+  if (projectId)
+    params.set('projectId', projectId)
+  window.open(`/roadmap?${params.toString()}`, '_blank')
+}
 </script>
 
 <template>
@@ -124,25 +136,13 @@ function handleSelect(selection: DashboardSelection) {
     <!-- Cabeçalho + filtros -->
     <div class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
       <div>
-        <h1 class="text-2xl font-bold text-highlighted">
-          Olá, {{ authStore.user?.firstName ?? 'usuário' }} 👋
-        </h1>
+        <h1 class="text-2xl font-bold text-highlighted">Dashboard de KPIs</h1>
         <p class="text-sm text-muted mt-1">
-          Visão geral do roadmap. Clique em qualquer item do dashboard para abrir a planejamento filtrada em uma nova aba.
+          Apuração dos KPIs por épico. Clique nos totalizadores para ver os itens no roadmap, ou num épico para abrir seu workspace de KPIs.
         </p>
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
-        <!-- Atalho para o Dashboard de KPIs -->
-        <UButton
-          to="/dashboard-kpis"
-          icon="i-lucide-trending-up"
-          label="Dashboard de KPIs"
-          color="primary"
-          variant="soft"
-          size="sm"
-        />
-
         <!-- Times -->
         <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
           <button class="flex items-center gap-1.5 rounded-lg border border-default bg-default px-3 py-1.5 text-sm transition-colors hover:border-primary/40">
@@ -233,11 +233,13 @@ function handleSelect(selection: DashboardSelection) {
     <div v-if="isLoading && !demands.length" class="flex items-center justify-center py-20">
       <UIcon name="i-lucide-loader-circle" class="h-6 w-6 animate-spin text-muted" />
     </div>
-    <RoadmapDashboards
+    <KpiApuracaoDashboards
       v-else
       :demands="scopedDemands"
       :all-demands="demands"
+      :kpis="kpis"
       @select="handleSelect"
+      @open-epic="handleOpenEpic"
     />
   </div>
 </template>

@@ -311,6 +311,8 @@ const delayedTotals = computed(() => {
 
 const inconsistentDependencyCount = computed(() => props.demands.filter(hasInconsistentDependency).length)
 const missingIssueCount = computed(() => props.demands.filter(item => getDemandProblemKeys(item).includes('noJira')).length)
+const noKpiCount = computed(() => props.demands.filter(item => getDemandProblemKeys(item).includes('noKpi')).length)
+const doneNoKpiCount = computed(() => props.demands.filter(item => getDemandProblemKeys(item).includes('doneNoKpi')).length)
 
 function buildReasonTotals(items: RoadmapDemand[], getReason: (item: RoadmapDemand) => string | undefined, getLabel: (value: string | undefined) => string) {
   const withReason = items.filter(item => !!getReason(item))
@@ -352,7 +354,7 @@ function isDeprioritizationReasonActive(v: string) { return (af.value.deprioriti
 <template>
   <div class="space-y-4">
     <!-- Contadores de saúde -->
-    <div class="grid gap-4 sm:grid-cols-3">
+    <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
       <UCard class="ring-default" :ui="{ body: 'p-3.5' }">
         <div class="flex items-center gap-2">
           <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-300">
@@ -419,6 +421,44 @@ function isDeprioritizationReasonActive(v: string) { return (af.value.deprioriti
         >
           <p class="text-2xl font-bold leading-none text-sky-600 dark:text-sky-400">{{ missingIssueCount.toLocaleString('pt-BR') }}</p>
           <p class="mt-1 text-[11px] leading-tight text-muted">itens sem issue Jira vinculada</p>
+        </button>
+      </UCard>
+
+      <UCard class="ring-default" :ui="{ body: 'p-3.5' }">
+        <div class="flex items-center gap-2">
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300">
+            <UIcon name="i-lucide-target" class="h-4.5 w-4.5" />
+          </div>
+          <p class="text-sm font-semibold text-highlighted">Itens sem KPIs</p>
+        </div>
+        <button
+          type="button"
+          class="mt-3 block w-full rounded-md p-1.5 text-left transition-colors"
+          :class="isProblemActive('noKpi') ? 'bg-amber-50 ring-1 ring-amber-300 dark:bg-amber-900/20 dark:ring-amber-800' : 'hover:bg-elevated'"
+          title="Itens sem KPI associado"
+          @click="emitSelect({ kind: 'problem', value: 'noKpi' })"
+        >
+          <p class="text-2xl font-bold leading-none text-amber-600 dark:text-amber-400">{{ noKpiCount.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-[11px] leading-tight text-muted">itens sem KPI associado</p>
+        </button>
+      </UCard>
+
+      <UCard class="ring-default" :ui="{ body: 'p-3.5' }">
+        <div class="flex items-center gap-2">
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-pink-50 text-pink-600 dark:bg-pink-900/20 dark:text-pink-300">
+            <UIcon name="i-lucide-clipboard-x" class="h-4.5 w-4.5" />
+          </div>
+          <p class="text-sm font-semibold text-highlighted">Concluídos sem KPIs apurados</p>
+        </div>
+        <button
+          type="button"
+          class="mt-3 block w-full rounded-md p-1.5 text-left transition-colors"
+          :class="isProblemActive('doneNoKpi') ? 'bg-pink-50 ring-1 ring-pink-300 dark:bg-pink-900/20 dark:ring-pink-800' : 'hover:bg-elevated'"
+          title="Concluídos sem apuração de KPI"
+          @click="emitSelect({ kind: 'problem', value: 'doneNoKpi' })"
+        >
+          <p class="text-2xl font-bold leading-none text-pink-600 dark:text-pink-400">{{ doneNoKpiCount.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-[11px] leading-tight text-muted">concluídos sem KPI apurado</p>
         </button>
       </UCard>
     </div>
