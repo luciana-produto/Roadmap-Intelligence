@@ -16,6 +16,7 @@ useSeoMeta({ title: 'Dashboard · ProductHub' })
 
 const authStore = useAuthStore()
 const roadmapStore = useRoadmapStore()
+const route = useRoute()
 const { projects, demands, isLoading, selectedProjectId, selectedQuarterYear, selectedQuarterNumber } = storeToRefs(roadmapStore)
 
 const now = new Date()
@@ -32,6 +33,17 @@ onMounted(async () => {
   selectedQuarterNumber.value = null
   await roadmapStore.fetchProjects()
   await roadmapStore.fetchDemands()
+
+  // Filtros vindos do atalho "Dashboard completo" do roadmap (?teams=&quarters=).
+  const queryTeams = typeof route.query.teams === 'string' ? route.query.teams : null
+  const queryQuarters = typeof route.query.quarters === 'string' ? route.query.quarters : null
+  if (queryTeams !== null) {
+    filterTeams.value = queryTeams.split(',').map(v => v.trim())
+      .filter(Boolean)
+      .filter(id => projects.value.some(p => p.id === id))
+  }
+  if (queryQuarters !== null)
+    filterQuarters.value = queryQuarters.split(',').map(v => v.trim()).filter(Boolean)
 })
 
 const sortedProjects = computed(() =>

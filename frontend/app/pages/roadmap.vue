@@ -485,6 +485,14 @@ function handleDashboardSelect(selection: DashboardSelection) {
   }
 }
 
+// Abre o dashboard completo (home) em nova aba, levando os filtros de Time e Quarter atuais.
+function openFullDashboard() {
+  const params = new URLSearchParams()
+  params.set('teams', filterListProjectIds.value.join(','))
+  params.set('quarters', filterQuarters.value.join(','))
+  window.open(`/home?${params.toString()}`, '_blank')
+}
+
 function getEpicDisplayGroupKey(demand: Pick<RoadmapDemand, 'roadmapId' | 'epicId' | 'quarterYear' | 'quarterNumber' | 'type'>) {
   // Group by epicId only — demands from the same epic must share a single grouper
   // regardless of which quarter they belong to.
@@ -7926,25 +7934,37 @@ watch(activeDemandKpiId, async (value) => {
       <section class="-mt-1 space-y-3">
         <div class="flex items-start justify-between gap-3">
           <div>
-            <p class="text-sm font-semibold text-highlighted">Resumo do Quarter</p>
-            <p class="text-xs text-muted">Totalizadores por carga horária. Clique em qualquer item para filtrar a lista acima (clique de novo para remover).</p>
+            <p class="text-sm font-semibold text-highlighted">Pontos de atenção do roadmap</p>
+            <p class="text-xs text-muted">Clique em qualquer item para filtrar a lista acima (clique de novo para remover).</p>
           </div>
-          <UButton
-            v-if="hasActiveListFilters"
-            size="xs"
-            color="neutral"
-            variant="soft"
-            icon="i-lucide-filter-x"
-            label="Limpar filtros"
-            class="shrink-0"
-            @click="clearAllListFilters"
-          />
+          <div class="flex shrink-0 items-center gap-2">
+            <UButton
+              size="xs"
+              color="primary"
+              variant="soft"
+              icon="i-lucide-layout-dashboard"
+              label="Dashboard completo"
+              trailing-icon="i-lucide-external-link"
+              title="Abrir o dashboard completo em nova aba, com os filtros de Time e Quarter atuais"
+              @click="openFullDashboard"
+            />
+            <UButton
+              v-if="hasActiveListFilters"
+              size="xs"
+              color="neutral"
+              variant="soft"
+              icon="i-lucide-filter-x"
+              label="Limpar filtros"
+              @click="clearAllListFilters"
+            />
+          </div>
         </div>
 
         <RoadmapDashboards
           :demands="quarterFilteredDemands"
           :all-demands="demands"
           :active-filters="dashboardActiveFilters"
+          only-counters
           @select="handleDashboardSelect"
         />
       </section>

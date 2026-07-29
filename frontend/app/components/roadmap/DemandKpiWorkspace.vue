@@ -217,6 +217,10 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     jiraIssue: demand.jiraIssue ?? '',
     issueLinks: demand.issueLinks?.map(issue => ({ key: issue.key, url: issue.url ?? '' })) ?? [],
     hours: demand.hours,
+    // Preserva o tipo do épico (simples × com demandas) e a cor — sem isso o payload
+    // reseta isSimple para false (transformando épico simples em composto) e rowColor para null.
+    isSimple: demand.isSimple,
+    rowColor: demand.rowColor,
     promisedDate: demand.promisedDate ?? '',
     customers: demand.customers ?? [],
     dependencyDemandIds: demand.dependsOn.map(item => item.demandId),

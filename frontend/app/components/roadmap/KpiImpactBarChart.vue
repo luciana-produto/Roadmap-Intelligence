@@ -47,6 +47,8 @@ const ticks = computed(() =>
   [0, 0.25, 0.5, 0.75, 1].map(fraction => ({
     fraction,
     left: `${fraction * 100}%`,
+    // Extremos alinhados às bordas do gráfico; intermediários centralizados.
+    translate: fraction === 0 ? '0' : fraction === 1 ? '-100%' : '-50%',
     value: niceMax.value * fraction
   }))
 )
@@ -110,35 +112,35 @@ const trackStyle = {
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <template v-if="measured.length">
-      <!-- Eixo de valores (topo) -->
-      <div class="flex shrink-0 items-end gap-2 px-3.5 pt-2 pb-1">
-        <span class="w-28 shrink-0" />
-        <span class="relative h-4 flex-1">
+      <!-- Eixo de valores (topo), alinhado à largura do gráfico -->
+      <div class="shrink-0 px-3.5 pt-2 pb-1">
+        <div class="relative h-4">
           <span
             v-for="tick in ticks"
             :key="tick.fraction"
-            class="absolute bottom-0 -translate-x-1/2 whitespace-nowrap text-[10px] text-muted"
-            :style="{ left: tick.left }"
+            class="absolute bottom-0 whitespace-nowrap text-[10px] text-muted"
+            :style="{ left: tick.left, transform: `translateX(${tick.translate})` }"
           >{{ formatTick(tick.value, axisUnit) }}</span>
-        </span>
-        <span class="w-24 shrink-0" />
+        </div>
       </div>
 
-      <!-- Barras -->
-      <div class="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-3.5 pb-3 pt-1">
+      <!-- Barras: nome do épico + valor em cima, barra (largura total) embaixo -->
+      <div class="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-3.5 pb-3 pt-1">
         <button
           v-for="row in measured"
           :key="row.key"
           type="button"
-          class="flex w-full items-center gap-2 rounded-md py-0.5 text-left transition-colors hover:bg-elevated"
+          class="block w-full rounded-md py-0.5 text-left transition-colors hover:bg-elevated"
           :title="`${row.epicTitle} · ${row.kpiName} · ${formatValue(row.impact, row.unit)} · ${formatDate(row.impactDate)}`"
           @click="emit('openEpic', row.epicId)"
         >
-          <span class="w-28 shrink-0 truncate pr-1 text-right text-xs font-medium text-highlighted">{{ row.epicTitle }}</span>
-          <span class="relative h-5 flex-1 rounded-sm" :style="trackStyle">
-            <span class="absolute inset-y-0.5 left-0 rounded-r-sm transition-all duration-300" :class="barClass" :style="{ width: barPct(row.impact) }" />
-          </span>
-          <span class="w-24 shrink-0 truncate text-right text-xs font-bold tabular-nums" :class="valueClass">{{ formatValue(row.impact, row.unit) }}</span>
+          <div class="flex items-baseline gap-2">
+            <span class="min-w-0 flex-1 truncate text-sm font-medium text-highlighted">{{ row.epicTitle }}</span>
+            <span class="shrink-0 text-sm font-bold tabular-nums" :class="valueClass">{{ formatValue(row.impact, row.unit) }}</span>
+          </div>
+          <div class="relative mt-1 h-2.5 rounded-sm" :style="trackStyle">
+            <span class="absolute inset-y-0 left-0 rounded-r-sm transition-all duration-300" :class="barClass" :style="{ width: barPct(row.impact) }" />
+          </div>
         </button>
       </div>
 

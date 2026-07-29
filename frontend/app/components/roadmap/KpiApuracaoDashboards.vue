@@ -18,7 +18,6 @@ const emit = defineEmits<{
   openEpic: [epicId: string]
 }>()
 
-const itemsById = computed(() => new Map(props.allDemands.map(item => [item.id, item] as const)))
 const kpiById = computed(() => new Map(props.kpis.map(kpi => [kpi.id, kpi] as const)))
 
 // ─── Formatação ──────────────────────────────────────────────────────────────
@@ -74,33 +73,9 @@ function attainmentPct(operation: KpiOperation, estimated: number | null, apurad
   return (apurado / estimated) * 100
 }
 
-// ─── Totalizadores (sem KPIs / concluídos sem apuração) ──────────────────────
-// Mesma regra dos "problemas" do dashboard da home (noKpi / doneNoKpi).
-function kpiProblemFlags(demand: RoadmapDemand): { noKpi: boolean, doneNoKpi: boolean } {
-  if (demand.itemType === 'Epic') {
-    const noKpi = demand.hasNoKpi || demand.kpiLinks.length === 0
-    const doneNoKpi = demand.status === 'Done' && !demand.hasNoKpi && demand.kpiLinks.length > 0
-      && (demand.kpiMeasurements?.length ?? 0) === 0
-    return { noKpi, doneNoKpi }
-  }
-  if (demand.itemType !== 'Demand')
-    return { noKpi: false, doneNoKpi: false }
-
-  const epic = demand.epicId ? itemsById.value.get(demand.epicId) ?? null : null
-  const noKpi = !epic || epic.itemType !== 'Epic' || epic.hasNoKpi || epic.kpiLinks.length === 0
-  let doneNoKpi = false
-  if (epic?.itemType === 'Epic' && epic.status === 'Done' && demand.status === 'Done'
-    && !epic.hasNoKpi && epic.kpiLinks.length > 0) {
-    doneNoKpi = (epic.kpiMeasurements?.length ?? 0) === 0
-  }
-  return { noKpi, doneNoKpi }
-}
-
-const noKpiCount = computed(() => props.demands.filter(d => kpiProblemFlags(d).noKpi).length)
-const doneNoKpiCount = computed(() => props.demands.filter(d => kpiProblemFlags(d).doneNoKpi).length)
-
-// ─── Épicos em escopo (donos dos KPIs) ───────────────────────────────────────
-const scopedEpics = computed(() => {
+// ─── Épicos em escopo ─────────────────────────────────────────────────────────
+// Todos os épicos donos das demandas do escopo (independente do status de KPI).
+const allScopedEpics = computed(() => {
   const ids = new Set<string>()
   for (const d of props.demands) {
     if (d.itemType === 'Epic')
@@ -108,9 +83,78 @@ const scopedEpics = computed(() => {
     else if (d.epicId)
       ids.add(d.epicId)
   }
-  return props.allDemands.filter(e =>
-    e.itemType === 'Epic' && ids.has(e.id) && !e.hasNoKpi && e.kpiLinks.length > 0
-  )
+  return props.allDemands.filter(e => e.itemType === 'Epic' && ids.has(e.id))
+})
+
+// Só os épicos QUE TÊM KPI (base dos rankings/resultados).
+const scopedEpics = computed(() =>
+  allScopedEpics.value.filter(e => !e.hasNoKpi && e.kpiLinks.length > 0)
+)
+
+// ─── Cobertura de KPI dos épicos ─────────────────────────────────────────────
+// comKpi: tem ≥1 KPI · naoAplicavel: marcado como "sem KPI" (hasNoKpi) · pendente: falta associar.
+type KpiCoverage = 'comKpi' | 'pendente' | 'naoAplicavel'
+function epicKpiCoverage(epic: RoadmapDemand): KpiCoverage {
+  if (epic.hasNoKpi)
+    return 'naoAplicavel'
+  if (epic.kpiLinks.length > 0)
+    return 'comKpi'
+  return 'pendente'
+}
+function pct(count: number, total: number): number {
+  return total > 0 ? (count / total) * 100 : 0
+}
+
+const coverageCounts = computed(() => {
+  let comKpi = 0
+  let pendente = 0
+  let naoAplicavel = 0
+  for (const epic of allScopedEpics.value) {
+    const coverage = epicKpiCoverage(epic)
+    if (coverage === 'comKpi') comKpi++
+    else if (coverage === 'pendente') pendente++
+    else naoAplicavel++
+  }
+  return { comKpi, pendente, naoAplicavel, total: allScopedEpics.value.length }
+})
+
+// Concluídos sem apuração (épicos): status Done, com KPI e sem nenhuma medição.
+const doneNoApuracaoCount = computed(() =>
+  allScopedEpics.value.filter(e =>
+    e.status === 'Done' && !e.hasNoKpi && e.kpiLinks.length > 0 && (e.kpiMeasurements?.length ?? 0) === 0
+  ).length
+)
+
+// Distribuição da cobertura (para o dashboard "Cobertura de KPI").
+const coverageDistribution = computed(() => {
+  const { comKpi, pendente, naoAplicavel, total } = coverageCounts.value
+  return [
+    { key: 'comKpi', label: 'Com KPI', count: comKpi, percentage: pct(comKpi, total), bar: 'bg-emerald-500', dot: 'bg-emerald-500 dark:bg-emerald-400' },
+    { key: 'pendente', label: 'KPI pendente', count: pendente, percentage: pct(pendente, total), bar: 'bg-amber-500', dot: 'bg-amber-500 dark:bg-amber-400' },
+    { key: 'naoAplicavel', label: 'KPI não aplicável', count: naoAplicavel, percentage: pct(naoAplicavel, total), bar: 'bg-slate-400', dot: 'bg-slate-400 dark:bg-slate-500' }
+  ]
+})
+
+// Classificação dos épicos marcados como "sem KPI" (não aplicável).
+const noKpiClassificationLabels: Record<string, string> = {
+  Relationship: 'Relacionamento', Mandatory: 'Mandatório', Technical: 'Técnico'
+}
+const noKpiClassificationTotals = computed(() => {
+  const map = new Map<string, number>()
+  let total = 0
+  for (const epic of allScopedEpics.value) {
+    if (!epic.hasNoKpi)
+      continue
+    total++
+    const key = epic.noKpiClassification ?? 'Unclassified'
+    map.set(key, (map.get(key) ?? 0) + 1)
+  }
+  return {
+    total,
+    items: [...map.entries()]
+      .map(([key, count]) => ({ key, label: noKpiClassificationLabels[key] ?? 'Sem classificação', count, percentage: pct(count, total) }))
+      .sort((a, b) => b.count - a.count)
+  }
 })
 
 function latestMeasurement(epic: RoadmapDemand, kpiId: string): KpiMeasurement | null {
@@ -301,24 +345,32 @@ const negativeRows = computed(() =>
 
 <template>
   <div class="space-y-4">
-    <!-- Totalizadores (levam ao roadmap filtrado) -->
-    <div class="grid gap-4 sm:grid-cols-2">
+    <!-- Totalizadores (épicos) -->
+    <div class="grid gap-4 sm:grid-cols-3">
       <UCard class="ring-default" :ui="{ body: 'p-3.5' }">
         <div class="flex items-center gap-2">
           <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300">
             <UIcon name="i-lucide-target" class="h-4.5 w-4.5" />
           </div>
-          <p class="text-sm font-semibold text-highlighted">Itens sem KPIs</p>
+          <p class="text-sm font-semibold text-highlighted">KPI pendente</p>
         </div>
-        <button
-          type="button"
-          class="mt-3 block w-full rounded-md p-1.5 text-left transition-colors hover:bg-elevated"
-          title="Abrir no roadmap os itens sem KPIs associados"
-          @click="emit('select', { kind: 'problem', value: 'noKpi' })"
-        >
-          <p class="text-2xl font-bold leading-none text-amber-600 dark:text-amber-400">{{ noKpiCount.toLocaleString('pt-BR') }}</p>
-          <p class="mt-1 text-[11px] leading-tight text-muted">itens sem KPI associado</p>
-        </button>
+        <div class="mt-3 p-1.5">
+          <p class="text-2xl font-bold leading-none text-amber-600 dark:text-amber-400">{{ coverageCounts.pendente.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-[11px] leading-tight text-muted">épicos sem KPI — falta associar</p>
+        </div>
+      </UCard>
+
+      <UCard class="ring-default" :ui="{ body: 'p-3.5' }">
+        <div class="flex items-center gap-2">
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800/40 dark:text-slate-300">
+            <UIcon name="i-lucide-circle-slash" class="h-4.5 w-4.5" />
+          </div>
+          <p class="text-sm font-semibold text-highlighted">KPI não aplicável</p>
+        </div>
+        <div class="mt-3 p-1.5">
+          <p class="text-2xl font-bold leading-none text-slate-600 dark:text-slate-300">{{ coverageCounts.naoAplicavel.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-[11px] leading-tight text-muted">épicos marcados como sem KPI (justificado)</p>
+        </div>
       </UCard>
 
       <UCard class="ring-default" :ui="{ body: 'p-3.5' }">
@@ -326,7 +378,7 @@ const negativeRows = computed(() =>
           <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-pink-50 text-pink-600 dark:bg-pink-900/20 dark:text-pink-300">
             <UIcon name="i-lucide-clipboard-x" class="h-4.5 w-4.5" />
           </div>
-          <p class="text-sm font-semibold text-highlighted">Concluídos sem KPIs apurados</p>
+          <p class="text-sm font-semibold text-highlighted">Concluídos sem apuração</p>
         </div>
         <button
           type="button"
@@ -334,9 +386,59 @@ const negativeRows = computed(() =>
           title="Abrir no roadmap os concluídos sem apuração de KPI"
           @click="emit('select', { kind: 'problem', value: 'doneNoKpi' })"
         >
-          <p class="text-2xl font-bold leading-none text-pink-600 dark:text-pink-400">{{ doneNoKpiCount.toLocaleString('pt-BR') }}</p>
-          <p class="mt-1 text-[11px] leading-tight text-muted">concluídos sem KPI apurado</p>
+          <p class="text-2xl font-bold leading-none text-pink-600 dark:text-pink-400">{{ doneNoApuracaoCount.toLocaleString('pt-BR') }}</p>
+          <p class="mt-1 text-[11px] leading-tight text-muted">épicos concluídos sem KPI apurado</p>
         </button>
+      </UCard>
+    </div>
+
+    <!-- Cobertura de KPI + Classificação dos sem KPI -->
+    <div class="grid items-stretch gap-4 xl:grid-cols-2">
+      <UCard class="flex flex-col ring-default" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
+        <div class="-mt-1 flex items-center gap-2 border-b border-default px-2.5 py-1.5">
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-300">
+            <UIcon name="i-lucide-pie-chart" class="h-4.5 w-4.5" />
+          </div>
+          <p class="flex-1 text-sm font-semibold text-highlighted">Cobertura de KPI</p>
+          <span class="shrink-0 text-[11px] text-muted">{{ coverageCounts.total }} épicos</span>
+        </div>
+        <div v-if="coverageCounts.total" class="space-y-2.5 px-3.5 py-3">
+          <div v-for="item in coverageDistribution" :key="item.key">
+            <div class="flex items-center gap-2">
+              <span class="h-2.5 w-2.5 shrink-0 rounded-full" :class="item.dot" />
+              <span class="flex-1 truncate text-sm font-medium text-highlighted">{{ item.label }}</span>
+              <span class="shrink-0 text-xs font-semibold text-highlighted">{{ item.percentage.toFixed(1) }}%</span>
+              <span class="shrink-0 rounded-full bg-elevated px-1.5 py-0.5 text-[11px] text-muted">{{ item.count }} ép.</span>
+            </div>
+            <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-elevated">
+              <div class="h-full rounded-full transition-all duration-300" :class="item.bar" :style="{ width: `${Math.min(item.percentage, 100)}%` }" />
+            </div>
+          </div>
+        </div>
+        <div v-else class="px-3.5 py-5 text-sm text-muted">Nenhum épico no escopo selecionado.</div>
+      </UCard>
+
+      <UCard class="flex flex-col ring-default" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
+        <div class="-mt-1 flex items-center gap-2 border-b border-default px-2.5 py-1.5">
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-800/40 dark:text-slate-300">
+            <UIcon name="i-lucide-tags" class="h-4.5 w-4.5" />
+          </div>
+          <p class="flex-1 text-sm font-semibold text-highlighted">Classificação — KPI não aplicável</p>
+          <span class="shrink-0 text-[11px] text-muted">{{ noKpiClassificationTotals.total }} épicos</span>
+        </div>
+        <div v-if="noKpiClassificationTotals.items.length" class="space-y-2.5 px-3.5 py-3">
+          <div v-for="item in noKpiClassificationTotals.items" :key="item.key">
+            <div class="flex items-center gap-2">
+              <span class="flex-1 truncate text-sm font-medium text-highlighted">{{ item.label }}</span>
+              <span class="shrink-0 text-xs font-semibold text-highlighted">{{ item.percentage.toFixed(1) }}%</span>
+              <span class="shrink-0 rounded-full bg-elevated px-1.5 py-0.5 text-[11px] text-muted">{{ item.count }} ép.</span>
+            </div>
+            <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-elevated">
+              <div class="h-full rounded-full bg-slate-400 transition-all duration-300 dark:bg-slate-500" :style="{ width: `${Math.min(item.percentage, 100)}%` }" />
+            </div>
+          </div>
+        </div>
+        <div v-else class="px-3.5 py-5 text-sm text-muted">Nenhum épico marcado como "sem KPI" no escopo.</div>
       </UCard>
     </div>
 
