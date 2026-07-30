@@ -9,8 +9,12 @@ import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFor
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
 import RoadmapDashboards from '~/components/roadmap/RoadmapDashboards.vue'
+import RoadmapPriorityMatrix from '~/components/roadmap/RoadmapPriorityMatrix.vue'
+import RoadmapPriorityList from '~/components/roadmap/RoadmapPriorityList.vue'
+import RoadmapPriorityHelp from '~/components/roadmap/RoadmapPriorityHelp.vue'
 import type { DashboardSelection } from '~/types/roadmapDashboards'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
+import { KPI_INDICATOR_LABELS, CONFIDENCE_LABELS, formatKpiValue } from '~/utils/kpiApuracao'
 import {
   BACKLOG_QUARTER,
   PRIORITIZED_BACKLOG_QUARTER,
@@ -48,7 +52,9 @@ const demandItems = computed(() => demands.value.filter(item => item.itemType ==
 const itemsById = computed(() => new Map(demands.value.map(item => [item.id, item] as const)))
 
 // ─── View mode ───────────────────────────────────────────────────────────────
-const viewMode = ref<'list' | 'hierarchy'>(route.query.view === 'hierarchy' ? 'hierarchy' : 'list')
+const viewMode = ref<'list' | 'hierarchy' | 'priorizacao'>(
+  route.query.view === 'hierarchy' ? 'hierarchy' : route.query.view === 'priorizacao' ? 'priorizacao' : 'list'
+)
 const planningBulkEditModalOpen = ref(false)
 
 // ─── Quarter phase ────────────────────────────────────────────────────────────
@@ -242,6 +248,8 @@ function openDemandKpiWorkspace(demand: RoadmapDemand) {
 
   if (viewMode.value === 'hierarchy')
     query.view = 'hierarchy'
+  else if (viewMode.value === 'priorizacao')
+    query.view = 'priorizacao'
 
   navigateTo({
     path: '/roadmap',
@@ -257,6 +265,8 @@ function closeDemandKpiWorkspace() {
 
   if (viewMode.value === 'hierarchy')
     query.view = 'hierarchy'
+  else if (viewMode.value === 'priorizacao')
+    query.view = 'priorizacao'
 
   navigateTo({
     path: '/roadmap',
@@ -299,6 +309,100 @@ function getDemandKpiSummary(demand: RoadmapDemand) {
     actionLabel: 'Incluir KPI'
   }
 }
+
+// ─── Tooltip com o detalhamento de KPIs do épico (hover no badge) ─────────────
+const kpiCatalogById = computed(() => new Map(availableKpis.value.map(kpi => [kpi.id, kpi] as const)))
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
+function buildKpiTooltipHtml(epic: RoadmapDemand): string {
+  if (epic.hasNoKpi) {
+    const just = epic.noKpiClassification ? ` · ${escapeHtml(getNoKpiClassificationLabel(epic.noKpiClassification))}` : ''
+    return `<p class="text-xs text-muted">Marcado como <span class="font-medium text-highlighted">sem KPI</span>${just}</p>`
+  }
+  if (!epic.kpiLinks.length)
+    return '<p class="text-xs text-muted">Nenhum KPI associado.</p>'
+
+  // Negócio primeiro (movem as alavancas), depois Produto/indefinido.
+  const typeWeight = (kpiId: string) => (kpiCatalogById.value.get(kpiId)?.type === 'Business' ? 0 : 1)
+  const links = [...epic.kpiLinks].sort((a, b) => typeWeight(a.kpiId) - typeWeight(b.kpiId))
+
+  const rows = links.map((link) => {
+    const kpi = kpiCatalogById.value.get(link.kpiId)
+    const typeChip = kpi?.type === 'Business' ? 'Negócio' : kpi?.type === 'Product' ? 'Produto' : (kpi ? KPI_INDICATOR_LABELS[kpi.indicator] : '—')
+    const chipTone = kpi?.type === 'Business'
+      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+      : 'bg-elevated text-muted'
+    const arrow = kpi?.operation === 'HigherIsBetter' ? '↑' : kpi?.operation === 'LowerIsBetter' ? '↓' : ''
+    const meta = link.estimatedImpact != null ? `${arrow} ${escapeHtml(formatKpiValue(link.estimatedImpact, link.unit))}` : '—'
+    const conf = CONFIDENCE_LABELS[link.confidenceLevel] ?? ''
+    return `
+      <div class="flex items-center gap-2 py-1">
+        <span class="shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold ${chipTone}">${escapeHtml(typeChip)}</span>
+        <span class="min-w-0 flex-1 truncate text-highlighted">${escapeHtml(link.kpiName)}</span>
+        <span class="shrink-0 font-semibold text-highlighted">${meta}</span>
+        <span class="shrink-0 text-[10px] text-muted">${escapeHtml(conf)}</span>
+      </div>`
+  }).join('')
+
+  return `<p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted">Impacto estimado · confiança</p>${rows}`
+}
+
+let kpiTooltipEl: HTMLDivElement | null = null
+let kpiTooltipScrollHandler: (() => void) | null = null
+
+function hideKpiTooltip() {
+  if (kpiTooltipEl)
+    kpiTooltipEl.classList.add('hidden')
+  if (kpiTooltipScrollHandler) {
+    window.removeEventListener('scroll', kpiTooltipScrollHandler, true)
+    kpiTooltipScrollHandler = null
+  }
+}
+
+function showKpiTooltip(anchor: HTMLElement, demand: RoadmapDemand) {
+  const epic = demand.itemType === 'Epic'
+    ? demand
+    : (demand.epicId ? itemsById.value.get(demand.epicId) ?? null : null)
+  if (!epic || epic.itemType !== 'Epic')
+    return
+
+  if (!kpiTooltipEl) {
+    kpiTooltipEl = document.createElement('div')
+    kpiTooltipEl.className = 'pointer-events-none fixed z-50 hidden w-72 max-w-[90vw] rounded-lg border border-default bg-default p-2.5 text-xs shadow-lg'
+    document.body.appendChild(kpiTooltipEl)
+  }
+
+  kpiTooltipEl.innerHTML = buildKpiTooltipHtml(epic)
+  kpiTooltipEl.classList.remove('hidden')
+
+  const rect = anchor.getBoundingClientRect()
+  const maxLeft = window.innerWidth - kpiTooltipEl.offsetWidth - 8
+  const left = Math.max(8, Math.min(rect.left, maxLeft))
+  let top = rect.bottom + 6
+  if (top + kpiTooltipEl.offsetHeight > window.innerHeight - 8)
+    top = Math.max(8, rect.top - kpiTooltipEl.offsetHeight - 6)
+  kpiTooltipEl.style.left = `${left}px`
+  kpiTooltipEl.style.top = `${top}px`
+
+  kpiTooltipScrollHandler = () => hideKpiTooltip()
+  window.addEventListener('scroll', kpiTooltipScrollHandler, true)
+}
+
+onUnmounted(() => {
+  hideKpiTooltip()
+  if (kpiTooltipEl) {
+    kpiTooltipEl.remove()
+    kpiTooltipEl = null
+  }
+})
 
 const listProblemOptions = [
   { value: 'overdueOpen', label: 'Itens atrasados' },
@@ -1367,6 +1471,20 @@ const quarterFilteredDemands = computed(() => {
   return projectFiltered.filter(d =>
     filterQuarters.value.includes(buildQuarterValue(d.quarterYear, d.quarterNumber))
   )
+})
+
+// Conjunto para a priorização (visão por épico). quarterFilteredDemands só traz demandas +
+// épicos simples, então épicos COMPOSTOS SEM nenhuma demanda ficariam invisíveis. Aqui os
+// incluímos, tratando-os como Backlog (respeitando os filtros de time e de quarter).
+const priorityDemands = computed(() => {
+  const epicsWithDemands = new Set(demandItems.value.filter(d => d.epicId).map(d => d.epicId))
+  const childlessComposite = epicItems.value.filter(e => !e.isSimple && !epicsWithDemands.has(e.id))
+  const projectOk = (e: RoadmapDemand) =>
+    !filterListProjectIds.value.length || (e.projectIds ?? []).some(pid => filterListProjectIds.value.includes(pid))
+  // Sem demandas ⇒ Backlog: só aparece com "Todos os quarters" ou com Backlog no filtro.
+  const quarterOk = !filterQuarters.value.length || filterQuarters.value.includes(BACKLOG_QUARTER.value)
+  const extra = quarterOk ? childlessComposite.filter(projectOk) : []
+  return extra.length ? [...quarterFilteredDemands.value, ...extra] : quarterFilteredDemands.value
 })
 
 const filteredDemands = computed(() => {
@@ -2775,6 +2893,8 @@ function syncListSectionDividers() {
               event.stopPropagation()
               openDemandKpiWorkspace(headerMeta.epic)
             })
+            button.addEventListener('mouseenter', () => showKpiTooltip(button, headerMeta.epic))
+            button.addEventListener('mouseleave', hideKpiTooltip)
             container.appendChild(button)
 
             if (headerMeta.epic.hasNoKpi && headerMeta.epic.noKpiClassification) {
@@ -3713,6 +3833,25 @@ function openHierarchyView() {
       view: 'hierarchy'
     }
   })
+}
+
+function openPriorityView() {
+  navigateTo({ path: '/roadmap', query: { view: 'priorizacao' } })
+}
+
+// Sub-aba do modo Priorização: matriz (bolhas) ou lista (ranking).
+const priorityTab = ref<'matriz' | 'lista'>('lista')
+
+function openEpicFromPriority(epicId: string) {
+  const epic = itemsById.value.get(epicId)
+  if (epic)
+    openDemandKpiWorkspace(epic)
+}
+
+function editEpicFromPriority(epicId: string) {
+  const epic = itemsById.value.get(epicId)
+  if (epic)
+    openEditModal(epic)
 }
 
 function openCapacityModal() {
@@ -6564,7 +6703,9 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
           onClick: () => {
             if (isClickable)
               openDemandKpiWorkspace(row.original)
-          }
+          },
+          onMouseenter: (event: MouseEvent) => showKpiTooltip(event.currentTarget as HTMLElement, row.original),
+          onMouseleave: () => hideKpiTooltip()
         }, summary.label)
       ])
     }
@@ -6976,6 +7117,9 @@ async function initializeRoadmapPage() {
     roadmapStore.fetchCustomerSuggestions()
   ])
 
+  // Carrega o catálogo de KPIs para alimentar o tooltip de KPIs dos épicos (indicador/tipo/operação).
+  void kpiStore.fetchKpis()
+
   // Aplica o filtro do item clicado no dashboard da home. Feito por último: o watcher de
   // filterListProjectIds (que zera filtros ao trocar de time) já rodou, então este sobrevive.
   applyDashboardQueryFilter(dfKind, dfValue)
@@ -7002,7 +7146,7 @@ function applyDashboardQueryFilter(kind: string | null, value: string | null) {
 void initializeRoadmapPage()
 
 watch(() => route.query.view, (value) => {
-  viewMode.value = value === 'hierarchy' ? 'hierarchy' : 'list'
+  viewMode.value = value === 'hierarchy' ? 'hierarchy' : value === 'priorizacao' ? 'priorizacao' : 'list'
 }, { immediate: true })
 
 watch(activeDemandKpiId, async (value) => {
@@ -7128,6 +7272,14 @@ watch(activeDemandKpiId, async (value) => {
               :variant="viewMode === 'hierarchy' ? 'soft' : 'ghost'"
               label="Roadmap"
               @click="openHierarchyView"
+            />
+            <UButton
+              size="sm"
+              color="neutral"
+              icon="i-lucide-target"
+              :variant="viewMode === 'priorizacao' ? 'soft' : 'ghost'"
+              label="Priorização"
+              @click="openPriorityView"
             />
           </div>
           <UDropdownMenu v-if="canEditRoadmap" :items="createMenuItems">
@@ -7983,8 +8135,148 @@ watch(activeDemandKpiId, async (value) => {
       </div>
     </template>
 
-    <template v-else>
+    <template v-else-if="viewMode === 'hierarchy'">
       <RoadmapHierarchyPage v-model:project-ids="filterListProjectIds" />
+    </template>
+
+    <template v-else>
+      <div class="rounded-[24px] bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(248,250,252,0.88))] px-4 py-4 shadow-sm dark:bg-[linear-gradient(135deg,rgba(23,23,23,0.94),rgba(31,41,55,0.78))]">
+        <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+          <div class="min-w-0">
+            <h1 class="text-lg font-semibold tracking-tight text-highlighted">Priorização</h1>
+            <p class="mt-1 truncate text-xs text-muted">Impacto × esforço dos épicos — para priorizar no início do quarter.</p>
+          </div>
+          <div class="inline-flex items-center rounded-xl border border-default bg-default/80 p-1 shadow-sm backdrop-blur">
+            <UButton size="sm" color="neutral" icon="i-lucide-layout-list" :variant="viewMode === 'list' ? 'soft' : 'ghost'" label="Planejamento" @click="openListView" />
+            <UButton size="sm" color="neutral" icon="i-lucide-workflow" :variant="viewMode === 'hierarchy' ? 'soft' : 'ghost'" label="Roadmap" @click="openHierarchyView" />
+            <UButton size="sm" color="neutral" icon="i-lucide-target" :variant="viewMode === 'priorizacao' ? 'soft' : 'ghost'" label="Priorização" @click="openPriorityView" />
+          </div>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <!-- Time -->
+          <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+            <button class="flex items-center gap-1.5 rounded-lg border border-default bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40">
+              <UIcon name="i-lucide-folder-kanban" class="w-3.5 h-3.5 shrink-0 text-muted" />
+              <span class="text-left truncate text-highlighted">{{ filterListProjectsLabel }}</span>
+              <UBadge v-if="filterListProjectIds.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ filterListProjectIds.length }}</UBadge>
+              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+            </button>
+            <template #content>
+              <div class="py-1 min-w-[220px] max-h-72 overflow-y-auto">
+                <button
+                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                  :class="filterListProjectIds.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
+                  @click="filterListProjectIds = []"
+                >
+                  <UIcon v-if="filterListProjectIds.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
+                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                  Todos os times
+                </button>
+                <button
+                  v-for="project in sortedProjects"
+                  :key="project.id"
+                  class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                  :class="filterListProjectIds.includes(project.id) ? 'text-primary' : 'text-highlighted'"
+                  @click="toggleListProjectFilter(project.id)"
+                >
+                  <UIcon v-if="filterListProjectIds.includes(project.id)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
+                  <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                  {{ project.name }}
+                </button>
+              </div>
+            </template>
+          </UPopover>
+
+          <!-- Quarter -->
+          <UPopover :content="{ side: 'bottom', align: 'start', sideOffset: 8 }">
+            <button class="flex items-center gap-1.5 rounded-lg border border-default bg-background px-3 py-1.5 text-sm transition-colors hover:border-primary/40">
+              <UIcon name="i-lucide-calendar" class="w-3.5 h-3.5 shrink-0 text-muted" />
+              <span class="text-left truncate text-highlighted">{{ quarterFilterLabel }}</span>
+              <UBadge v-if="filterQuarters.length" size="xs" color="primary" variant="solid" class="shrink-0">{{ filterQuarters.length }}</UBadge>
+              <UIcon name="i-lucide-chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted" />
+            </button>
+            <template #content>
+              <div class="min-w-[260px]">
+                <div class="flex flex-wrap items-center gap-1.5 border-b border-default px-3 py-2">
+                  <span class="text-[11px] font-medium text-muted">Anos:</span>
+                  <button
+                    v-for="group in quarterYearOptions"
+                    :key="`prio-year-${group.year}`"
+                    type="button"
+                    class="rounded-full border px-2 py-0.5 text-[11px] font-medium transition-colors"
+                    :class="isQuarterYearFullySelected(group.values) ? 'border-primary/50 bg-primary/10 text-primary' : 'border-default text-highlighted hover:border-primary/40'"
+                    @click="toggleQuarterYear(group.values)"
+                  >
+                    {{ group.year }}
+                  </button>
+                </div>
+                <div class="py-1 max-h-72 overflow-y-auto">
+                  <button
+                    class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                    :class="filterQuarters.length === 0 ? 'text-primary font-medium' : 'text-highlighted'"
+                    @click="filterQuarters = []"
+                  >
+                    <UIcon v-if="filterQuarters.length === 0" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0" />
+                    <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                    Todos os quarters
+                  </button>
+                  <button
+                    v-for="opt in quarterOptions"
+                    :key="`prio-${opt.value}`"
+                    class="w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-elevated transition-colors"
+                    :class="filterQuarters.includes(opt.value) ? 'text-primary' : 'text-highlighted'"
+                    @click="toggleQuarterFilter(opt.value)"
+                  >
+                    <UIcon v-if="filterQuarters.includes(opt.value)" name="i-lucide-check" class="w-3.5 h-3.5 shrink-0 text-primary" />
+                    <span v-else class="inline-block w-3.5 h-3.5 shrink-0" />
+                    {{ opt.label }}
+                  </button>
+                </div>
+              </div>
+            </template>
+          </UPopover>
+
+          <!-- Visões (Matriz | Lista) + ajuda: à direita, na mesma linha dos filtros -->
+          <div class="ml-auto flex items-center gap-2">
+            <div class="inline-flex items-center rounded-lg border border-default bg-default/80 p-0.5">
+              <UButton
+                size="xs"
+                color="neutral"
+                icon="i-lucide-layout-dashboard"
+                :variant="priorityTab === 'matriz' ? 'soft' : 'ghost'"
+                label="Matriz"
+                @click="priorityTab = 'matriz'"
+              />
+              <UButton
+                size="xs"
+                color="neutral"
+                icon="i-lucide-list-checks"
+                :variant="priorityTab === 'lista' ? 'soft' : 'ghost'"
+                label="Lista"
+                @click="priorityTab = 'lista'"
+              />
+            </div>
+            <RoadmapPriorityHelp />
+          </div>
+        </div>
+      </div>
+
+      <RoadmapPriorityMatrix
+        v-if="priorityTab === 'matriz'"
+        :demands="priorityDemands"
+        :all-demands="demands"
+        :kpis="availableKpis"
+        @open-epic="openEpicFromPriority"
+      />
+      <RoadmapPriorityList
+        v-else
+        :demands="priorityDemands"
+        :all-demands="demands"
+        :kpis="availableKpis"
+        @open-epic="openEpicFromPriority"
+        @edit-epic="editEpicFromPriority"
+      />
     </template>
 
     <!-- Floating bulk-actions bar: overlays the bottom of the viewport so selecting items

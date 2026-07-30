@@ -143,6 +143,16 @@ function handleOpenEpic(epicId: string) {
       </div>
 
       <div class="flex flex-wrap items-center gap-2">
+        <!-- Atalho para o dashboard da home -->
+        <UButton
+          to="/home"
+          icon="i-lucide-trending-up"
+          label="Dashboard Roadmap"
+          color="primary"
+          variant="soft"
+          size="sm"
+        />
+
         <!-- Times -->
         <UPopover :content="{ side: 'bottom', align: 'end', sideOffset: 8 }">
           <button class="flex items-center gap-1.5 rounded-lg border border-default bg-default px-3 py-1.5 text-sm transition-colors hover:border-primary/40">

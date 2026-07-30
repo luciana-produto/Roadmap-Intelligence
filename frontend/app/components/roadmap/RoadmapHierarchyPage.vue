@@ -2621,6 +2621,15 @@ onUnmounted(() => {
           >
             Roadmap
           </UButton>
+          <UButton
+            size="sm"
+            color="neutral"
+            variant="ghost"
+            icon="i-lucide-target"
+            @click="navigateTo({ path: '/roadmap', query: currentPrimaryProjectId ? { view: 'priorizacao', projectId: currentPrimaryProjectId } : { view: 'priorizacao' } })"
+          >
+            Priorização
+          </UButton>
         </div>
         <UDropdownMenu v-if="canEditRoadmap" :items="createMenuItems">
           <UButton icon="i-lucide-plus" label="Novo Item" />

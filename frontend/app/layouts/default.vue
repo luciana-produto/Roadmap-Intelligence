@@ -117,6 +117,15 @@ const navLinks = computed<NavLinkItem[]>(() => {
   else
     links.push({ label: 'Roadmap', icon: 'i-lucide-map', to: '/roadmap' })
 
+  links.push({
+    label: 'Apuração de KPIs',
+    icon: 'i-lucide-trending-up',
+    children: [
+      { label: 'Dashboard', to: '/dashboard-kpis' },
+      { label: 'Resultados', to: '/apuracao-kpis' }
+    ]
+  })
+
   if (access.canManageRegistrations) {
     links.push({
       label: 'Cadastros',
@@ -127,15 +136,6 @@ const navLinks = computed<NavLinkItem[]>(() => {
       ]
     })
   }
-
-  links.push({
-    label: 'Apuração de KPIs',
-    icon: 'i-lucide-trending-up',
-    children: [
-      { label: 'Dashboard KPIs', to: '/dashboard-kpis' },
-      { label: 'Apuração KPIs', to: '/apuracao-kpis' }
-    ]
-  })
 
   if (access.canManageAccess)
     links.push({ label: 'Acessos', icon: 'i-lucide-shield-check', to: '/acessos' })

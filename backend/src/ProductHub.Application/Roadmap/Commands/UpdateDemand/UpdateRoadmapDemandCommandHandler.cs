@@ -265,6 +265,17 @@ public sealed class UpdateRoadmapDemandCommandHandler(
                 .Where(id => id != currentDemand.Id),
             cancellationToken);
 
+        // Hidrata os vínculos de KPI do épico/demanda para a resposta ficar consistente com o GET.
+        // Sem isso, a resposta do update volta com kpiLinks vazio e o front marca o item como "sem KPI"
+        // até um refetch.
+        var kpiLinks = await kpiRepository.GetKpiLinksByDemandIdsAsync([currentDemand.Id], cancellationToken);
+        var kpiIds = kpiLinks.Select(link => link.KpiId).Distinct().ToArray();
+        var kpiNamesById = kpiIds.Length > 0
+            ? (await kpiRepository.GetAllAsync(cancellationToken))
+                .Where(kpi => kpiIds.Contains(kpi.Id))
+                .ToDictionary(kpi => kpi.Id, kpi => kpi.Name)
+            : new Dictionary<Guid, string>();
+
         var tradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(currentDemand.Id, cancellationToken);
         var tradeOffRelatedDemandIds = tradeOffs
             .Where(tradeOff => tradeOff.ReplacementDemandId.HasValue)
@@ -281,7 +292,7 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             .GroupBy(item => item.Id)
             .ToDictionary(group => group.Key, group => group.First());
 
-        return RoadmapDemandDtoMapper.Map(currentDemand, productMap, demandsById, projectNamesById, dependencyLinks, tradeOffs: tradeOffs);
+        return RoadmapDemandDtoMapper.Map(currentDemand, productMap, demandsById, projectNamesById, dependencyLinks, kpiNamesById, kpiLinks, tradeOffs: tradeOffs);
     }
 
     private static IReadOnlyList<Guid> GetAssociatedProjectIds(
