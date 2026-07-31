@@ -69,6 +69,7 @@ public sealed class GetRoadmapCapacityQueryHandler(
             additionalHours,
             committedHours + additionalHours,
             remainingHours,
-            overCapacityHours);
+            overCapacityHours,
+            capacity?.TechnicalDebtPercent ?? 20m);
     }
 }

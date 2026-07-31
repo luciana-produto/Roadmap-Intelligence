@@ -105,4 +105,5 @@ public sealed record RoadmapCapacityDto(
     decimal AdditionalHours,
     decimal TotalDemandHours,
     decimal? RemainingHours,
-    decimal? OverCapacityHours);
+    decimal? OverCapacityHours,
+    decimal TechnicalDebtPercent = 20m);

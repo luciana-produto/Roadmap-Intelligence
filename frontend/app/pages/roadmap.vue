@@ -1315,12 +1315,27 @@ const capacityScopedDemands = computed(() =>
   quarterScopedDemands.value.filter(demand => demand.status !== 'Deprioritized')
 )
 
+// Uma demanda é Débito Técnico quando o épico ao qual está atrelada (ou o próprio épico simples)
+// está classificado como "Débito Técnico" (TechnicalDebtSecurity).
+function isTechDebtItem(item: RoadmapDemand): boolean {
+  if (item.itemType === 'Epic')
+    return item.classification === 'TechnicalDebtSecurity'
+  const epic = item.epicId ? itemsById.value.get(item.epicId) : undefined
+  return epic?.classification === 'TechnicalDebtSecurity'
+}
+
 const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
   if (!activeCapacityScope.value) return null
 
-  const committedHours = capacityScopedDemands.value
+  const committedItems = capacityScopedDemands.value
     .filter(demand => demand.type !== 'Additional' && !demand.excludeFromCapacity)
+  const committedTechDebtHours = committedItems
+    .filter(isTechDebtItem)
     .reduce((total, demand) => total + (demand.hours ?? 0), 0)
+  const committedProjectsHours = committedItems
+    .filter(demand => !isTechDebtItem(demand))
+    .reduce((total, demand) => total + (demand.hours ?? 0), 0)
+  const committedHours = committedTechDebtHours + committedProjectsHours
 
   const additionalHours = capacityScopedDemands.value
     .filter(demand => demand.type === 'Additional' && !demand.excludeFromCapacity)
@@ -1338,6 +1353,16 @@ const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
     ? Math.max(committedHours - configuredCapacity, 0)
     : undefined
 
+  // Reserva de Débito Técnico (referência): % do capacity total. O limite real é o total (as
+  // duas fatias compartilham as horas totais).
+  const technicalDebtPercent = capacitySummary.value?.technicalDebtPercent ?? 20
+  const techDebtReserveHours = typeof configuredCapacity === 'number'
+    ? configuredCapacity * technicalDebtPercent / 100
+    : undefined
+  const projectsReserveHours = typeof configuredCapacity === 'number'
+    ? configuredCapacity - (techDebtReserveHours ?? 0)
+    : undefined
+
   return {
     id: capacitySummary.value?.id,
     projectId: activeCapacityScope.value.projectId,
@@ -1351,7 +1376,12 @@ const displayCapacitySummary = computed<RoadmapCapacitySummary | null>(() => {
     totalDemandHours: committedHours + additionalHours,
     nonEstimatedDemandCount,
     remainingHours,
-    overCapacityHours
+    overCapacityHours,
+    technicalDebtPercent,
+    techDebtReserveHours,
+    projectsReserveHours,
+    committedTechDebtHours,
+    committedProjectsHours
   }
 })
 
@@ -1362,17 +1392,24 @@ const capacityProgressPercent = computed(() => {
   return (displayCapacitySummary.value.committedHours / displayCapacitySummary.value.capacityHours) * 100
 })
 
-const capacityProgressBarPercent = computed(() => {
-  if (!capacityConfigured.value) return 0
-  return Math.min(capacityProgressPercent.value, 100)
+// Segmentos da barra (% do TOTAL): projetos (azul) + débito técnico (roxo), empilhados sem passar de 100%.
+const capacityProjectsBarPercent = computed(() => {
+  const cap = displayCapacitySummary.value?.capacityHours
+  if (!cap) return 0
+  return Math.min((displayCapacitySummary.value?.committedProjectsHours ?? 0) / cap * 100, 100)
 })
+const capacityTechDebtBarPercent = computed(() => {
+  const cap = displayCapacitySummary.value?.capacityHours
+  if (!cap) return 0
+  const td = (displayCapacitySummary.value?.committedTechDebtHours ?? 0) / cap * 100
+  return Math.min(td, Math.max(100 - capacityProjectsBarPercent.value, 0))
+})
+// D.Téc passou da reserva de referência? (não é limite duro — só sinaliza)
+const capacityTechDebtOverReserve = computed(() =>
+  (displayCapacitySummary.value?.committedTechDebtHours ?? 0) > (displayCapacitySummary.value?.techDebtReserveHours ?? 0)
+)
 
 const capacityIsOver = computed(() => (displayCapacitySummary.value?.overCapacityHours ?? 0) > 0)
-
-const capacityProgressTone = computed(() => {
-  if (capacityIsOver.value) return 'bg-red-500'
-  return 'bg-indigo-500'
-})
 
 const capacityDeltaLabel = computed(() => {
   if (!displayCapacitySummary.value?.capacityHours) return 'Capacity não configurado'
@@ -1397,11 +1434,6 @@ const capacityDeltaTone = computed(() => {
     : 'border-emerald-200 bg-emerald-50 text-emerald-600 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
 })
 
-const capacityPercentTone = computed(() => {
-  if (!capacityConfigured.value) return 'text-muted'
-  return capacityIsOver.value ? 'text-red-600 dark:text-red-300' : 'text-indigo-600 dark:text-indigo-300'
-})
-
 const capacityCommittedTone = computed(() => {
   if (!capacityConfigured.value) return 'text-highlighted'
   return capacityIsOver.value ? 'text-red-600 dark:text-red-300' : 'text-highlighted'
@@ -1416,7 +1448,7 @@ const capacityUnestimatedTone = computed(() => {
 
 const capacityUnestimatedLabel = computed(() => {
   const count = displayCapacitySummary.value?.nonEstimatedDemandCount ?? 0
-  return `${count} ${count === 1 ? 'demanda sem estimativa' : 'demandas sem estimativa'}`
+  return `${count} s/ estimativa`
 })
 
 watch(activeCapacityScope, async (scope) => {
@@ -4307,8 +4339,8 @@ function handleTradeOffDeleted(tradeOffId: string) {
 }
 
 async function handleCapacitySubmit(data: CapacityFormData) {
-  if (!Number.isFinite(data.capacityHours) || data.capacityHours <= 0) {
-    toast.add({ title: 'Informe um capacity maior que zero', color: 'warning' })
+  if (!Number.isFinite(data.capacityHours) || data.capacityHours < 0) {
+    toast.add({ title: 'Informe um capacity igual ou maior que zero', color: 'warning' })
     return
   }
 
@@ -4334,6 +4366,7 @@ const capacityModalInitialValue = computed<CapacityFormData | null>(() => {
     quarterYear: activeCapacityScope.value.quarterYear,
     quarterNumber: activeCapacityScope.value.quarterNumber,
     capacityHours: capacitySummary.value?.capacityHours ?? 0,
+    technicalDebtPercent: capacitySummary.value?.technicalDebtPercent ?? 20,
     observation: capacitySummary.value?.observation ?? ''
   }
 })
@@ -7582,35 +7615,53 @@ watch(activeDemandKpiId, async (value) => {
     </div>
 
     <div class="rounded-[20px] border border-default bg-default px-3 py-2 shadow-sm">
-      <div class="flex flex-col gap-2 xl:flex-row xl:items-center xl:justify-between">
-        <div class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
-          <span class="inline-flex items-center gap-1 rounded-full border border-default bg-elevated px-2.5 py-0.5">
-            <UIcon name="i-lucide-folder-kanban" class="h-3.5 w-3.5 text-primary" />
-            <span class="font-medium text-highlighted">{{ capacityProjectName }}</span>
-          </span>
-          <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ activeCapacityScope?.quarterLabel ?? 'Selecione 1 quarter' }}</span>
-          <span class="rounded-full border border-default bg-default px-2.5 py-0.5">
-            Comprometido: <span class="font-semibold" :class="capacityCommittedTone">{{ displayCapacitySummary?.committedHours.toLocaleString('pt-BR') ?? '0' }}h</span>
-            <span class="text-muted"> / {{ displayCapacitySummary?.capacityHours?.toLocaleString('pt-BR') ?? '—' }}h</span>
-          </span>
-          <span v-if="capacityConfigured" class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityDeltaTone">
-            <UIcon :name="capacityIsOver ? 'i-lucide-circle-alert' : 'i-lucide-circle-check'" class="h-3.5 w-3.5" />
-            {{ capacityDeltaLabel }}: {{ capacityDeltaValue?.toLocaleString('pt-BR') ?? '—' }}h
-          </span>
-          <span class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityUnestimatedTone">
-            <UIcon name="i-lucide-triangle-alert" class="h-3.5 w-3.5" />
-            {{ capacityUnestimatedLabel }}
-          </span>
-          <span class="inline-flex items-center gap-1 rounded-full border border-default bg-default px-2.5 py-0.5 text-[11px] font-semibold text-highlighted">
-            <UIcon name="i-lucide-bolt" class="h-3.5 w-3.5 text-amber-500" />
-            {{ displayCapacitySummary?.additionalHours.toLocaleString('pt-BR') ?? '0' }}h adicionais
-          </span>
-          <span class="rounded-full border border-default bg-default px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityPercentTone">
-            {{ capacityConfigured ? `${capacityProgressPercent.toFixed(0)}% do capacity` : 'Capacity não configurado' }}
-          </span>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2 text-[11px] text-muted">
+        <!-- Projeto -->
+        <span class="inline-flex items-center gap-1.5 rounded-full border border-default bg-elevated px-2.5 py-0.5">
+          <span class="h-2 w-2 rounded-full bg-primary" />
+          <span class="font-medium text-highlighted">{{ capacityProjectName }}</span>
+        </span>
+        <!-- Quarter -->
+        <span class="rounded-full border border-default bg-elevated px-2.5 py-0.5">{{ activeCapacityScope?.quarterLabel ?? 'Selecione 1 quarter' }}</span>
+        <!-- Comprometido (texto puro) -->
+        <span class="whitespace-nowrap">
+          Comprometido: <span class="font-semibold" :class="capacityCommittedTone">{{ displayCapacitySummary?.committedHours.toLocaleString('pt-BR') ?? '0' }}h</span>
+          <span class="text-muted"> / {{ displayCapacitySummary?.capacityHours?.toLocaleString('pt-BR') ?? '—' }}h</span>
+        </span>
+        <!-- Barra segmentada: projetos (azul) + débito técnico (roxo). Cresce para preencher o meio. -->
+        <div v-if="capacityConfigured" class="flex h-2 min-w-[90px] flex-1 overflow-hidden rounded-full bg-elevated">
+          <div class="h-full bg-blue-500 transition-all duration-300 dark:bg-blue-400" :style="{ width: `${capacityProjectsBarPercent}%` }" :title="`Projetos: ${displayCapacitySummary?.committedProjectsHours?.toLocaleString('pt-BR') ?? '0'}h / ${displayCapacitySummary?.projectsReserveHours?.toLocaleString('pt-BR') ?? '0'}h`" />
+          <div class="h-full bg-violet-500 transition-all duration-300 dark:bg-violet-400" :style="{ width: `${capacityTechDebtBarPercent}%` }" :title="`Débito Técnico: ${displayCapacitySummary?.committedTechDebtHours?.toLocaleString('pt-BR') ?? '0'}h / ${displayCapacitySummary?.techDebtReserveHours?.toLocaleString('pt-BR') ?? '0'}h`" />
         </div>
-
-        <div class="flex items-start justify-start gap-2 xl:justify-end">
+        <!-- Disponível -->
+        <span v-if="capacityConfigured" class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityDeltaTone">
+          <UIcon :name="capacityIsOver ? 'i-lucide-circle-alert' : 'i-lucide-circle-check'" class="h-3.5 w-3.5" />
+          {{ capacityDeltaValue?.toLocaleString('pt-BR') ?? '—' }}h {{ capacityDeltaLabel }} ({{ capacityProgressPercent.toFixed(0) }}%)
+        </span>
+        <span v-else class="rounded-full border border-default bg-default px-2.5 py-0.5 text-[11px] font-semibold text-muted">Capacity não configurado</span>
+        <!-- Débito Técnico -->
+        <span
+          v-if="capacityConfigured"
+          class="inline-flex cursor-help items-center gap-1.5 rounded-full border border-default bg-default px-2.5 py-0.5 text-[11px] text-highlighted"
+          :title="`Débito Técnico: ${displayCapacitySummary?.committedTechDebtHours?.toLocaleString('pt-BR') ?? '0'}h de ${displayCapacitySummary?.techDebtReserveHours?.toLocaleString('pt-BR') ?? '0'}h reservados (${displayCapacitySummary?.technicalDebtPercent ?? 20}% do capacity). Uma demanda é Débito Técnico quando o épico está classificado como 'Débito Técnico'. A reserva é referência — o limite real é o capacity total.`"
+        >
+          <UIcon name="i-lucide-wrench" class="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" />
+          <span class="font-semibold">D.Téc: {{ displayCapacitySummary?.committedTechDebtHours?.toLocaleString('pt-BR') ?? '0' }}h /{{ displayCapacitySummary?.techDebtReserveHours?.toLocaleString('pt-BR') ?? '0' }}h</span>
+          <span class="rounded-full px-1.5 py-0.5 text-[10px] font-semibold" :class="capacityTechDebtOverReserve ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' : 'bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300'">{{ displayCapacitySummary?.technicalDebtPercent ?? 20 }}%</span>
+          <UIcon name="i-lucide-circle-help" class="h-3.5 w-3.5 text-muted" />
+        </span>
+        <!-- Adicionais -->
+        <span class="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+          <UIcon name="i-lucide-bolt" class="h-3.5 w-3.5" />
+          {{ displayCapacitySummary?.additionalHours.toLocaleString('pt-BR') ?? '0' }}h adicionais
+        </span>
+        <!-- Sem estimativa -->
+        <span class="inline-flex items-center gap-1 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold" :class="capacityUnestimatedTone">
+          <UIcon name="i-lucide-triangle-alert" class="h-3.5 w-3.5" />
+          {{ capacityUnestimatedLabel }}
+        </span>
+        <!-- Ações (à direita) -->
+        <span class="ml-auto flex items-center gap-2">
           <UPopover v-if="displayCapacitySummary?.observation">
             <button
               type="button"
@@ -7629,20 +7680,21 @@ watch(activeDemandKpiId, async (value) => {
 
           <!-- Wrapper com title: em navegadores como o Chrome o botão desabilitado não exibe
                tooltip; o span (com o botão sem pointer-events quando bloqueado) garante o hover. -->
-          <span v-if="canEditRoadmap" :title="capacityDisabledReason || undefined" class="inline-flex">
+          <span v-if="canEditRoadmap" :title="capacityDisabledReason || 'Configurar capacity'" class="inline-flex">
             <UButton
               type="button"
               size="xs"
               color="neutral"
               variant="soft"
               icon="i-lucide-sliders-horizontal"
-              label="Capacity"
+              square
+              title="Configurar capacity"
               :disabled="!activeCapacityScope"
               :class="{ 'pointer-events-none': !activeCapacityScope }"
               @click="openCapacityModal"
             />
           </span>
-        </div>
+        </span>
       </div>
 
       <div class="mt-3 overflow-visible rounded-xl border border-default bg-default shadow-sm">

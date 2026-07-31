@@ -343,6 +343,7 @@ export const useRoadmapStore = defineStore('roadmap', () => {
       quarterYear: payload.quarterYear,
       quarterNumber: payload.quarterNumber,
       capacityHours: payload.capacityHours,
+      technicalDebtPercent: payload.technicalDebtPercent ?? 20,
       observation: payload.observation || undefined
     }
 

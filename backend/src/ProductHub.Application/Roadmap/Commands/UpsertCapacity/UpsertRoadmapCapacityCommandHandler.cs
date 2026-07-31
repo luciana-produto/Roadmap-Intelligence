@@ -35,13 +35,14 @@ public sealed class UpsertRoadmapCapacityCommandHandler(
                 request.QuarterYear,
                 request.QuarterNumber,
                 request.CapacityHours,
-                request.Observation);
+                request.Observation,
+                request.TechnicalDebtPercent);
 
             await capacityRepository.AddAsync(capacity, cancellationToken);
         }
         else
         {
-            capacity.Update(request.CapacityHours, request.Observation);
+            capacity.Update(request.CapacityHours, request.Observation, request.TechnicalDebtPercent);
             capacityRepository.Update(capacity);
         }
 

@@ -167,6 +167,11 @@ BEGIN
     );
 END;
 
+IF COL_LENGTH(N'dbo.RoadmapCapacities', N'TechnicalDebtPercent') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapCapacities ADD TechnicalDebtPercent DECIMAL(5, 2) NOT NULL CONSTRAINT DF_RoadmapCapacities_TechnicalDebtPercent DEFAULT (20);
+END;
+
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_RoadmapCapacities_ProjectId_QuarterYear_QuarterNumber' AND object_id = OBJECT_ID(N'dbo.RoadmapCapacities'))
 BEGIN
     CREATE UNIQUE NONCLUSTERED INDEX IX_RoadmapCapacities_ProjectId_QuarterYear_QuarterNumber

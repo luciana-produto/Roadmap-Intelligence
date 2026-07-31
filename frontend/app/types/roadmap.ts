@@ -186,6 +186,12 @@ export interface RoadmapCapacitySummary {
   nonEstimatedDemandCount?: number
   remainingHours?: number
   overCapacityHours?: number
+  // Débito Técnico: % configurado + fatias derivadas (calculadas no cliente).
+  technicalDebtPercent?: number
+  techDebtReserveHours?: number
+  projectsReserveHours?: number
+  committedTechDebtHours?: number
+  committedProjectsHours?: number
 }
 
 export interface DemandFormData {
@@ -258,6 +264,7 @@ export interface CapacityFormData {
   quarterYear: number
   quarterNumber: number
   capacityHours: number
+  technicalDebtPercent?: number
   observation?: string
 }
 

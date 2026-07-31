@@ -8,4 +8,5 @@ public sealed record UpsertRoadmapCapacityCommand(
     int QuarterYear,
     int QuarterNumber,
     decimal CapacityHours,
-    string? Observation = null) : IRequest<RoadmapCapacityDto>;
+    string? Observation = null,
+    decimal TechnicalDebtPercent = 20m) : IRequest<RoadmapCapacityDto>;

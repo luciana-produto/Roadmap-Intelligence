@@ -25,6 +25,11 @@ public sealed class RoadmapCapacityConfiguration : IEntityTypeConfiguration<Road
             .HasPrecision(10, 2)
             .IsRequired();
 
+        builder.Property(x => x.TechnicalDebtPercent)
+            .HasPrecision(5, 2)
+            .HasDefaultValue(20m)
+            .IsRequired();
+
         builder.Property(x => x.Observation)
             .HasMaxLength(2000);
 
