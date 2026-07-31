@@ -161,6 +161,8 @@ export interface RoadmapDemand {
   successorDemandId?: string
   spilloverReason?: SpilloverReason
   spilloverObservation?: string
+  delayReason?: SpilloverReason
+  delayObservation?: string
   tradeOffHistory: DemandTradeOffHistory[]
   kpiLinks: DemandKpiLink[]
   kpiMeasurements: KpiMeasurement[]
@@ -222,6 +224,8 @@ export interface DemandFormData {
   excludeFromCapacity?: boolean
   spilloverReason?: SpilloverReason
   spilloverObservation?: string
+  delayReason?: SpilloverReason
+  delayObservation?: string
 }
 
 export interface CustomerRename {
@@ -236,11 +240,17 @@ export interface BulkEditRoadmapItemsData {
   replacementDemandId?: string
   promisedDate?: string
   deliveryDate?: string
+  delayReason?: SpilloverReason
+  delayObservation?: string
   blockedReason?: string
   type?: DemandType
   quarterYear?: number
   quarterNumber?: number
   rowColor?: string | null
+  spilloverReason?: SpilloverReason
+  spilloverObservation?: string
+  spilloverTargetYear?: number
+  spilloverTargetNumber?: number
 }
 
 export interface CapacityFormData {

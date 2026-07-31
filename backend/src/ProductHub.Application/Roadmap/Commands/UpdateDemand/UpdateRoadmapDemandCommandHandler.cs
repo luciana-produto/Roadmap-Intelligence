@@ -127,6 +127,12 @@ public sealed class UpdateRoadmapDemandCommandHandler(
             Enum.TryParse<DeprioritizationReason>(request.DeprioritizationReason, true, out var parsedDeprioritizationReason);
             deprioritizationReason = parsedDeprioritizationReason;
         }
+        SpilloverReason? delayReason = null;
+        if (!string.IsNullOrWhiteSpace(request.DelayReason))
+        {
+            Enum.TryParse<SpilloverReason>(request.DelayReason, true, out var parsedDelayReason);
+            delayReason = parsedDelayReason;
+        }
 
         int? nextSortOrder = null;
         if (itemType == RoadmapItemType.Demand
@@ -174,7 +180,9 @@ public sealed class UpdateRoadmapDemandCommandHandler(
               request.RowColor,
               request.IsSimple,
               !string.IsNullOrEmpty(request.SpilloverReason) ? Enum.Parse<SpilloverReason>(request.SpilloverReason) : null,
-              request.SpilloverObservation);
+              request.SpilloverObservation,
+              delayReason,
+              request.DelayObservation);
         if (status == DemandStatus.Deprioritized && deprioritizationReason.HasValue)
         {
             var existingTradeOffs = await kpiRepository.GetTradeOffsByDemandIdAsync(demand.Id, cancellationToken);

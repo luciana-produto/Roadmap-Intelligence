@@ -104,6 +104,12 @@ public sealed class CreateRoadmapDemandCommandHandler(
             Enum.TryParse<DeprioritizationReason>(request.DeprioritizationReason, true, out var parsedDeprioritizationReason);
             deprioritizationReason = parsedDeprioritizationReason;
         }
+        SpilloverReason? delayReason = null;
+        if (!string.IsNullOrWhiteSpace(request.DelayReason))
+        {
+            Enum.TryParse<SpilloverReason>(request.DelayReason, true, out var parsedDelayReason);
+            delayReason = parsedDelayReason;
+        }
 
         var nextSortOrder = itemType == RoadmapItemType.Demand && request.ProjectId.HasValue
             ? await demandRepository.GetNextSortOrderAsync(
@@ -143,7 +149,9 @@ public sealed class CreateRoadmapDemandCommandHandler(
             noKpiClassification,
             hoursRed: request.HoursRed,
             rowColor: request.RowColor,
-            isSimple: request.IsSimple);
+            isSimple: request.IsSimple,
+            delayReason: delayReason,
+            delayObservation: request.DelayObservation);
 
         await demandRepository.AddAsync(demand, cancellationToken);
         await demandRepository.ReplaceDependenciesAsync(demand.Id, dependencyDemandIds, cancellationToken);

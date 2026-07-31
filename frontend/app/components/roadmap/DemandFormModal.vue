@@ -36,6 +36,7 @@ import {
   formatQuarterLabel,
   parseQuarterValue
 } from '~/utils/roadmapQuarter'
+import { SPILLOVER_REASON_OPTIONS, isDeliveryLate } from '~/utils/roadmapDelay'
 
 type DemandFormState = Omit<DemandFormData, 'classification' | 'quarterYear' | 'quarterNumber'> & {
   itemType: RoadmapItemType | ''
@@ -324,15 +325,7 @@ const deprioritizationReasonLabels: Record<string, string> = {
   UndefinedScope: 'Escopo indefinido'
 }
 
-const spilloverReasonOptions = [
-  { value: 'ScopeChange', label: 'Mudança de escopo' },
-  { value: 'PriorityChangeNoTradeOff', label: 'Mudança de prioridade (sem trade-off)' },
-  { value: 'ExternalDependency', label: 'Dependência externa' },
-  { value: 'TechnicalBlock', label: 'Impedimento técnico' },
-  { value: 'IncorrectEstimate', label: 'Estimativa incorreta' },
-  { value: 'InsufficientCapacity', label: 'Capacidade insuficiente' },
-  { value: 'QualityIssues', label: 'Problemas de qualidade' }
-] as const
+const spilloverReasonOptions = SPILLOVER_REASON_OPTIONS
 
 type DemandFormTab = 'general' | 'status' | 'logs'
 
@@ -379,6 +372,12 @@ const hasStatusTab = computed(() => resultTabs.value.length > 1)
 const observationRequired = computed(() => form.status === 'Deprioritized')
 const deprioritizationReasonRequired = computed(() => form.status === 'Deprioritized')
 const deliveryDateRequired = computed(() => form.status === 'Done')
+// Atraso: concluída, com data de entrega, e entregue após a data prometida (ou fim do quarter).
+const isDeliveredLateInForm = computed(() =>
+  form.status === 'Done'
+  && isDeliveryLate(form.deliveryDate, form.promisedDate, form.quarterYear ?? 0, form.quarterNumber ?? 0)
+)
+const delayFieldsRequired = computed(() => isDeliveredLateInForm.value)
 const blockedReasonRequired = computed(() => form.status === 'Blocked')
 const isTransitioningToSpillover = computed(() => form.status === 'Spillover' && props.demand?.status !== 'Spillover' && !props.demand?.successorDemandId)
 const isAlreadySpillover = computed(() => form.status === 'Spillover' && (props.demand?.status === 'Spillover' || !!props.demand?.successorDemandId))
@@ -416,7 +415,9 @@ const form = reactive<DemandFormState>({
   hasNoKpi: false,
   noKpiClassification: undefined,
   spilloverReason: undefined,
-  spilloverObservation: ''
+  spilloverObservation: '',
+  delayReason: undefined,
+  delayObservation: ''
 })
 
 const projectNameById = computed(() =>
@@ -773,6 +774,8 @@ function populateFormFromDemand(demand: RoadmapDemand) {
   form.replacementDemandId = demand.replacementDemandId ?? undefined
   form.spilloverReason = demand.spilloverReason ?? undefined
   form.spilloverObservation = demand.spilloverObservation ?? ''
+  form.delayReason = demand.delayReason ?? undefined
+  form.delayObservation = demand.delayObservation ?? ''
   form.jiraIssue = demand.jiraIssue ?? ''
   form.issueLinks = demand.issueLinks?.length
     ? demand.issueLinks.map(issue => ({ key: issue.key, url: issue.url ?? '' }))
@@ -832,6 +835,8 @@ function populateFormForCopy(source: RoadmapDemand) {
   form.replacementDemandId = undefined
   form.spilloverReason = undefined
   form.spilloverObservation = ''
+  form.delayReason = undefined
+  form.delayObservation = ''
   form.jiraIssue = ''
   form.issueLinks = []
   form.hours = source.hours ?? undefined
@@ -894,6 +899,8 @@ function resetFormForCreate() {
   form.blockedReason = ''
   form.promisedDate = ''
   form.deliveryDate = ''
+  form.delayReason = undefined
+  form.delayObservation = ''
   form.problemClarity = undefined
   form.hasNoKpi = false
   form.noKpiClassification = undefined
@@ -1136,6 +1143,11 @@ watch(() => form.status, (status) => {
   if (status !== 'Spillover') {
     form.spilloverReason = undefined
     form.spilloverObservation = ''
+  }
+
+  if (status !== 'Done') {
+    form.delayReason = undefined
+    form.delayObservation = ''
   }
 })
 
@@ -1899,6 +1911,8 @@ const missingSubmitReason = computed(() => {
     return 'Preencha a observação da despriorização'
   if (deliveryDateRequired.value && !form.deliveryDate)
     return 'Informe a data de entrega para concluir a demanda'
+  if (delayFieldsRequired.value && !form.delayReason)
+    return 'Selecione o motivo do atraso'
   if (blockedReasonRequired.value && !form.blockedReason.trim())
     return 'Preencha o motivo do impedimento'
   if (spilloverFieldsRequired.value && !form.spilloverReason)
@@ -2807,6 +2821,31 @@ async function handleSubmit() {
               />
             </UFormField>
           </div>
+
+          <!-- Atraso: entrega após o prazo (data prometida ou fim do quarter) -->
+          <template v-if="delayFieldsRequired">
+            <div class="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+              <UIcon name="i-lucide-triangle-alert" class="h-4 w-4 shrink-0" />
+              Entrega após o prazo — informe o motivo do atraso.
+            </div>
+            <UFormField label="Motivo do atraso" required>
+              <USelect
+                v-model="form.delayReason"
+                :items="spilloverReasonOptions"
+                placeholder="Selecione o motivo"
+                class="w-full"
+                :class="!form.delayReason ? 'ring-2 ring-red-400' : ''"
+              />
+            </UFormField>
+            <UFormField label="Observação atraso">
+              <UTextarea
+                v-model="form.delayObservation"
+                placeholder="Detalhe o atraso (opcional)"
+                :rows="2"
+                class="w-full"
+              />
+            </UFormField>
+          </template>
 
           <UFormField v-if="blockedReasonRequired" label="Motivo do impedimento" required>
             <UInput

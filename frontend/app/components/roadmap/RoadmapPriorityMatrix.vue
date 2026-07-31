@@ -57,10 +57,10 @@ type Quadrant = {
 }
 // Ordem 2×2: topo = alto impacto (Ganhos | Apostas); base = baixo impacto (Preencher | Evitar).
 const QUADRANTS: Quadrant[] = [
-  { kind: 'ganhos', title: 'Ganhos Rápidos', en: 'Quick Wins', sub: 'Alto Impacto · Baixo Esforço', icon: 'i-lucide-rocket', border: 'border-emerald-200 dark:border-emerald-900/50', title_cls: 'text-emerald-700 dark:text-emerald-300', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
-  { kind: 'apostas', title: 'Grandes Apostas', en: 'Big Bets', sub: 'Alto Impacto · Alto Esforço', icon: 'i-lucide-target', border: 'border-blue-200 dark:border-blue-900/50', title_cls: 'text-blue-700 dark:text-blue-300', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
-  { kind: 'quando', title: 'Preencher', en: 'Fill-ins', sub: 'Baixo Impacto · Baixo Esforço', icon: 'i-lucide-zap', border: 'border-amber-200 dark:border-amber-900/50', title_cls: 'text-amber-700 dark:text-amber-300', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
-  { kind: 'evitar', title: 'Evitar / Repensar', en: 'Money Pit', sub: 'Baixo Impacto · Alto Esforço', icon: 'i-lucide-alert-triangle', border: 'border-red-200 dark:border-red-900/50', title_cls: 'text-red-700 dark:text-red-300', badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' }
+  { kind: 'ganhos', title: 'Ganhos rápidos', en: 'Quick Wins', sub: 'Alto impacto, baixo esforço. Faça primeiro.', icon: 'i-lucide-rocket', border: 'border-emerald-200 dark:border-emerald-900/50', title_cls: 'text-emerald-700 dark:text-emerald-300', badge: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300' },
+  { kind: 'apostas', title: 'Grandes apostas', en: 'Big Bets', sub: 'Alto impacto, alto esforço. Vale, mas planeje bem.', icon: 'i-lucide-target', border: 'border-blue-200 dark:border-blue-900/50', title_cls: 'text-blue-700 dark:text-blue-300', badge: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
+  { kind: 'quando', title: 'Quando possível', en: 'Fill-ins', sub: 'Baixo impacto, baixo esforço. Encaixe nas folgas.', icon: 'i-lucide-zap', border: 'border-amber-200 dark:border-amber-900/50', title_cls: 'text-amber-700 dark:text-amber-300', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300' },
+  { kind: 'evitar', title: 'Evitar / repensar', en: 'Money Pit', sub: 'Baixo impacto, alto esforço. Questione antes de investir.', icon: 'i-lucide-alert-triangle', border: 'border-red-200 dark:border-red-900/50', title_cls: 'text-red-700 dark:text-red-300', badge: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' }
 ]
 </script>
 

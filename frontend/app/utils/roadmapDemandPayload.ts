@@ -39,6 +39,8 @@ type SharedDemandMutationPayload = {
   noKpiClassification?: NoKpiClassification
   spilloverReason?: string
   spilloverObservation?: string
+  delayReason?: string
+  delayObservation?: string
 }
 
 function normalizeCustomers(customers?: string[]) {
@@ -105,7 +107,10 @@ function buildSharedDemandMutationPayload(payload: DemandFormData): SharedDemand
     noKpiClassification: payload.hasNoKpi ? payload.noKpiClassification ?? undefined : undefined,
     excludeFromCapacity: payload.excludeFromCapacity ?? false,
     spilloverReason: payload.status === 'Spillover' ? payload.spilloverReason || undefined : undefined,
-    spilloverObservation: payload.status === 'Spillover' ? payload.spilloverObservation?.trim() || undefined : undefined
+    spilloverObservation: payload.status === 'Spillover' ? payload.spilloverObservation?.trim() || undefined : undefined,
+    // Atraso: o backend só mantém quando Done + atrasado; enviamos o que o form trouxe.
+    delayReason: payload.status === 'Done' ? payload.delayReason || undefined : undefined,
+    delayObservation: payload.status === 'Done' ? payload.delayObservation?.trim() || undefined : undefined
   }
 }
 
@@ -162,6 +167,9 @@ export function buildStatusPatchPayload(demand: RoadmapDemand, status: DemandSta
     hasNoKpi: demand.hasNoKpi ?? false,
     noKpiClassification: demand.hasNoKpi ? demand.noKpiClassification ?? undefined : undefined,
     spilloverReason: status === 'Spillover' ? demand.spilloverReason || undefined : undefined,
-    spilloverObservation: status === 'Spillover' ? demand.spilloverObservation?.trim() || undefined : undefined
+    spilloverObservation: status === 'Spillover' ? demand.spilloverObservation?.trim() || undefined : undefined,
+    // Preserva o motivo de atraso já existente ao mudar status pela grid (o backend limpa se não estiver mais atrasado).
+    delayReason: status === 'Done' ? demand.delayReason || undefined : undefined,
+    delayObservation: status === 'Done' ? demand.delayObservation?.trim() || undefined : undefined
   }
 }

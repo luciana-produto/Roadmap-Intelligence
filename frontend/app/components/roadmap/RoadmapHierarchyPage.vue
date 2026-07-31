@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import type { ApiResponse } from '~/types/api'
-import type { BulkEditRoadmapItemsData, CustomerRename, DemandFormData, DemandStatus, DeprioritizationReason, RoadmapDemand, RoadmapItemType } from '~/types/roadmap'
+import type { BulkEditRoadmapItemsData, CustomerRename, DemandFormData, DemandStatus, DeprioritizationReason, RoadmapDemand, RoadmapItemType, SpilloverReason } from '~/types/roadmap'
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import { buildDemandDueSearchText, buildDueSortKey, hasPlannedQuarter } from '~/utils/roadmapDue'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 import { BACKLOG_QUARTER } from '~/utils/roadmapQuarter'
+import { SPILLOVER_REASON_OPTIONS, isDeliveryLate } from '~/utils/roadmapDelay'
+
+const delayReasonOptions = SPILLOVER_REASON_OPTIONS
 
 type HierarchySortKey = 'item' | 'status' | 'products' | 'classification' | 'due'
 type HierarchyColumnId = 'item' | 'status' | 'products' | 'hours' | 'classification' | 'customers' | 'due' | 'kpi' | 'actions'
@@ -92,6 +95,8 @@ type HierarchyInlineDraft = {
   observation: string
   blockedReason: string
   deliveryDate: string
+  delayReason?: SpilloverReason
+  delayObservation: string
   deprioritizationReason?: DeprioritizationReason
   replacementDemandId?: string
 }
@@ -392,6 +397,12 @@ const hierarchyStatusModalDraft = computed(() =>
   hierarchyStatusModalItem.value ? getHierarchyInlineDraft(hierarchyStatusModalItem.value) : null
 )
 const hierarchyStatusModalRequiresDeliveryDate = computed(() => hierarchyStatusModalDraft.value?.status === 'Done')
+const hierarchyStatusModalRequiresDelay = computed(() => {
+  const draft = hierarchyStatusModalDraft.value
+  const item = hierarchyStatusModalItem.value
+  if (!draft || !item || draft.status !== 'Done') return false
+  return isDeliveryLate(draft.deliveryDate, item.promisedDate, item.quarterYear, item.quarterNumber)
+})
 const hierarchyStatusModalRequiresBlockedReason = computed(() => hierarchyStatusModalDraft.value?.status === 'Blocked')
 const hierarchyStatusModalRequiresDeprioritization = computed(() => hierarchyStatusModalDraft.value?.status === 'Deprioritized')
 const hierarchyStatusReplacementDemandOptions = computed(() => {
@@ -1579,6 +1590,8 @@ function createHierarchyInlineDraft(item: RoadmapDemand): HierarchyInlineDraft {
     observation: item.observation ?? '',
     blockedReason: item.blockedReason ?? '',
     deliveryDate: item.deliveryDate ?? '',
+    delayReason: item.delayReason ?? undefined,
+    delayObservation: item.delayObservation ?? '',
     deprioritizationReason: item.deprioritizationReason ?? undefined,
     replacementDemandId: item.replacementDemandId ?? undefined
   }
@@ -1719,6 +1732,11 @@ function confirmHierarchyStatusModal() {
 
   if (draft.status === 'Done' && !draft.deliveryDate) {
     toast.add({ title: 'Informe a data de entrega', color: 'warning' })
+    return
+  }
+
+  if (hierarchyStatusModalRequiresDelay.value && !draft.delayReason) {
+    toast.add({ title: 'Selecione o motivo do atraso', color: 'warning' })
     return
   }
 
@@ -2001,6 +2019,18 @@ async function saveHierarchyInline(
     return false
   }
 
+  if (draft.status === 'Done'
+    && isDeliveryLate(draft.dueDate, item.promisedDate, item.quarterYear, item.quarterNumber)
+    && !draft.delayReason) {
+    toast.add({
+      title: 'Informe o motivo do atraso',
+      description: 'A entrega passou do prazo. Abra o status para informar o motivo.',
+      color: 'warning'
+    })
+    openHierarchyStatusModal(item, 'Done')
+    return false
+  }
+
   if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
     toast.add({
       title: 'Informe o motivo do impedimento',
@@ -2036,7 +2066,9 @@ async function saveHierarchyInline(
       hours: (item.itemType === 'Demand' || item.isSimple) ? hours : item.hours,
       hoursRed: (item.itemType === 'Demand' || item.isSimple) ? draft.hoursRed : false,
       promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
-      deliveryDate: isDoneStatus ? draft.dueDate : ''
+      deliveryDate: isDoneStatus ? draft.dueDate : '',
+      delayReason: isDoneStatus ? draft.delayReason : undefined,
+      delayObservation: isDoneStatus ? draft.delayObservation : ''
     }))
 
     clearHierarchyInlineDraft(item.id)
@@ -2230,6 +2262,8 @@ function buildDemandFormData(item: RoadmapDemand, overrides?: Partial<DemandForm
     problemClarity: item.problemClarity ?? undefined,
     hasNoKpi: item.hasNoKpi,
     noKpiClassification: item.noKpiClassification ?? undefined,
+    delayReason: item.delayReason ?? undefined,
+    delayObservation: item.delayObservation ?? '',
     ...overrides
   }
 }
@@ -2303,8 +2337,11 @@ function buildBulkEditOverrides(item: RoadmapDemand, changes: BulkEditRoadmapIte
   if (changes.status) {
     overrides.status = changes.status
 
-    if (changes.status === 'Done')
+    if (changes.status === 'Done') {
       overrides.deliveryDate = changes.deliveryDate ?? item.deliveryDate ?? ''
+      overrides.delayReason = changes.delayReason ?? item.delayReason ?? undefined
+      overrides.delayObservation = changes.delayObservation ?? item.delayObservation ?? ''
+    }
 
     if (changes.status === 'Blocked')
       overrides.blockedReason = changes.blockedReason ?? item.blockedReason ?? ''
@@ -2341,9 +2378,50 @@ function buildBulkEditOverrides(item: RoadmapDemand, changes: BulkEditRoadmapIte
   return overrides
 }
 
+// Transbordo em lote: cria uma cópia de transbordo de cada item elegível (épico simples ou
+// demanda, que ainda não seja transbordo) no quarter de destino. Ação exclusiva.
+async function handleHierarchyBulkSpillover(changes: BulkEditRoadmapItemsData) {
+  const eligible = selectedHierarchyItems.value.filter(i =>
+    (i.itemType === 'Demand' || (i.itemType === 'Epic' && i.isSimple)) && i.status !== 'Spillover' && !i.successorDemandId)
+  const skipped = selectedHierarchyItems.value.length - eligible.length
+
+  if (!eligible.length) {
+    toast.add({ title: 'Nenhum item elegível para transbordo', color: 'warning' })
+    return
+  }
+  if (changes.spilloverTargetYear == null || changes.spilloverTargetNumber == null)
+    return
+
+  isBulkEditing.value = true
+  try {
+    for (const item of eligible)
+      await roadmapStore.createSpillover(item.id, changes.spilloverTargetYear, changes.spilloverTargetNumber, changes.spilloverReason, changes.spilloverObservation)
+
+    await loadPageData()
+    bulkEditModalOpen.value = false
+    clearHierarchySelection()
+    toast.add({
+      title: 'Transbordo em lote concluído',
+      description: `${eligible.length} ${eligible.length === 1 ? 'item transbordado' : 'itens transbordados'}${skipped ? ` · ${skipped} ignorado(s)` : ''}.`,
+      color: 'success'
+    })
+  }
+  catch {
+    // handled by useApi
+  }
+  finally {
+    isBulkEditing.value = false
+  }
+}
+
 async function handleBulkEditSubmit(changes: BulkEditRoadmapItemsData) {
   if (!selectedHierarchyItems.value.length || isBulkEditing.value)
     return
+
+  if (changes.status === 'Spillover') {
+    await handleHierarchyBulkSpillover(changes)
+    return
+  }
 
   const updatedCount = selectedHierarchyItems.value.length
   isBulkEditing.value = true
@@ -4131,6 +4209,32 @@ onUnmounted(() => {
               @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { deliveryDate: String(value ?? '') })"
             />
           </UFormField>
+
+          <template v-if="hierarchyStatusModalRequiresDelay">
+            <div class="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+              <UIcon name="i-lucide-triangle-alert" class="h-4 w-4 shrink-0" />
+              Entrega após o prazo — informe o motivo do atraso.
+            </div>
+            <UFormField label="Motivo do atraso" required>
+              <USelect
+                :model-value="hierarchyStatusModalDraft.delayReason"
+                :items="delayReasonOptions"
+                placeholder="Selecione o motivo"
+                class="w-full"
+                :class="!hierarchyStatusModalDraft.delayReason ? 'ring-2 ring-red-400' : ''"
+                @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { delayReason: value as SpilloverReason | undefined })"
+              />
+            </UFormField>
+            <UFormField label="Observação atraso">
+              <UTextarea
+                :model-value="hierarchyStatusModalDraft.delayObservation"
+                :rows="2"
+                placeholder="Detalhe o atraso (opcional)"
+                class="w-full"
+                @update:model-value="(value) => hierarchyStatusModalItem && updateHierarchyInlineDraft(hierarchyStatusModalItem, { delayObservation: String(value ?? '') })"
+              />
+            </UFormField>
+          </template>
 
           <UFormField v-if="hierarchyStatusModalRequiresBlockedReason" label="Motivo do impedimento" required>
             <UTextarea

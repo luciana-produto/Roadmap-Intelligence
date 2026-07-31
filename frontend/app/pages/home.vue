@@ -8,7 +8,7 @@ import {
   formatQuarterLabel,
   parseQuarterValue
 } from '~/utils/roadmapQuarter'
-import { buildPlanningDashboardUrl } from '~/utils/roadmapDashboardLink'
+import { buildPlanningDashboardUrl, buildReasonReportUrl } from '~/utils/roadmapDashboardLink'
 import type { DashboardSelection } from '~/types/roadmapDashboards'
 import RoadmapDashboards from '~/components/roadmap/RoadmapDashboards.vue'
 
@@ -127,6 +127,11 @@ function handleSelect(selection: DashboardSelection) {
     quarters: filterQuarters.value,
     selection
   })
+  window.open(url, '_blank')
+}
+
+function handleReport(tipo: 'atraso-transbordo' | 'deprioritization') {
+  const url = buildReasonReportUrl({ tipo, teams: filterTeams.value, quarters: filterQuarters.value })
   window.open(url, '_blank')
 }
 </script>
@@ -250,6 +255,7 @@ function handleSelect(selection: DashboardSelection) {
       :demands="scopedDemands"
       :all-demands="demands"
       @select="handleSelect"
+      @report="handleReport"
     />
   </div>
 </template>

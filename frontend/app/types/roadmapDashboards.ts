@@ -11,6 +11,7 @@ export type DashboardSelection =
   | { kind: 'inconsistentDeps' }
   | { kind: 'spilloverReason', value: string }
   | { kind: 'deprioritizationReason', value: string }
+  | { kind: 'delayReason', value: string }
 
 // Filtros ativos (para destacar o item selecionado). Opcional — na home não há destaque.
 export interface DashboardActiveFilters {
@@ -22,4 +23,5 @@ export interface DashboardActiveFilters {
   inconsistentDeps?: boolean
   spilloverReasons?: string[]
   deprioritizationReasons?: string[]
+  delayReasons?: string[]
 }

@@ -41,6 +41,10 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
     public Guid? SuccessorDemandId { get; private set; }
     public SpilloverReason? SpilloverReason { get; private set; }
     public string? SpilloverObservation { get; private set; }
+    // Motivo do atraso (mesma lista do transbordo) + observação livre. Só valem quando a
+    // demanda está concluída E entregue atrasada; caso contrário são limpos.
+    public SpilloverReason? DelayReason { get; private set; }
+    public string? DelayObservation { get; private set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
     // Auditoria de usuário (preenchida pelo interceptor): quem criou e quem alterou por último.
@@ -89,7 +93,9 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
         bool excludeFromCapacity = false,
         bool hoursRed = false,
         string? rowColor = null,
-        bool isSimple = false)
+        bool isSimple = false,
+        SpilloverReason? delayReason = null,
+        string? delayObservation = null)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -102,6 +108,7 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = (itemType == RoadmapItemType.Demand || normalizedIsSimple) ? hours : null;
         var normalizedBlockedReason = NormalizeBlockedReason(status, blockedReason);
+        var normalizedDelay = NormalizeDelay(status, deliveryDate, promisedDate, normalizedQuarter.Year, normalizedQuarter.Number, delayReason, delayObservation);
 
         var demand = new RoadmapDemand
         {
@@ -133,7 +140,9 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
             ProblemClarity = problemClarity,
             HasNoKpi = hasNoKpi,
             NoKpiClassification = NormalizeNoKpiClassification(hasNoKpi, noKpiClassification),
-            ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity
+            ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity,
+            DelayReason = normalizedDelay.Reason,
+            DelayObservation = normalizedDelay.Observation
         };
         demand._products = NormalizeProductIds(itemType, normalizedIsSimple, productIds)
             .Distinct()
@@ -177,7 +186,9 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
         string? rowColor = null,
         bool isSimple = false,
         SpilloverReason? spilloverReason = null,
-        string? spilloverObservation = null)
+        string? spilloverObservation = null,
+        SpilloverReason? delayReason = null,
+        string? delayObservation = null)
     {
         if (problemClarity.HasValue && problemClarity.Value is < 0 or > 10)
             throw new ArgumentOutOfRangeException(nameof(problemClarity), "Problem clarity must be between 0 and 10.");
@@ -190,6 +201,7 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
         Quarter.Create(normalizedQuarter.Year, normalizedQuarter.Number);
         var normalizedHours = (itemType == RoadmapItemType.Demand || normalizedIsSimple) ? hours : null;
         var normalizedBlockedReason = NormalizeBlockedReason(status, blockedReason);
+        var normalizedDelay = NormalizeDelay(status, deliveryDate, promisedDate, normalizedQuarter.Year, normalizedQuarter.Number, delayReason, delayObservation);
 
         ItemType = itemType;
         ParentDemandId = parentDemandId;
@@ -223,6 +235,8 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
         ExcludeFromCapacity = (itemType == RoadmapItemType.Demand || normalizedIsSimple) && excludeFromCapacity;
         SpilloverReason = status == DemandStatus.Spillover ? spilloverReason : null;
         SpilloverObservation = status == DemandStatus.Spillover ? spilloverObservation : null;
+        DelayReason = normalizedDelay.Reason;
+        DelayObservation = normalizedDelay.Observation;
     }
 
     public void ConvertToComposite()
@@ -321,6 +335,53 @@ public sealed class RoadmapDemand : AggregateRoot, IUserAuditableEntity
             throw new ArgumentException("Deprioritization reason is required when the demand is deprioritized.", nameof(deprioritizationReason));
 
         return deprioritizationReason.Value;
+    }
+
+    /// <summary>Regra de atraso: concluída (Done) e entregue após a data prometida — ou, se não
+    /// houver data prometida, após o último dia do quarter da demanda.</summary>
+    public bool IsDeliveredLate() =>
+        IsDeliveredLate(Status, DeliveryDate, PromisedDate, QuarterYear, QuarterNumber);
+
+    private static bool IsDeliveredLate(
+        DemandStatus status,
+        DateOnly? deliveryDate,
+        DateOnly? promisedDate,
+        int quarterYear,
+        int quarterNumber)
+    {
+        if (status != DemandStatus.Done || !deliveryDate.HasValue)
+            return false;
+
+        var effective = promisedDate;
+        if (!effective.HasValue)
+        {
+            if (quarterYear <= 0 || quarterNumber <= 0)
+                return false;
+
+            var month = quarterNumber * 3;
+            var lastDay = DateTime.DaysInMonth(quarterYear, month);
+            effective = new DateOnly(quarterYear, month, lastDay);
+        }
+
+        return deliveryDate.Value > effective.Value;
+    }
+
+    private static (SpilloverReason? Reason, string? Observation) NormalizeDelay(
+        DemandStatus status,
+        DateOnly? deliveryDate,
+        DateOnly? promisedDate,
+        int quarterYear,
+        int quarterNumber,
+        SpilloverReason? delayReason,
+        string? delayObservation)
+    {
+        if (!IsDeliveredLate(status, deliveryDate, promisedDate, quarterYear, quarterNumber))
+            return (null, null);
+
+        if (!delayReason.HasValue)
+            throw new ArgumentException("Delay reason is required when the demand is delivered late.", nameof(delayReason));
+
+        return (delayReason.Value, string.IsNullOrWhiteSpace(delayObservation) ? null : delayObservation.Trim());
     }
 
     private static string? NormalizeBlockedReason(

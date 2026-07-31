@@ -5,7 +5,7 @@ import type { TableColumn } from '@nuxt/ui'
 import type { SortingState, ColumnFiltersState, ColumnSizingState } from '@tanstack/vue-table'
 import type * as XLSXType from 'xlsx'
 import type { ApiResponse } from '~/types/api'
-import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType, BulkEditRoadmapItemsData, CustomerRename, DeprioritizationReason } from '~/types/roadmap'
+import type { RoadmapDemand, DemandDependency, RoadmapCapacitySummary, DemandFormData, CapacityFormData, DemandStatus, DemandType, DemandClassification, NoKpiClassification, RoadmapItemType, BulkEditRoadmapItemsData, CustomerRename, DeprioritizationReason, SpilloverReason } from '~/types/roadmap'
 import BulkEditRoadmapItemsModal from '~/components/roadmap/BulkEditRoadmapItemsModal.vue'
 import RoadmapHierarchyPage from '~/components/roadmap/RoadmapHierarchyPage.vue'
 import RoadmapDashboards from '~/components/roadmap/RoadmapDashboards.vue'
@@ -13,6 +13,7 @@ import RoadmapPriorityMatrix from '~/components/roadmap/RoadmapPriorityMatrix.vu
 import RoadmapPriorityList from '~/components/roadmap/RoadmapPriorityList.vue'
 import RoadmapPriorityHelp from '~/components/roadmap/RoadmapPriorityHelp.vue'
 import type { DashboardSelection } from '~/types/roadmapDashboards'
+import { buildReasonReportUrl } from '~/utils/roadmapDashboardLink'
 import { getLatestPromisedDate } from '~/utils/roadmapPromisedDate'
 import { KPI_INDICATOR_LABELS, CONFIDENCE_LABELS, formatKpiValue } from '~/utils/kpiApuracao'
 import {
@@ -25,8 +26,20 @@ import {
   isSpecialBacklogQuarter,
   parseQuarterValue
 } from '~/utils/roadmapQuarter'
+import { SPILLOVER_REASON_OPTIONS, isDeliveryLate, delayReasonLabel } from '~/utils/roadmapDelay'
+
+const delayReasonOptions = SPILLOVER_REASON_OPTIONS
 
 useSeoMeta({ title: 'Roadmap · ProductHub' })
+
+// Tooltip do marcador "Atrasado" (coluna Conclusão): motivo + observação do atraso.
+function planningDelayTooltip(demand: RoadmapDemand): string {
+  const reason = delayReasonLabel(demand.delayReason)
+  const observation = demand.delayObservation?.trim()
+  if (!reason && !observation)
+    return 'Entregue com atraso'
+  return `Atraso: ${reason || '—'}${observation ? ` · ${observation}` : ''}`
+}
 
 const route = useRoute()
 const api = useApi()
@@ -431,6 +444,7 @@ const filterInconsistentDeps = ref(false)
 // Filtros dedicados de motivo (acionados pelos dashboards de motivos), aplicados sobre a lista.
 const filterSpilloverReasons = ref<string[]>([])
 const filterDeprioritizationReasons = ref<string[]>([])
+const filterDelayReasons = ref<string[]>([])
 
 const listProblemFilterLabel = computed(() => {
   if (!listProblemFilter.value.length)
@@ -544,6 +558,12 @@ function toggleDeprioritizationReasonFilter(reason: string) {
     : [...filterDeprioritizationReasons.value, reason]
 }
 
+function toggleDelayReasonFilter(reason: string) {
+  filterDelayReasons.value = filterDelayReasons.value.includes(reason)
+    ? filterDelayReasons.value.filter(item => item !== reason)
+    : [...filterDelayReasons.value, reason]
+}
+
 // Há algum filtro ativo sobre a lista? (não inclui a seleção de time/quarter do topo)
 const hasActiveListFilters = computed(() =>
   listColumnFilters.value.length > 0
@@ -551,6 +571,7 @@ const hasActiveListFilters = computed(() =>
   || filterInconsistentDeps.value
   || filterSpilloverReasons.value.length > 0
   || filterDeprioritizationReasons.value.length > 0
+  || filterDelayReasons.value.length > 0
 )
 
 // Limpa TODOS os filtros da lista (coluna + saúde/problemas + dependências + motivos),
@@ -561,6 +582,7 @@ function clearAllListFilters() {
   filterInconsistentDeps.value = false
   filterSpilloverReasons.value = []
   filterDeprioritizationReasons.value = []
+  filterDelayReasons.value = []
 }
 
 // Estado ativo dos filtros para destacar o item selecionado no componente de dashboards.
@@ -572,7 +594,8 @@ const dashboardActiveFilters = computed(() => ({
   problems: listProblemFilter.value,
   inconsistentDeps: filterInconsistentDeps.value,
   spilloverReasons: filterSpilloverReasons.value,
-  deprioritizationReasons: filterDeprioritizationReasons.value
+  deprioritizationReasons: filterDeprioritizationReasons.value,
+  delayReasons: filterDelayReasons.value
 }))
 
 // Clique num item do dashboard (na planejamento) → aplica/alterna o filtro correspondente na lista.
@@ -586,7 +609,13 @@ function handleDashboardSelect(selection: DashboardSelection) {
     case 'inconsistentDeps': toggleInconsistentDepsFilter(); break
     case 'spilloverReason': toggleSpilloverReasonFilter(selection.value); break
     case 'deprioritizationReason': toggleDeprioritizationReasonFilter(selection.value); break
+    case 'delayReason': toggleDelayReasonFilter(selection.value); break
   }
+}
+
+function handleDashboardReport(tipo: 'atraso-transbordo' | 'deprioritization') {
+  const url = buildReasonReportUrl({ tipo, teams: filterListProjectIds.value, quarters: filterQuarters.value })
+  window.open(url, '_blank')
 }
 
 // Abre o dashboard completo (home) em nova aba, levando os filtros de Time e Quarter atuais.
@@ -1409,6 +1438,7 @@ watch(selectedProjectId, () => {
   setListMultiFilter('customers', [])
   filterSpilloverReasons.value = []
   filterDeprioritizationReasons.value = []
+  filterDelayReasons.value = []
 })
 
 watch(filterListProjectIds, (val) => {
@@ -1420,6 +1450,7 @@ watch(filterListProjectIds, (val) => {
   setListMultiFilter('customers', [])
   filterSpilloverReasons.value = []
   filterDeprioritizationReasons.value = []
+  filterDelayReasons.value = []
   localStorage.setItem(CACHE_KEY_PLANNING_PROJECTS, JSON.stringify(val))
 })
 
@@ -3241,7 +3272,8 @@ function syncListSectionDividers() {
 
             if (showDemandDelayMarker(displayEpic)) {
               const delayRow = document.createElement('div')
-              delayRow.className = 'flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400'
+              delayRow.className = 'flex w-fit cursor-help items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400'
+              delayRow.title = planningDelayTooltip(displayEpic)
               delayRow.appendChild(createSvgIcon(['M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z', 'M12 9v4', 'M12 17h.01'], 'h-3 w-3'))
               const delayText = document.createElement('span')
               delayText.textContent = 'Atrasado'
@@ -3936,6 +3968,8 @@ function buildDemandFormData(demand: RoadmapDemand, overrides?: Partial<DemandFo
     excludeFromCapacity: demand.excludeFromCapacity,
     spilloverReason: demand.spilloverReason ?? undefined,
     spilloverObservation: demand.spilloverObservation ?? '',
+    delayReason: demand.delayReason ?? undefined,
+    delayObservation: demand.delayObservation ?? '',
     ...overrides
   }
 }
@@ -4455,11 +4489,14 @@ const tableDemands = computed(() => {
   const matchesReasonFilter = (item: RoadmapDemand) => {
     const hasSpilloverReasonFilter = filterSpilloverReasons.value.length > 0
     const hasDeprioReasonFilter = filterDeprioritizationReasons.value.length > 0
-    if (!hasSpilloverReasonFilter && !hasDeprioReasonFilter)
+    const hasDelayReasonFilter = filterDelayReasons.value.length > 0
+    if (!hasSpilloverReasonFilter && !hasDeprioReasonFilter && !hasDelayReasonFilter)
       return true
     if (hasSpilloverReasonFilter && item.status === 'Spillover' && !!item.spilloverReason && filterSpilloverReasons.value.includes(item.spilloverReason))
       return true
     if (hasDeprioReasonFilter && item.status === 'Deprioritized' && !!item.deprioritizationReason && filterDeprioritizationReasons.value.includes(item.deprioritizationReason))
+      return true
+    if (hasDelayReasonFilter && item.status === 'Done' && !!item.delayReason && filterDelayReasons.value.includes(item.delayReason))
       return true
     return false
   }
@@ -4693,6 +4730,8 @@ type PlanningInlineDraft = {
   replacementDemandId?: string
   spilloverReason?: string
   spilloverObservation?: string
+  delayReason?: SpilloverReason
+  delayObservation?: string
 }
 type PlanningEditableField = 'title' | 'status' | 'classification' | 'quarterType' | 'products' | 'hours' | 'customers' | 'dueDate'
 type PlanningActiveCell = {
@@ -4779,6 +4818,12 @@ const planningStatusModalDraft = computed(() =>
   planningStatusModalItem.value ? getPlanningInlineDraft(planningStatusModalItem.value) : null
 )
 const planningStatusModalRequiresDeliveryDate = computed(() => planningStatusModalDraft.value?.status === 'Done')
+const planningStatusModalRequiresDelay = computed(() => {
+  const draft = planningStatusModalDraft.value
+  const item = planningStatusModalItem.value
+  if (!draft || !item || draft.status !== 'Done') return false
+  return isDeliveryLate(draft.dueDate, item.promisedDate, item.quarterYear, item.quarterNumber)
+})
 const planningStatusModalRequiresBlockedReason = computed(() => planningStatusModalDraft.value?.status === 'Blocked')
 const planningStatusModalRequiresDeprioritization = computed(() => planningStatusModalDraft.value?.status === 'Deprioritized')
 const planningStatusReplacementDemandOptions = computed(() => {
@@ -5210,7 +5255,9 @@ function createPlanningInlineDraft(item: RoadmapDemand): PlanningInlineDraft {
     deprioritizationReason: item.deprioritizationReason ?? undefined,
     replacementDemandId: item.replacementDemandId ?? undefined,
     spilloverReason: item.spilloverReason ?? undefined,
-    spilloverObservation: item.spilloverObservation ?? ''
+    spilloverObservation: item.spilloverObservation ?? '',
+    delayReason: item.delayReason ?? undefined,
+    delayObservation: item.delayObservation ?? ''
   }
 }
 
@@ -5569,6 +5616,11 @@ function confirmPlanningStatusModal() {
     return
   }
 
+  if (planningStatusModalRequiresDelay.value && !draft.delayReason) {
+    toast.add({ title: 'Selecione o motivo do atraso', color: 'warning' })
+    return
+  }
+
   if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
     toast.add({ title: 'Informe o motivo do impedimento', color: 'warning' })
     return
@@ -5656,6 +5708,18 @@ async function savePlanningInline(
     return false
   }
 
+  if (draft.status === 'Done'
+    && isDeliveryLate(draft.dueDate, item.promisedDate, item.quarterYear, item.quarterNumber)
+    && !draft.delayReason) {
+    toast.add({
+      title: 'Informe o motivo do atraso',
+      description: 'A entrega passou do prazo. Abra o status para informar o motivo.',
+      color: 'warning'
+    })
+    openPlanningStatusModal(item, 'Done')
+    return false
+  }
+
   if (draft.status === 'Blocked' && !draft.blockedReason.trim()) {
     toast.add({ title: 'Informe o motivo do impedimento', color: 'warning' })
     return false
@@ -5693,7 +5757,9 @@ async function savePlanningInline(
       hours,
       hoursRed: draft.hoursRed,
       promisedDate: isDoneStatus ? (item.promisedDate ?? '') : draft.dueDate,
-      deliveryDate: isDoneStatus ? draft.dueDate : ''
+      deliveryDate: isDoneStatus ? draft.dueDate : '',
+      delayReason: isDoneStatus ? draft.delayReason : undefined,
+      delayObservation: isDoneStatus ? draft.delayObservation : ''
     }))
 
     clearPlanningInlineDraft(item.id)
@@ -5750,8 +5816,12 @@ function buildBulkEditOverrides(demand: RoadmapDemand, changes: BulkEditRoadmapI
   if (changes.status) {
     overrides.status = changes.status
 
-    if (changes.status === 'Done')
+    if (changes.status === 'Done') {
       overrides.deliveryDate = changes.deliveryDate ?? demand.deliveryDate ?? ''
+      // Motivo de atraso do lote: aplica a todos; o backend mantém só nos itens realmente atrasados.
+      overrides.delayReason = changes.delayReason ?? demand.delayReason ?? undefined
+      overrides.delayObservation = changes.delayObservation ?? demand.delayObservation ?? ''
+    }
 
     if (changes.status === 'Blocked')
       overrides.blockedReason = changes.blockedReason ?? demand.blockedReason ?? ''
@@ -5791,9 +5861,52 @@ function buildBulkEditOverrides(demand: RoadmapDemand, changes: BulkEditRoadmapI
   return overrides
 }
 
+// Transbordo em lote: cria uma cópia de transbordo de cada item elegível (épico simples ou
+// demanda, que ainda não seja transbordo) no quarter de destino. Ação exclusiva.
+async function handlePlanningBulkSpillover(changes: BulkEditRoadmapItemsData) {
+  const eligible = selectedPlanningItems.value.filter(i =>
+    (i.itemType === 'Demand' || (i.itemType === 'Epic' && i.isSimple)) && i.status !== 'Spillover' && !i.successorDemandId)
+  const skipped = selectedPlanningItems.value.length - eligible.length
+
+  if (!eligible.length) {
+    toast.add({ title: 'Nenhum item elegível para transbordo', color: 'warning' })
+    return
+  }
+  if (changes.spilloverTargetYear == null || changes.spilloverTargetNumber == null)
+    return
+
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  isBulkPlanning.value = true
+  try {
+    for (const item of eligible)
+      await roadmapStore.createSpillover(item.id, changes.spilloverTargetYear, changes.spilloverTargetNumber, changes.spilloverReason, changes.spilloverObservation)
+
+    planningBulkEditModalOpen.value = false
+    clearSelectedDemands()
+    await refreshListPresentation(listScrollTop, listScrollLeft)
+    toast.add({
+      title: 'Transbordo em lote concluído',
+      description: `${eligible.length} ${eligible.length === 1 ? 'item transbordado' : 'itens transbordados'}${skipped ? ` · ${skipped} ignorado(s)` : ''}.`,
+      color: 'success'
+    })
+  }
+  catch {
+    // error handled by useApi
+  }
+  finally {
+    isBulkPlanning.value = false
+  }
+}
+
 async function handlePlanningBulkEdit(changes: BulkEditRoadmapItemsData) {
   if (!selectedPlanningItems.value.length || isBulkPlanning.value)
     return
+
+  if (changes.status === 'Spillover') {
+    await handlePlanningBulkSpillover(changes)
+    return
+  }
 
   const updatedCount = selectedPlanningItems.value.length
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
@@ -7140,6 +7253,7 @@ function applyDashboardQueryFilter(kind: string | null, value: string | null) {
     case 'inconsistentDeps': toggleInconsistentDepsFilter(); break
     case 'spilloverReason': if (value) toggleSpilloverReasonFilter(value); break
     case 'deprioritizationReason': if (value) toggleDeprioritizationReasonFilter(value); break
+    case 'delayReason': if (value) toggleDelayReasonFilter(value); break
   }
 }
 
@@ -7966,7 +8080,8 @@ watch(activeDemandKpiId, async (value) => {
                     </button>
                   <div
                     v-if="showDemandDelayMarker(getPlanningDraftDisplayItem(row.original))"
-                    class="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400"
+                    class="flex w-fit cursor-help items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400"
+                    :title="planningDelayTooltip(row.original)"
                   >
                     <UIcon name="i-lucide-triangle-alert" class="h-3 w-3" />
                     <span>Atrasado</span>
@@ -8118,6 +8233,7 @@ watch(activeDemandKpiId, async (value) => {
           :active-filters="dashboardActiveFilters"
           only-counters
           @select="handleDashboardSelect"
+          @report="handleDashboardReport"
         />
       </section>
 
@@ -8371,6 +8487,32 @@ watch(activeDemandKpiId, async (value) => {
               @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { dueDate: String(value ?? '') })"
             />
           </UFormField>
+
+          <template v-if="planningStatusModalRequiresDelay">
+            <div class="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+              <UIcon name="i-lucide-triangle-alert" class="h-4 w-4 shrink-0" />
+              Entrega após o prazo — informe o motivo do atraso.
+            </div>
+            <UFormField label="Motivo do atraso" required>
+              <USelect
+                :model-value="planningStatusModalDraft.delayReason"
+                :items="delayReasonOptions"
+                placeholder="Selecione o motivo"
+                class="w-full"
+                :class="!planningStatusModalDraft.delayReason ? 'ring-2 ring-red-400' : ''"
+                @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { delayReason: value as SpilloverReason | undefined })"
+              />
+            </UFormField>
+            <UFormField label="Observação atraso">
+              <UTextarea
+                :model-value="planningStatusModalDraft.delayObservation"
+                :rows="2"
+                placeholder="Detalhe o atraso (opcional)"
+                class="w-full"
+                @update:model-value="(value) => planningStatusModalItem && updatePlanningInlineDraft(planningStatusModalItem, { delayObservation: String(value ?? '') })"
+              />
+            </UFormField>
+          </template>
 
           <UFormField v-if="planningStatusModalRequiresBlockedReason" label="Motivo do impedimento" required>
             <UTextarea

@@ -21,6 +21,35 @@ public sealed class CreateRoadmapDemandCommandValidator
             }
         }
 
+        // Mesma regra do domínio: Done e entregue após a data prometida — ou, sem data prometida,
+        // após o último dia do quarter.
+        static bool isDeliveredLate(CreateRoadmapDemandCommand command)
+        {
+            if (command.Status is not "Done" || !command.DeliveryDate.HasValue)
+                return false;
+
+            var effective = command.PromisedDate;
+            if (!effective.HasValue)
+            {
+                if (command.QuarterYear <= 0 || command.QuarterNumber <= 0)
+                    return false;
+
+                var month = command.QuarterNumber * 3;
+                var lastDay = DateTime.DaysInMonth(command.QuarterYear, month);
+                effective = new DateOnly(command.QuarterYear, month, lastDay);
+            }
+
+            return command.DeliveryDate.Value > effective.Value;
+        }
+
+        RuleFor(x => x.DelayReason)
+            .NotEmpty().WithMessage("Delay reason is required when the demand is delivered late.")
+            .When(isDeliveredLate);
+        RuleFor(x => x.DelayReason)
+            .Must(value => string.IsNullOrWhiteSpace(value) || Enum.TryParse<SpilloverReason>(value, true, out _))
+            .WithMessage("Invalid delay reason.");
+        RuleFor(x => x.DelayObservation).MaximumLength(2000);
+
         RuleFor(x => x.Title).NotEmpty().MaximumLength(200);
         RuleFor(x => x.Description).MaximumLength(2000);
         RuleFor(x => x.ItemType)

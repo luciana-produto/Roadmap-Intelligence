@@ -21,6 +21,27 @@ public sealed class UpdateRoadmapDemandCommandValidator
             }
         }
 
+        // Mesma regra do domínio/mapper: Done e entregue após a data prometida — ou, sem data
+        // prometida, após o último dia do quarter.
+        static bool isDeliveredLate(UpdateRoadmapDemandCommand command)
+        {
+            if (command.Status is not "Done" || !command.DeliveryDate.HasValue)
+                return false;
+
+            var effective = command.PromisedDate;
+            if (!effective.HasValue)
+            {
+                if (command.QuarterYear <= 0 || command.QuarterNumber <= 0)
+                    return false;
+
+                var month = command.QuarterNumber * 3;
+                var lastDay = DateTime.DaysInMonth(command.QuarterYear, month);
+                effective = new DateOnly(command.QuarterYear, month, lastDay);
+            }
+
+            return command.DeliveryDate.Value > effective.Value;
+        }
+
         RuleFor(x => x.Id).NotEmpty();
         RuleFor(x => x.ItemType)
             .NotEmpty()
@@ -70,6 +91,13 @@ public sealed class UpdateRoadmapDemandCommandValidator
         RuleFor(x => x.DeliveryDate)
             .NotNull().WithMessage("Delivery date is required when status is Done.")
             .When(x => x.Status is "Done");
+        RuleFor(x => x.DelayReason)
+            .NotEmpty().WithMessage("Delay reason is required when the demand is delivered late.")
+            .When(isDeliveredLate);
+        RuleFor(x => x.DelayReason)
+            .Must(value => string.IsNullOrWhiteSpace(value) || Enum.TryParse<SpilloverReason>(value, true, out _))
+            .WithMessage("Invalid delay reason.");
+        RuleFor(x => x.DelayObservation).MaximumLength(2000);
         RuleFor(x => x.PromisedDate)
             .Must((command, promisedDate) => !promisedDate.HasValue || command.ItemType != nameof(RoadmapItemType.Demand) || command.QuarterNumber > 0)
             .WithMessage("Promised date requires a prioritized quarter.");

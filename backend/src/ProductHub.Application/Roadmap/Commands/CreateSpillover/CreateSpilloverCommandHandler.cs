@@ -39,6 +39,16 @@ public sealed class CreateSpilloverCommandHandler(
 
         var originalStatus = original.Status;
 
+        // Data prometida da cópia: herda a do original; se vazia, carimba o último dia do quarter
+        // de ORIGEM (o prazo que foi furado) — permite medir os dias de atraso de itens transbordados.
+        DateOnly? spilloverPromisedDate = original.PromisedDate;
+        if (!spilloverPromisedDate.HasValue && original.QuarterYear > 0 && original.QuarterNumber > 0)
+        {
+            var originMonth = original.QuarterNumber * 3;
+            var originLastDay = DateTime.DaysInMonth(original.QuarterYear, originMonth);
+            spilloverPromisedDate = new DateOnly(original.QuarterYear, originMonth, originLastDay);
+        }
+
         var spillover = isSimpleEpicSpillover
             ? RoadmapDemand.Create(
                 RoadmapItemType.Epic,
@@ -57,6 +67,7 @@ public sealed class CreateSpilloverCommandHandler(
                 issueLinks: original.IssueLinks.Count > 0 ? original.IssueLinks : null,
                 hours: original.Hours,
                 customers: original.Customers,
+                promisedDate: spilloverPromisedDate,
                 hasNoKpi: original.HasNoKpi,
                 noKpiClassification: original.NoKpiClassification,
                 isSimple: true)
@@ -78,6 +89,7 @@ public sealed class CreateSpilloverCommandHandler(
                 original.IssueLinks.Count > 0 ? original.IssueLinks : null,
                 original.Hours,
                 original.Customers,
+                promisedDate: spilloverPromisedDate,
                 hasNoKpi: original.HasNoKpi,
                 noKpiClassification: original.NoKpiClassification);
 

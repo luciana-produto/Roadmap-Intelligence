@@ -14,7 +14,10 @@ const props = defineProps<{
   onlyCounters?: boolean
 }>()
 
-const emit = defineEmits<{ select: [selection: DashboardSelection] }>()
+const emit = defineEmits<{
+  select: [selection: DashboardSelection]
+  report: [tipo: 'atraso-transbordo' | 'deprioritization']
+}>()
 
 function emitSelect(selection: DashboardSelection) {
   emit('select', selection)
@@ -327,11 +330,17 @@ function buildReasonTotals(items: RoadmapDemand[], getReason: (item: RoadmapDema
   }
 }
 
-const spilloverReasonTotals = computed(() =>
-  buildReasonTotals(props.demands.filter(item => item.status === 'Spillover'), item => item.spilloverReason ?? undefined, getSpilloverReasonLabel)
-)
 const deprioritizationReasonTotals = computed(() =>
   buildReasonTotals(props.demands.filter(item => item.status === 'Deprioritized'), item => item.deprioritizationReason ?? undefined, getDeprioritizationReasonLabel)
+)
+// Atraso + Transbordo unificados (mesmo enum de motivo): transbordo = itens em Spillover;
+// atraso = concluídos entregues fora do prazo.
+const atrasoTransbordoTotals = computed(() =>
+  buildReasonTotals(
+    props.demands.filter(item => (item.status === 'Spillover' && item.spilloverReason) || (item.status === 'Done' && item.delayReason)),
+    item => item.status === 'Spillover' ? (item.spilloverReason ?? undefined) : (item.delayReason ?? undefined),
+    getSpilloverReasonLabel
+  )
 )
 
 // ─── Status: donut ───────────────────────────────────────────────────────────
@@ -557,8 +566,6 @@ function isClassificationActive(v: string) { return (af.value.classifications ??
 function isCustomerActive(v: string) { return (af.value.customers ?? []).includes(v) }
 function isTypeActive(v: string) { return (af.value.types ?? []).includes(v) }
 function isProblemActive(v: string) { return (af.value.problems ?? []).includes(v) }
-function isSpilloverReasonActive(v: string) { return (af.value.spilloverReasons ?? []).includes(v) }
-function isDeprioritizationReasonActive(v: string) { return (af.value.deprioritizationReasons ?? []).includes(v) }
 </script>
 
 <template>
@@ -868,40 +875,39 @@ function isDeprioritizationReasonActive(v: string) { return (af.value.deprioriti
         </div>
       </UCard>
 
-      <!-- Motivos de Transbordo -->
+      <!-- Motivos de Atraso e Transbordo (unificado) -->
       <UCard class="flex h-full flex-col ring-default xl:h-[24rem]" :ui="{ body: 'p-0 h-full flex flex-col min-h-0' }">
         <div class="-mt-1 flex items-center gap-2 border-b border-default px-2.5 py-1.5">
-          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-orange-50 text-orange-600 dark:bg-orange-900/20 dark:text-orange-300">
-            <UIcon name="i-lucide-waves" class="h-4.5 w-4.5" />
+          <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-300">
+            <UIcon name="i-lucide-clock" class="h-4.5 w-4.5" />
           </div>
-          <div>
-            <p class="text-sm font-semibold text-highlighted">Motivos de Transbordo</p>
-            <p class="text-[11px] text-muted">{{ spilloverReasonTotals.totalCount }} {{ spilloverReasonTotals.totalCount === 1 ? 'item em transbordo' : 'itens em transbordo' }}</p>
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-highlighted">Motivos de Atraso e Transbordo</p>
+            <p class="text-[11px] text-muted">{{ atrasoTransbordoTotals.totalCount }} {{ atrasoTransbordoTotals.totalCount === 1 ? 'item' : 'itens' }} <span class="text-muted/70">(atrasos + transbordos)</span></p>
           </div>
+          <button type="button" class="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-default px-2 py-1 text-[11px] font-medium text-muted transition-colors hover:border-primary/40 hover:text-primary" title="Abrir relatório detalhado" @click="emit('report', 'atraso-transbordo')">
+            <UIcon name="i-lucide-file-text" class="h-3.5 w-3.5" /> Relatório
+          </button>
         </div>
-        <div v-if="spilloverReasonTotals.items.length" class="min-h-0 flex-1 space-y-2 overflow-y-auto px-3.5 py-3.5">
-          <button
-            v-for="item in spilloverReasonTotals.items"
+        <div v-if="atrasoTransbordoTotals.items.length" class="min-h-0 flex-1 space-y-2 overflow-y-auto px-3.5 py-3.5">
+          <div
+            v-for="item in atrasoTransbordoTotals.items"
             :key="item.reason"
-            type="button"
-            class="block w-full space-y-1.5 rounded-md p-1.5 text-left transition-colors"
-            :class="isSpilloverReasonActive(item.reason) ? 'bg-primary/10 ring-1 ring-primary/40' : 'hover:bg-elevated'"
-            :title="`Filtrar por motivo de transbordo ${item.label}`"
-            @click="emitSelect({ kind: 'spilloverReason', value: item.reason })"
+            class="block w-full space-y-1.5 rounded-md p-1.5"
           >
             <div class="flex items-center gap-2">
-              <span class="h-2.5 w-2.5 rounded-full bg-orange-500 dark:bg-orange-400" />
+              <span class="h-2.5 w-2.5 rounded-full bg-amber-500 dark:bg-amber-400" />
               <span class="flex-1 truncate text-sm font-medium text-highlighted">{{ item.label }}</span>
               <span class="text-[11px] text-muted">{{ item.hours.toLocaleString('pt-BR') }}h</span>
               <span class="text-xs font-semibold text-highlighted">{{ item.percentage.toFixed(1) }}%</span>
               <span class="rounded-full bg-elevated px-2 py-0.5 text-[11px] text-muted">{{ item.count }} it.</span>
             </div>
             <div class="h-1.5 overflow-hidden rounded-full bg-elevated">
-              <div class="h-full rounded-full bg-orange-500 transition-all duration-300 dark:bg-orange-400" :style="{ width: `${Math.min(item.percentage, 100)}%` }" />
+              <div class="h-full rounded-full bg-amber-500 transition-all duration-300 dark:bg-amber-400" :style="{ width: `${Math.min(item.percentage, 100)}%` }" />
             </div>
-          </button>
+          </div>
         </div>
-        <div v-else class="px-3.5 py-5 text-sm text-muted">Nenhum item em transbordo com motivo no quarter selecionado.</div>
+        <div v-else class="px-3.5 py-5 text-sm text-muted">Nenhum atraso ou transbordo com motivo no quarter selecionado.</div>
       </UCard>
 
       <!-- Motivos da Despriorização -->
@@ -910,20 +916,19 @@ function isDeprioritizationReasonActive(v: string) { return (af.value.deprioriti
           <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-pink-50 text-pink-600 dark:bg-pink-900/20 dark:text-pink-300">
             <UIcon name="i-lucide-chevrons-down" class="h-4.5 w-4.5" />
           </div>
-          <div>
+          <div class="min-w-0">
             <p class="text-sm font-semibold text-highlighted">Motivos da Despriorização</p>
             <p class="text-[11px] text-muted">{{ deprioritizationReasonTotals.totalCount }} {{ deprioritizationReasonTotals.totalCount === 1 ? 'item despriorizado' : 'itens despriorizados' }}</p>
           </div>
+          <button type="button" class="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-default px-2 py-1 text-[11px] font-medium text-muted transition-colors hover:border-primary/40 hover:text-primary" title="Abrir relatório detalhado" @click="emit('report', 'deprioritization')">
+            <UIcon name="i-lucide-file-text" class="h-3.5 w-3.5" /> Relatório
+          </button>
         </div>
         <div v-if="deprioritizationReasonTotals.items.length" class="min-h-0 flex-1 space-y-2 overflow-y-auto px-3.5 py-3.5">
-          <button
+          <div
             v-for="item in deprioritizationReasonTotals.items"
             :key="item.reason"
-            type="button"
-            class="block w-full space-y-1.5 rounded-md p-1.5 text-left transition-colors"
-            :class="isDeprioritizationReasonActive(item.reason) ? 'bg-primary/10 ring-1 ring-primary/40' : 'hover:bg-elevated'"
-            :title="`Filtrar por motivo de despriorização ${item.label}`"
-            @click="emitSelect({ kind: 'deprioritizationReason', value: item.reason })"
+            class="block w-full space-y-1.5 rounded-md p-1.5"
           >
             <div class="flex items-center gap-2">
               <span class="h-2.5 w-2.5 rounded-full bg-pink-500 dark:bg-pink-400" />
@@ -935,7 +940,7 @@ function isDeprioritizationReasonActive(v: string) { return (af.value.deprioriti
             <div class="h-1.5 overflow-hidden rounded-full bg-elevated">
               <div class="h-full rounded-full bg-pink-500 transition-all duration-300 dark:bg-pink-400" :style="{ width: `${Math.min(item.percentage, 100)}%` }" />
             </div>
-          </button>
+          </div>
         </div>
         <div v-else class="px-3.5 py-5 text-sm text-muted">Nenhum item despriorizado com motivo no quarter selecionado.</div>
       </UCard>

@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import type { BulkEditRoadmapItemsData, DemandDependencyOption, DeprioritizationReason, DemandStatus, DemandType, RoadmapDemand } from '~/types/roadmap'
+import type { BulkEditRoadmapItemsData, DemandDependencyOption, DeprioritizationReason, DemandStatus, DemandType, RoadmapDemand, SpilloverReason } from '~/types/roadmap'
+import { SPILLOVER_REASON_OPTIONS, isDeliveryLate } from '~/utils/roadmapDelay'
+
+const delayReasonOptions = SPILLOVER_REASON_OPTIONS
 
 const LIST_ROW_COLORS = [
   { id: 'red',    label: 'Vermelho', hex: '#ef4444' },
@@ -36,9 +39,12 @@ const emit = defineEmits<{
 const statusOptions: Array<{ value: DemandStatus, label: string }> = [
   { value: 'Backlog', label: 'Backlog' },
   { value: 'InProgress', label: 'Doing' },
+  { value: 'Prioritized', label: 'Priorizado' },
+  { value: 'UX', label: 'UX' },
   { value: 'Done', label: 'Concluído' },
   { value: 'Deprioritized', label: 'Despriorizado' },
-  { value: 'Blocked', label: 'Impedido' }
+  { value: 'Blocked', label: 'Impedido' },
+  { value: 'Spillover', label: 'Transbordo' }
 ]
 
 const typeOptions: Array<{ value: DemandType, label: string }> = [
@@ -70,6 +76,16 @@ const quarterOptions = [
   )
 ]
 
+// Destino do transbordo: apenas quarters reais (backlog não é destino válido).
+const spilloverQuarterOptions = buildPreRegisteredQuarterYears(currentYear, PRE_REGISTERED_QUARTER_END_YEAR).flatMap(year =>
+  [1, 2, 3, 4].map(number => ({ value: buildQuarterValue(year, number), label: formatQuarterLabel(year, number) }))
+)
+// Próximo quarter a partir de hoje (default do destino do transbordo).
+const currentQuarterNumber = Math.floor(now.getMonth() / 3) + 1
+const defaultSpilloverTarget = currentQuarterNumber === 4
+  ? buildQuarterValue(currentYear + 1, 1)
+  : buildQuarterValue(currentYear, currentQuarterNumber + 1)
+
 const applyStatus = ref(false)
 const applyPromisedDate = ref(false)
 const applyType = ref(false)
@@ -79,12 +95,27 @@ const rowColor = ref<string | null>(null)
 const status = ref<DemandStatus | undefined>()
 const promisedDate = ref('')
 const deliveryDate = ref('')
+const delayReason = ref<SpilloverReason | undefined>()
+const delayObservation = ref('')
 const type = ref<DemandType | undefined>()
 const observation = ref('')
 const deprioritizationReason = ref<DeprioritizationReason | undefined>()
 const replacementDemandId = ref('')
 const blockedReason = ref('')
 const selectedQuarter = ref('')
+const spilloverReason = ref<SpilloverReason | undefined>()
+const spilloverObservation = ref('')
+const spilloverTarget = ref('')
+
+// Transbordo: só épicos simples e demandas, que ainda não sejam transbordo.
+const spilloverEligibleItems = computed(() =>
+  props.selectedItems.filter(item =>
+    (item.itemType === 'Demand' || (item.itemType === 'Epic' && item.isSimple))
+    && item.status !== 'Spillover'
+    && !item.successorDemandId)
+)
+const spilloverSkippedCount = computed(() => props.selectedItems.length - spilloverEligibleItems.value.length)
+const isSpilloverStatus = computed(() => applyStatus.value && status.value === 'Spillover')
 
 const selectedDemandCount = computed(() => props.selectedItems.filter(item => item.itemType === 'Demand').length)
 const selectedEpicCount = computed(() => props.selectedItems.filter(item => item.itemType === 'Epic').length)
@@ -114,6 +145,17 @@ const selectionSummary = computed(() => {
   return parts.join(' e ')
 })
 
+// Algum item selecionado ficaria atrasado com a data de entrega informada?
+// (usa a data prometida nova, se estiver sendo aplicada; senão a do próprio item)
+const bulkDeliveryLate = computed(() => {
+  if (!applyStatus.value || status.value !== 'Done' || !deliveryDate.value)
+    return false
+  return props.selectedItems.some((item) => {
+    const effectivePromised = applyPromisedDate.value ? promisedDate.value : (item.promisedDate ?? '')
+    return isDeliveryLate(deliveryDate.value, effectivePromised, item.quarterYear, item.quarterNumber)
+  })
+})
+
 const missingSubmitReason = computed(() => {
   if (!props.selectedItems.length)
     return 'Selecione ao menos um épico ou demanda'
@@ -128,6 +170,9 @@ const missingSubmitReason = computed(() => {
   if (applyStatus.value && status.value === 'Done' && !deliveryDate.value)
     return 'Informe a data de entrega para concluir os itens'
 
+  if (bulkDeliveryLate.value && !delayReason.value)
+    return 'Selecione o motivo do atraso'
+
   if (applyStatus.value && status.value === 'Blocked' && !blockedReason.value.trim())
     return 'Preencha o motivo do impedimento'
 
@@ -136,6 +181,13 @@ const missingSubmitReason = computed(() => {
 
   if (applyStatus.value && status.value === 'Deprioritized' && !observation.value.trim())
     return 'Preencha a observação da despriorização'
+
+  if (isSpilloverStatus.value && !spilloverEligibleItems.value.length)
+    return 'Nenhum épico simples ou demanda elegível para transbordo'
+  if (isSpilloverStatus.value && !spilloverReason.value)
+    return 'Selecione o motivo do transbordo'
+  if (isSpilloverStatus.value && !spilloverTarget.value)
+    return 'Selecione o quarter de destino do transbordo'
 
   if (applyType.value && !hasTypeQuarterEditable.value)
     return 'Não há demandas ou épicos simples selecionados para alterar o tipo'
@@ -162,12 +214,17 @@ function resetState() {
   status.value = undefined
   promisedDate.value = ''
   deliveryDate.value = ''
+  delayReason.value = undefined
+  delayObservation.value = ''
   type.value = undefined
   observation.value = ''
   deprioritizationReason.value = undefined
   replacementDemandId.value = ''
   blockedReason.value = ''
   selectedQuarter.value = ''
+  spilloverReason.value = undefined
+  spilloverObservation.value = ''
+  spilloverTarget.value = ''
 }
 
 watch(() => props.open, (open) => {
@@ -190,6 +247,33 @@ watch(hasTypeQuarterEditable, (hasEditable) => {
 })
 
 watch(status, (value) => {
+  if (value !== 'Done') {
+    delayReason.value = undefined
+    delayObservation.value = ''
+  }
+
+  if (value !== 'Spillover') {
+    spilloverReason.value = undefined
+    spilloverObservation.value = ''
+    spilloverTarget.value = ''
+  }
+
+  if (value === 'Spillover') {
+    // Transbordo é exclusivo: cria cópias, então desabilita as demais alterações do lote.
+    applyPromisedDate.value = false
+    applyType.value = false
+    applyQuarter.value = false
+    applyRowColor.value = false
+    deliveryDate.value = ''
+    blockedReason.value = ''
+    deprioritizationReason.value = undefined
+    replacementDemandId.value = ''
+    observation.value = ''
+    if (!spilloverTarget.value)
+      spilloverTarget.value = defaultSpilloverTarget
+    return
+  }
+
   if (value === 'Done') {
     blockedReason.value = ''
     deprioritizationReason.value = undefined
@@ -229,8 +313,13 @@ function handleSubmit() {
   if (applyStatus.value && status.value) {
     payload.status = status.value
 
-    if (status.value === 'Done')
+    if (status.value === 'Done') {
       payload.deliveryDate = deliveryDate.value
+      if (delayReason.value)
+        payload.delayReason = delayReason.value
+      if (delayObservation.value.trim())
+        payload.delayObservation = delayObservation.value.trim()
+    }
 
     if (status.value === 'Blocked')
       payload.blockedReason = blockedReason.value.trim()
@@ -241,6 +330,14 @@ function handleSubmit() {
 
       if (replacementDemandId.value)
         payload.replacementDemandId = replacementDemandId.value
+    }
+
+    if (status.value === 'Spillover') {
+      payload.spilloverReason = spilloverReason.value
+      payload.spilloverObservation = spilloverObservation.value.trim() || undefined
+      const { quarterYear, quarterNumber } = parseQuarterValue(spilloverTarget.value)
+      payload.spilloverTargetYear = quarterYear
+      payload.spilloverTargetNumber = quarterNumber
     }
   }
 
@@ -300,6 +397,19 @@ function handleSubmit() {
                 <UInput v-model="deliveryDate" type="date" class="w-full" />
               </UFormField>
 
+              <template v-if="bulkDeliveryLate">
+                <div class="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+                  <UIcon name="i-lucide-triangle-alert" class="h-4 w-4 shrink-0" />
+                  Há itens entregues após o prazo — informe o motivo do atraso.
+                </div>
+                <UFormField label="Motivo do atraso" required>
+                  <USelect v-model="delayReason" :items="delayReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+                <UFormField label="Observação atraso">
+                  <UTextarea v-model="delayObservation" :rows="2" placeholder="Detalhe o atraso (opcional)" class="w-full" />
+                </UFormField>
+              </template>
+
               <UFormField v-if="status === 'Blocked'" label="Motivo do impedimento" required>
                 <UInput v-model="blockedReason" placeholder="Descreva o motivo do impedimento" class="w-full" />
               </UFormField>
@@ -317,16 +427,33 @@ function handleSubmit() {
                   <UTextarea v-model="observation" :rows="4" class="w-full" />
                 </UFormField>
               </template>
+
+              <template v-if="status === 'Spillover'">
+                <div v-if="spilloverSkippedCount" class="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+                  <UIcon name="i-lucide-triangle-alert" class="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{{ spilloverSkippedCount }} {{ spilloverSkippedCount === 1 ? 'item não elegível será ignorado' : 'itens não elegíveis serão ignorados' }} (épicos compostos ou já em transbordo). O transbordo vale só para épicos simples e demandas.</span>
+                </div>
+                <UFormField label="Motivo do transbordo" required>
+                  <USelect v-model="spilloverReason" :items="delayReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+                <UFormField label="Observação do transbordo" hint="Opcional">
+                  <UTextarea v-model="spilloverObservation" :rows="2" placeholder="Detalhe o transbordo (opcional)" class="w-full" />
+                </UFormField>
+                <UFormField label="Quarter de destino" required>
+                  <USelect v-model="spilloverTarget" :items="spilloverQuarterOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+                <p class="text-[11px] text-muted">Cria uma cópia de transbordo de cada item elegível no quarter escolhido; os originais viram Transbordo.</p>
+              </template>
             </div>
           </div>
 
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3">
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="isSpilloverStatus ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Data prometida</p>
                 <p class="text-xs text-muted">Atualiza o mesmo prazo para todos os itens.</p>
               </div>
-              <USwitch v-model="applyPromisedDate" />
+              <USwitch v-model="applyPromisedDate" :disabled="isSpilloverStatus" />
             </div>
 
             <UFormField v-if="applyPromisedDate" label="Nova data prometida">
@@ -337,13 +464,13 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="!hasTypeQuarterEditable ? 'opacity-60' : ''">
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="(!hasTypeQuarterEditable || isSpilloverStatus) ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Tipo da demanda</p>
                 <p class="text-xs text-muted">Aplicado às demandas e épicos simples selecionados.</p>
               </div>
-              <USwitch v-model="applyType" :disabled="!hasTypeQuarterEditable" />
+              <USwitch v-model="applyType" :disabled="!hasTypeQuarterEditable || isSpilloverStatus" />
             </div>
 
             <UFormField v-if="applyType" label="Novo tipo" required>
@@ -351,13 +478,13 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="!hasTypeQuarterEditable ? 'opacity-60' : ''">
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3" :class="(!hasTypeQuarterEditable || isSpilloverStatus) ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Quarter da demanda</p>
                 <p class="text-xs text-muted">Aplicado às demandas e épicos simples selecionados.</p>
               </div>
-              <USwitch v-model="applyQuarter" :disabled="!hasTypeQuarterEditable" />
+              <USwitch v-model="applyQuarter" :disabled="!hasTypeQuarterEditable || isSpilloverStatus" />
             </div>
 
             <UFormField v-if="applyQuarter" label="Novo quarter" required>
@@ -365,13 +492,13 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div v-if="!hideRowColor" class="space-y-3 rounded-xl border border-default bg-default p-3">
+          <div v-if="!hideRowColor" class="space-y-3 rounded-xl border border-default bg-default p-3" :class="isSpilloverStatus ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
                 <p class="text-sm font-medium text-highlighted">Cor da linha</p>
                 <p class="text-xs text-muted">Destaque visual para épicos e demandas.</p>
               </div>
-              <USwitch v-model="applyRowColor" />
+              <USwitch v-model="applyRowColor" :disabled="isSpilloverStatus" />
             </div>
 
             <div v-if="applyRowColor" class="space-y-2">

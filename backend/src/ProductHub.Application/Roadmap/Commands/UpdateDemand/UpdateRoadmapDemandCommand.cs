@@ -38,4 +38,6 @@ public sealed record UpdateRoadmapDemandCommand(
     string? RowColor = null,
     bool IsSimple = false,
     string? SpilloverReason = null,
-    string? SpilloverObservation = null) : IRequest<RoadmapDemandDto>;
+    string? SpilloverObservation = null,
+    string? DelayReason = null,
+    string? DelayObservation = null) : IRequest<RoadmapDemandDto>;

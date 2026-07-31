@@ -338,6 +338,16 @@ BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD SpilloverObservation NVARCHAR(2000) NULL;
 END;
 
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'DelayReason') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD DelayReason NVARCHAR(50) NULL;
+END;
+
+IF COL_LENGTH(N'dbo.RoadmapDemands', N'DelayObservation') IS NULL
+BEGIN
+    ALTER TABLE dbo.RoadmapDemands ADD DelayObservation NVARCHAR(2000) NULL;
+END;
+
 IF COL_LENGTH(N'dbo.RoadmapDemands', N'IsDeleted') IS NULL
 BEGIN
     ALTER TABLE dbo.RoadmapDemands ADD IsDeleted BIT NOT NULL CONSTRAINT DF_RoadmapDemands_IsDeleted DEFAULT (0);

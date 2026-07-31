@@ -89,7 +89,9 @@ public sealed record RoadmapDemandDto(
     string? SpilloverReason = null,
     string? SpilloverObservation = null,
     string? CreatedByEmail = null,
-    string? UpdatedByEmail = null);
+    string? UpdatedByEmail = null,
+    string? DelayReason = null,
+    string? DelayObservation = null);
 
 public sealed record RoadmapCapacityDto(
     Guid? Id,

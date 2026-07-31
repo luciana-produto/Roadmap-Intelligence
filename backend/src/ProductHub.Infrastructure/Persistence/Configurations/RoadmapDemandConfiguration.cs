@@ -125,6 +125,12 @@ public sealed class RoadmapDemandConfiguration : IEntityTypeConfiguration<Roadma
             .IsRequired(false);
         builder.Property(x => x.SpilloverObservation).HasMaxLength(2000).IsRequired(false);
 
+        builder.Property(x => x.DelayReason)
+            .HasConversion<string>()
+            .HasMaxLength(50)
+            .IsRequired(false);
+        builder.Property(x => x.DelayObservation).HasMaxLength(2000).IsRequired(false);
+
         builder.Ignore(x => x.Quarter);
 
         builder.Navigation(x => x.Products)
