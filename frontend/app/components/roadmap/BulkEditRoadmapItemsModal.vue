@@ -55,12 +55,16 @@ const typeOptions: Array<{ value: DemandType, label: string }> = [
 ]
 
 const deprioritizationReasonOptions: Array<{ value: DeprioritizationReason, label: string }> = [
-  { value: 'Strategic', label: 'Estratégico' },
-  { value: 'MandatoryUrgent', label: 'Mandatório/Urgente' },
-  { value: 'LowImpact', label: 'Baixo impacto' },
-  { value: 'LackOfCapacity', label: 'Falta de capacidade' },
-  { value: 'ContextChange', label: 'Mudança de contexto' },
-  { value: 'Customizacao', label: 'Customização' }
+  { value: 'StrategyChange', label: 'Mudança de estratégia' },
+  { value: 'HigherValuePrioritization', label: 'Priorização de maior valor' },
+  { value: 'LowCustomerDemand', label: 'Baixa demanda de clientes' },
+  { value: 'LowExpectedReturn', label: 'Baixo retorno esperado' },
+  { value: 'BusinessDefinitionDependency', label: 'Dependência de definição de negócio' },
+  { value: 'AlternativeSolutionAvailable', label: 'Solução alternativa disponível' },
+  { value: 'RegulatoryRequirementChanged', label: 'Requisito regulatório alterado' },
+  { value: 'CustomerWithdrew', label: 'Cliente desistiu' },
+  { value: 'ReplacedByOtherInitiative', label: 'Substituída por outra iniciativa' },
+  { value: 'UndefinedScope', label: 'Escopo indefinido' }
 ]
 
 const now = new Date()
@@ -178,6 +182,9 @@ const missingSubmitReason = computed(() => {
 
   if (applyStatus.value && status.value === 'Deprioritized' && !deprioritizationReason.value)
     return 'Selecione o motivo da despriorização'
+
+  if (applyStatus.value && status.value === 'Deprioritized' && (deprioritizationReason.value === 'ReplacedByOtherInitiative' || deprioritizationReason.value === 'HigherValuePrioritization') && !replacementDemandId.value)
+    return 'Selecione a demanda priorizada no lugar'
 
   if (applyStatus.value && status.value === 'Deprioritized' && !observation.value.trim())
     return 'Preencha a observação da despriorização'
@@ -379,71 +386,38 @@ function handleSubmit() {
         </div>
 
         <div class="grid gap-4 md:grid-cols-2">
-          <div class="space-y-3 rounded-xl border border-default bg-default p-3">
+          <div v-if="!hideRowColor" class="space-y-3 rounded-xl border border-default bg-default p-3" :class="isSpilloverStatus ? 'opacity-60' : ''">
             <div class="flex items-center justify-between gap-3">
               <div>
-                <p class="text-sm font-medium text-highlighted">Status</p>
-                <p class="text-xs text-muted">Atualiza épicos e demandas.</p>
+                <p class="text-sm font-medium text-highlighted">Cor da linha</p>
+                <p class="text-xs text-muted">Destaque visual para épicos e demandas.</p>
               </div>
-              <USwitch v-model="applyStatus" />
+              <USwitch v-model="applyRowColor" :disabled="isSpilloverStatus" />
             </div>
 
-            <div v-if="applyStatus" class="space-y-3">
-              <UFormField label="Novo status" required>
-                <USelect v-model="status" :items="statusOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
-              </UFormField>
-
-              <UFormField v-if="status === 'Done'" label="Data de entrega" required>
-                <UInput v-model="deliveryDate" type="date" class="w-full" />
-              </UFormField>
-
-              <template v-if="bulkDeliveryLate">
-                <div class="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
-                  <UIcon name="i-lucide-triangle-alert" class="h-4 w-4 shrink-0" />
-                  Há itens entregues após o prazo — informe o motivo do atraso.
-                </div>
-                <UFormField label="Motivo do atraso" required>
-                  <USelect v-model="delayReason" :items="delayReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
-                </UFormField>
-                <UFormField label="Observação atraso">
-                  <UTextarea v-model="delayObservation" :rows="2" placeholder="Detalhe o atraso (opcional)" class="w-full" />
-                </UFormField>
-              </template>
-
-              <UFormField v-if="status === 'Blocked'" label="Motivo do impedimento" required>
-                <UInput v-model="blockedReason" placeholder="Descreva o motivo do impedimento" class="w-full" />
-              </UFormField>
-
-              <template v-if="status === 'Deprioritized'">
-                <UFormField label="Motivo da despriorização" required>
-                  <USelect v-model="deprioritizationReason" :items="deprioritizationReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
-                </UFormField>
-
-                <UFormField label="Demanda priorizada no lugar" hint="Opcional">
-                  <USelect v-model="replacementDemandId" :items="replacementDemandOptions" value-key="value" option-attribute="label" placeholder="Selecione uma demanda" class="w-full" />
-                </UFormField>
-
-                <UFormField label="Observação" required>
-                  <UTextarea v-model="observation" :rows="4" class="w-full" />
-                </UFormField>
-              </template>
-
-              <template v-if="status === 'Spillover'">
-                <div v-if="spilloverSkippedCount" class="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
-                  <UIcon name="i-lucide-triangle-alert" class="mt-0.5 h-4 w-4 shrink-0" />
-                  <span>{{ spilloverSkippedCount }} {{ spilloverSkippedCount === 1 ? 'item não elegível será ignorado' : 'itens não elegíveis serão ignorados' }} (épicos compostos ou já em transbordo). O transbordo vale só para épicos simples e demandas.</span>
-                </div>
-                <UFormField label="Motivo do transbordo" required>
-                  <USelect v-model="spilloverReason" :items="delayReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
-                </UFormField>
-                <UFormField label="Observação do transbordo" hint="Opcional">
-                  <UTextarea v-model="spilloverObservation" :rows="2" placeholder="Detalhe o transbordo (opcional)" class="w-full" />
-                </UFormField>
-                <UFormField label="Quarter de destino" required>
-                  <USelect v-model="spilloverTarget" :items="spilloverQuarterOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
-                </UFormField>
-                <p class="text-[11px] text-muted">Cria uma cópia de transbordo de cada item elegível no quarter escolhido; os originais viram Transbordo.</p>
-              </template>
+            <div v-if="applyRowColor" class="space-y-2">
+              <p class="text-xs text-muted">Selecione uma cor ou remova o destaque:</p>
+              <div class="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  class="flex h-6 w-6 items-center justify-center rounded border-2 transition-colors"
+                  :class="rowColor === null ? 'border-primary' : 'border-default hover:border-primary/40'"
+                  title="Sem cor"
+                  @click="rowColor = null"
+                >
+                  <UIcon name="i-lucide-x" class="h-3.5 w-3.5 text-muted" />
+                </button>
+                <button
+                  v-for="color in LIST_ROW_COLORS"
+                  :key="color.id"
+                  type="button"
+                  class="h-6 w-6 rounded-full transition-all hover:scale-110"
+                  :class="rowColor === color.id ? 'ring-2 ring-offset-1 ring-highlighted' : ''"
+                  :style="{ backgroundColor: color.hex }"
+                  :title="color.label"
+                  @click="rowColor = color.id"
+                />
+              </div>
             </div>
           </div>
 
@@ -492,38 +466,75 @@ function handleSubmit() {
             </UFormField>
           </div>
 
-          <div v-if="!hideRowColor" class="space-y-3 rounded-xl border border-default bg-default p-3" :class="isSpilloverStatus ? 'opacity-60' : ''">
+          <div class="space-y-3 rounded-xl border border-default bg-default p-3 md:col-span-2">
             <div class="flex items-center justify-between gap-3">
               <div>
-                <p class="text-sm font-medium text-highlighted">Cor da linha</p>
-                <p class="text-xs text-muted">Destaque visual para épicos e demandas.</p>
+                <p class="text-sm font-medium text-highlighted">Status</p>
+                <p class="text-xs text-muted">Atualiza épicos e demandas.</p>
               </div>
-              <USwitch v-model="applyRowColor" :disabled="isSpilloverStatus" />
+              <USwitch v-model="applyStatus" />
             </div>
 
-            <div v-if="applyRowColor" class="space-y-2">
-              <p class="text-xs text-muted">Selecione uma cor ou remova o destaque:</p>
-              <div class="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  class="flex h-6 w-6 items-center justify-center rounded border-2 transition-colors"
-                  :class="rowColor === null ? 'border-primary' : 'border-default hover:border-primary/40'"
-                  title="Sem cor"
-                  @click="rowColor = null"
+            <div v-if="applyStatus" class="space-y-3">
+              <UFormField label="Novo status" required>
+                <USelect v-model="status" :items="statusOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+              </UFormField>
+
+              <UFormField v-if="status === 'Done'" label="Data de entrega" required>
+                <UInput v-model="deliveryDate" type="date" class="w-full" />
+              </UFormField>
+
+              <template v-if="bulkDeliveryLate">
+                <div class="flex items-center gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+                  <UIcon name="i-lucide-triangle-alert" class="h-4 w-4 shrink-0" />
+                  Há itens entregues após o prazo — informe o motivo do atraso.
+                </div>
+                <UFormField label="Motivo do atraso" required>
+                  <USelect v-model="delayReason" :items="delayReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+                <UFormField label="Observação atraso">
+                  <UTextarea v-model="delayObservation" :rows="2" placeholder="Detalhe o atraso (opcional)" class="w-full" />
+                </UFormField>
+              </template>
+
+              <UFormField v-if="status === 'Blocked'" label="Motivo do impedimento" required>
+                <UInput v-model="blockedReason" placeholder="Descreva o motivo do impedimento" class="w-full" />
+              </UFormField>
+
+              <template v-if="status === 'Deprioritized'">
+                <UFormField label="Motivo da despriorização" required>
+                  <USelect v-model="deprioritizationReason" :items="deprioritizationReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+
+                <UFormField
+                  label="Demanda priorizada no lugar"
+                  :hint="(deprioritizationReason === 'ReplacedByOtherInitiative' || deprioritizationReason === 'HigherValuePrioritization') ? undefined : 'Opcional'"
+                  :required="deprioritizationReason === 'ReplacedByOtherInitiative' || deprioritizationReason === 'HigherValuePrioritization'"
                 >
-                  <UIcon name="i-lucide-x" class="h-3.5 w-3.5 text-muted" />
-                </button>
-                <button
-                  v-for="color in LIST_ROW_COLORS"
-                  :key="color.id"
-                  type="button"
-                  class="h-6 w-6 rounded-full transition-all hover:scale-110"
-                  :class="rowColor === color.id ? 'ring-2 ring-offset-1 ring-highlighted' : ''"
-                  :style="{ backgroundColor: color.hex }"
-                  :title="color.label"
-                  @click="rowColor = color.id"
-                />
-              </div>
+                  <USelect v-model="replacementDemandId" :items="replacementDemandOptions" value-key="value" option-attribute="label" placeholder="Selecione uma demanda" class="w-full" />
+                </UFormField>
+
+                <UFormField label="Observação" required>
+                  <UTextarea v-model="observation" :rows="3" class="w-full" />
+                </UFormField>
+              </template>
+
+              <template v-if="status === 'Spillover'">
+                <div v-if="spilloverSkippedCount" class="flex items-start gap-1.5 rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-700 dark:border-amber-800/60 dark:bg-amber-900/20 dark:text-amber-300">
+                  <UIcon name="i-lucide-triangle-alert" class="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{{ spilloverSkippedCount }} {{ spilloverSkippedCount === 1 ? 'item não elegível será ignorado' : 'itens não elegíveis serão ignorados' }} (épicos compostos ou já em transbordo). O transbordo vale só para épicos simples e demandas.</span>
+                </div>
+                <UFormField label="Motivo do transbordo" required>
+                  <USelect v-model="spilloverReason" :items="delayReasonOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+                <UFormField label="Observação do transbordo" hint="Opcional">
+                  <UTextarea v-model="spilloverObservation" :rows="2" placeholder="Detalhe o transbordo (opcional)" class="w-full" />
+                </UFormField>
+                <UFormField label="Quarter de destino" required>
+                  <USelect v-model="spilloverTarget" :items="spilloverQuarterOptions" value-key="value" option-attribute="label" placeholder="Selecione" class="w-full" />
+                </UFormField>
+                <p class="text-[11px] text-muted">Cria uma cópia de transbordo de cada item elegível no quarter escolhido; os originais viram Transbordo.</p>
+              </template>
             </div>
           </div>
         </div>

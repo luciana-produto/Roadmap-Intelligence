@@ -79,6 +79,7 @@ const collapsedRoadmapIds = ref<string[]>([])
 const collapsedEpicIds = ref<string[]>([])
 const isSavingDemand = ref(false)
 const isBulkEditing = ref(false)
+const depriGuard = useDeprioritizationGuard()
 const isHierarchyLoading = ref(false)
 const isSavingAllHierarchyEdits = ref(false)
 const hierarchyDemands = ref<RoadmapDemand[]>([])
@@ -1663,6 +1664,13 @@ function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStat
     return
   }
 
+  // Guard: warn when changing status away from Deprioritized (except backlog quarters)
+  if (needsDeprioritizationWarning(item) && nextStatus !== 'Deprioritized') {
+    deactivateHierarchyCell(item.id, 'status')
+    handleDepriGuardForHierarchyStatus(item, nextStatus)
+    return
+  }
+
   if (nextStatus === 'Spillover') {
     if (item.successorDemandId) {
       updateHierarchyInlineDraft(item, { status: nextStatus })
@@ -1689,6 +1697,40 @@ function handleHierarchyStatusChange(item: RoadmapDemand, nextStatus: DemandStat
     replacementDemandId: undefined
   })
   deactivateHierarchyCell(item.id, 'status')
+}
+
+async function handleDepriGuardForHierarchyStatus(item: RoadmapDemand, nextStatus: DemandStatus) {
+  const action = await depriGuard.prompt({
+    items: [item],
+    changeType: 'status',
+    targetStatus: nextStatus
+  })
+
+  if (action === 'confirm') {
+    if (nextStatus === 'Spillover') {
+      if (item.successorDemandId)
+        updateHierarchyInlineDraft(item, { status: nextStatus })
+      else
+        openHierarchySpilloverModal(item)
+    }
+    else if (requiresHierarchyStatusDetails(nextStatus)) {
+      openHierarchyStatusModal(item, nextStatus)
+    }
+    else {
+      const currentDraft = getHierarchyInlineDraft(item)
+      updateHierarchyInlineDraft(item, {
+        status: nextStatus,
+        dueDate: currentDraft.status === 'Done' ? (item.promisedDate ?? '') : currentDraft.dueDate,
+        deliveryDate: '',
+        blockedReason: '',
+        deprioritizationReason: undefined,
+        replacementDemandId: undefined
+      })
+    }
+  }
+  else if (action === 'copy') {
+    openCopyModal(item)
+  }
 }
 
 function openHierarchySpilloverModal(demand: RoadmapDemand) {
@@ -2423,11 +2465,47 @@ async function handleBulkEditSubmit(changes: BulkEditRoadmapItemsData) {
     return
   }
 
-  const updatedCount = selectedHierarchyItems.value.length
+  const isStatusChange = !!changes.status && changes.status !== 'Deprioritized'
+  const isQuarterChange = changes.quarterYear != null && changes.quarterNumber != null
+
+  if (isStatusChange || isQuarterChange) {
+    const depriItems = selectedHierarchyItems.value.filter(item => needsDeprioritizationWarning(item))
+
+    if (depriItems.length) {
+      const action = await depriGuard.prompt({
+        items: depriItems,
+        changeType: isStatusChange && isQuarterChange ? 'both' : isStatusChange ? 'status' : 'quarter',
+        targetStatus: changes.status,
+        targetQuarterYear: changes.quarterYear,
+        targetQuarterNumber: changes.quarterNumber
+      })
+
+      if (action === 'cancel') return
+
+      if (action === 'copy') {
+        await executeHierarchyBulkCopyDeprioritized(depriItems, changes)
+        const nonDepriItems = selectedHierarchyItems.value.filter(item => !needsDeprioritizationWarning(item))
+        if (!nonDepriItems.length) {
+          bulkEditModalOpen.value = false
+          clearHierarchySelection()
+          return
+        }
+        await executeHierarchyBulkEdit(nonDepriItems, changes)
+        return
+      }
+      // action === 'confirm' → proceed normally
+    }
+  }
+
+  await executeHierarchyBulkEdit(selectedHierarchyItems.value, changes)
+}
+
+async function executeHierarchyBulkEdit(items: RoadmapDemand[], changes: BulkEditRoadmapItemsData) {
+  const updatedCount = items.length
   isBulkEditing.value = true
 
   try {
-    for (const item of selectedHierarchyItems.value) {
+    for (const item of items) {
       await roadmapStore.updateDemand(item.id, buildDemandFormData(item, buildBulkEditOverrides(item, changes)))
     }
 
@@ -2437,6 +2515,40 @@ async function handleBulkEditSubmit(changes: BulkEditRoadmapItemsData) {
     toast.add({
       title: 'Itens atualizados em lote',
       description: `${updatedCount.toLocaleString('pt-BR')} itens atualizados com sucesso.`,
+      color: 'success'
+    })
+  }
+  catch {
+    // handled by useApi
+  }
+  finally {
+    isBulkEditing.value = false
+  }
+}
+
+async function executeHierarchyBulkCopyDeprioritized(items: RoadmapDemand[], changes: Partial<BulkEditRoadmapItemsData>) {
+  const targetQuarterYear = changes.quarterYear ?? items[0]?.quarterYear ?? 0
+  const targetQuarterNumber = changes.quarterNumber ?? items[0]?.quarterNumber ?? 0
+
+  isBulkEditing.value = true
+  try {
+    for (const item of items) {
+      const copyPayload = buildDemandFormData(item, {
+        title: item.title,
+        status: 'Backlog',
+        quarterYear: targetQuarterYear,
+        quarterNumber: targetQuarterNumber,
+        observation: '',
+        deprioritizationReason: undefined,
+        replacementDemandId: undefined
+      })
+      await roadmapStore.createDemand(copyPayload)
+    }
+
+    await loadPageData()
+    toast.add({
+      title: 'Cópia em lote concluída',
+      description: `${items.length} ${items.length === 1 ? 'item copiado' : 'itens copiados'}. Os originais foram mantidos.`,
       color: 'success'
     })
   }
@@ -2485,6 +2597,34 @@ function promptDelete(item: RoadmapDemand) {
 async function handleSubmit(data: DemandFormData) {
   if (isSavingDemand.value)
     return
+
+  // Guard: editing a deprioritized demand with status or quarter change
+  if (editingDemand.value && needsDeprioritizationWarning(editingDemand.value)) {
+    const statusChanged = data.status !== 'Deprioritized'
+    const quarterChanged = data.quarterYear !== editingDemand.value.quarterYear || data.quarterNumber !== editingDemand.value.quarterNumber
+
+    if (statusChanged || quarterChanged) {
+      const action = await depriGuard.prompt({
+        items: [editingDemand.value],
+        changeType: statusChanged && quarterChanged ? 'both' : statusChanged ? 'status' : 'quarter',
+        targetStatus: data.status,
+        targetQuarterYear: data.quarterYear,
+        targetQuarterNumber: data.quarterNumber
+      })
+
+      if (action === 'cancel') return
+      if (action === 'copy') {
+        const copyItem = editingDemand.value
+        modalOpen.value = false
+        defaultQuarterYear.value = data.quarterYear
+        defaultQuarterNumber.value = data.quarterNumber
+        await nextTick()
+        openCopyModal(copyItem)
+        return
+      }
+      // action === 'confirm' → proceed normally
+    }
+  }
 
   // If editing and status changed to Spillover, redirect to spillover modal
   if (editingDemand.value && data.status === 'Spillover' && editingDemand.value.status !== 'Spillover') {
@@ -4316,6 +4456,13 @@ onUnmounted(() => {
         </div>
       </template>
     </UModal>
+
+    <!-- Deprioritization warning modal -->
+    <RoadmapDeprioritizationWarningModal
+      :open="depriGuard.isOpen.value"
+      :context="depriGuard.context.value"
+      @action="depriGuard.respond"
+    />
 
     <UModal
       v-model:open="confirmDeleteOpen"

@@ -2598,8 +2598,15 @@ function syncListSectionDividers() {
               })
               quarterSelect.addEventListener('click', event => event.stopPropagation())
               quarterSelect.addEventListener('change', (event) => {
-                updatePlanningInlineDraft(epic, { quarterValue: (event.target as HTMLSelectElement).value })
-                schedulePlanningGroupedHeaderSync()
+                const nextQuarterValue = (event.target as HTMLSelectElement).value
+                if (needsDeprioritizationWarning(epic)) {
+                  ;(event.target as HTMLSelectElement).value = getPlanningInlineDraft(epic).quarterValue
+                  handleDepriGuardForPlanningQuarter(epic, nextQuarterValue)
+                }
+                else {
+                  updatePlanningInlineDraft(epic, { quarterValue: nextQuarterValue })
+                  schedulePlanningGroupedHeaderSync()
+                }
               })
 
               const typeSelect = document.createElement('select')
@@ -3740,6 +3747,10 @@ const convertSourceEpic = ref<RoadmapDemand | null>(null)
 const confirmConvertToCompositeOpen = ref(false)
 const deleteId = ref<string | null>(null)
 const confirmDeleteOpen = ref(false)
+
+// ─── Deprioritization guard ──────────────────────────────────────────────────
+const depriGuard = useDeprioritizationGuard()
+
 // Dependency links of the item being deleted (both directions) — shown in the confirm dialog so the
 // user knows these links will be removed before the item is deleted.
 const deleteDependencyLinks = computed(() => {
@@ -4283,6 +4294,34 @@ async function handleFormSpillover(demandId: string, targetYear: number, targetN
 async function handleSubmit(data: DemandFormData) {
   if (isSavingDemand.value)
     return
+
+  // Guard: editing a deprioritized demand with status or quarter change
+  if (editingDemand.value && needsDeprioritizationWarning(editingDemand.value)) {
+    const statusChanged = data.status !== 'Deprioritized'
+    const quarterChanged = data.quarterYear !== editingDemand.value.quarterYear || data.quarterNumber !== editingDemand.value.quarterNumber
+
+    if (statusChanged || quarterChanged) {
+      const action = await depriGuard.prompt({
+        items: [editingDemand.value],
+        changeType: statusChanged && quarterChanged ? 'both' : statusChanged ? 'status' : 'quarter',
+        targetStatus: data.status,
+        targetQuarterYear: data.quarterYear,
+        targetQuarterNumber: data.quarterNumber
+      })
+
+      if (action === 'cancel') return
+      if (action === 'copy') {
+        const copyItem = editingDemand.value
+        modalOpen.value = false
+        createDefaultQuarterYear.value = data.quarterYear
+        createDefaultQuarterNumber.value = data.quarterNumber
+        await nextTick()
+        openCopyModal(copyItem)
+        return
+      }
+      // action === 'confirm' → proceed normally
+    }
+  }
 
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
@@ -5608,6 +5647,13 @@ function handlePlanningStatusChange(item: RoadmapDemand, nextStatus: DemandStatu
     return
   }
 
+  // Guard: warn when changing status away from Deprioritized (except backlog quarters)
+  if (needsDeprioritizationWarning(item) && nextStatus !== 'Deprioritized') {
+    deactivatePlanningCell(item.id, 'status')
+    handleDepriGuardForPlanningStatus(item, nextStatus)
+    return
+  }
+
   if (nextStatus === 'Spillover') {
     if (item.successorDemandId) {
       // Already has a spillover copy — open planning status modal to collect new reason/observation
@@ -5635,6 +5681,58 @@ function handlePlanningStatusChange(item: RoadmapDemand, nextStatus: DemandStatu
     observation: ''
   })
   deactivatePlanningCell(item.id, 'status')
+}
+
+async function handleDepriGuardForPlanningStatus(item: RoadmapDemand, nextStatus: DemandStatus) {
+  const action = await depriGuard.prompt({
+    items: [item],
+    changeType: 'status',
+    targetStatus: nextStatus
+  })
+
+  if (action === 'confirm') {
+    if (nextStatus === 'Spillover') {
+      if (item.successorDemandId)
+        openPlanningSpilloverRestoreModal(item)
+      else
+        openSpilloverModal(item)
+    }
+    else if (requiresPlanningStatusDetails(nextStatus)) {
+      openPlanningStatusModal(item, nextStatus)
+    }
+    else {
+      updatePlanningInlineDraft(item, {
+        status: nextStatus,
+        deliveryDate: '',
+        blockedReason: '',
+        deprioritizationReason: undefined,
+        replacementDemandId: undefined,
+        observation: ''
+      })
+    }
+  }
+  else if (action === 'copy') {
+    openCopyModal(item)
+  }
+}
+
+async function handleDepriGuardForPlanningQuarter(item: RoadmapDemand, quarterValue: string) {
+  const action = await depriGuard.prompt({
+    items: [item],
+    changeType: 'quarter',
+    targetQuarterYear: parseQuarterValue(quarterValue).quarterYear,
+    targetQuarterNumber: parseQuarterValue(quarterValue).quarterNumber
+  })
+
+  if (action === 'confirm') {
+    updatePlanningInlineDraft(item, { quarterValue })
+  }
+  else if (action === 'copy') {
+    const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
+    createDefaultQuarterYear.value = quarterYear
+    createDefaultQuarterNumber.value = quarterNumber
+    openCopyModal(item)
+  }
 }
 
 function confirmPlanningStatusModal() {
@@ -5941,10 +6039,47 @@ async function handlePlanningBulkEdit(changes: BulkEditRoadmapItemsData) {
     return
   }
 
-  const updatedCount = selectedPlanningItems.value.length
+  const isStatusChange = !!changes.status && changes.status !== 'Deprioritized'
+  const isQuarterChange = changes.quarterYear != null && changes.quarterNumber != null
+
+  if (isStatusChange || isQuarterChange) {
+    const depriItems = selectedPlanningItems.value.filter(item => needsDeprioritizationWarning(item))
+
+    if (depriItems.length) {
+      const action = await depriGuard.prompt({
+        items: depriItems,
+        changeType: isStatusChange && isQuarterChange ? 'both' : isStatusChange ? 'status' : 'quarter',
+        targetStatus: changes.status,
+        targetQuarterYear: changes.quarterYear,
+        targetQuarterNumber: changes.quarterNumber
+      })
+
+      if (action === 'cancel') return
+
+      if (action === 'copy') {
+        await executeBulkCopyDeprioritized(depriItems, changes)
+        // Apply changes only to non-deprioritized items
+        const nonDepriItems = selectedPlanningItems.value.filter(item => !needsDeprioritizationWarning(item))
+        if (!nonDepriItems.length) {
+          planningBulkEditModalOpen.value = false
+          clearSelectedDemands()
+          return
+        }
+        await executePlanningBulkEdit(nonDepriItems, changes)
+        return
+      }
+      // action === 'confirm' → proceed normally
+    }
+  }
+
+  await executePlanningBulkEdit(selectedPlanningItems.value, changes)
+}
+
+async function executePlanningBulkEdit(items: RoadmapDemand[], changes: BulkEditRoadmapItemsData) {
+  const updatedCount = items.length
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
-  const updates = selectedPlanningItems.value.map(item => ({
+  const updates = items.map(item => ({
     id: item.id,
     data: buildDemandFormData(item, buildBulkEditOverrides(item, changes))
   }))
@@ -6071,15 +6206,46 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
     return
 
   const { quarterYear, quarterNumber } = parseQuarterValue(quarterValue)
+
+  // Guard: check for deprioritized items being moved
+  const depriItems = movablePlanningItems.value.filter(item => needsDeprioritizationWarning(item))
+  if (depriItems.length) {
+    const action = await depriGuard.prompt({
+      items: depriItems,
+      changeType: 'quarter',
+      targetQuarterYear: quarterYear,
+      targetQuarterNumber: quarterNumber
+    })
+
+    if (action === 'cancel') return
+
+    if (action === 'copy') {
+      await executeBulkCopyDeprioritized(depriItems, { quarterYear, quarterNumber })
+      // Move only non-deprioritized items
+      const nonDepriIds = movablePlanningItems.value
+        .filter(item => !needsDeprioritizationWarning(item))
+        .map(item => item.id)
+      if (!nonDepriIds.length) {
+        clearSelectedDemands()
+        return
+      }
+      await executeBulkMoveToQuarter(nonDepriIds, quarterYear, quarterNumber, quarterValue)
+      return
+    }
+    // action === 'confirm' → proceed normally
+  }
+
   const movedIds = movablePlanningItems.value.map(item => item.id)
+  await executeBulkMoveToQuarter(movedIds, quarterYear, quarterNumber, quarterValue)
+}
+
+async function executeBulkMoveToQuarter(movedIds: string[], quarterYear: number, quarterNumber: number, quarterValue?: string) {
   const movedCount = movedIds.length
   const movedSet = new Set(movedIds)
   const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
   const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  const qValue = quarterValue ?? buildQuarterValue(quarterYear, quarterNumber)
 
-  // Place the moved items at the END of the target quarter (existing items first, moved appended).
-  // The backend sets sortOrder per index; ordering only matters within each team scope, so a
-  // mixed-team list stays correct (existing < moved within every scope).
   const existingTargetIds = [...demandItems.value, ...epicItems.value.filter(epic => epic.isSimple)]
     .filter(item =>
       item.quarterYear === quarterYear
@@ -6092,11 +6258,8 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
   isBulkPlanning.value = true
 
   try {
-    // Single request + single local mutation — no per-item flicker/slowness.
     await roadmapStore.bulkMoveDemandsToQuarter(movedIds, quarterYear, quarterNumber, orderedDemandIds)
 
-    // Clear the selection BEFORE rebuilding the list, otherwise the (imperative) epic header
-    // checkboxes get rebuilt still marked and stay visually selected.
     selectedDemandIds.value = []
     selectedEpicIds.value = []
     selectedEpicQuarters.value = []
@@ -6105,7 +6268,7 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
 
     toast.add({
       title: 'Itens planejados no quarter',
-      description: `${movedCount.toLocaleString('pt-BR')} ${movedCount === 1 ? 'item movido' : 'itens movidos'} para ${quarterShortLabel(quarterValue)}`,
+      description: `${movedCount.toLocaleString('pt-BR')} ${movedCount === 1 ? 'item movido' : 'itens movidos'} para ${quarterShortLabel(qValue)}`,
       color: 'success'
     })
   }
@@ -6116,6 +6279,33 @@ async function planSelectedDemandsToQuarter(quarterValue: string) {
     isBulkPlanning.value = false
     sanitizeSelectedDemands()
   }
+}
+
+async function executeBulkCopyDeprioritized(items: RoadmapDemand[], changes: Partial<BulkEditRoadmapItemsData>) {
+  const targetQuarterYear = changes.quarterYear ?? items[0]?.quarterYear ?? 0
+  const targetQuarterNumber = changes.quarterNumber ?? items[0]?.quarterNumber ?? 0
+
+  for (const item of items) {
+    const copyPayload = buildDemandFormData(item, {
+      title: item.title,
+      status: 'Backlog',
+      quarterYear: targetQuarterYear,
+      quarterNumber: targetQuarterNumber,
+      observation: '',
+      deprioritizationReason: undefined,
+      replacementDemandId: undefined
+    })
+    await roadmapStore.createDemand(copyPayload)
+  }
+
+  const listScrollTop = listScrollContainerRef.value?.scrollTop ?? null
+  const listScrollLeft = listScrollContainerRef.value?.scrollLeft ?? null
+  await refreshListPresentation(listScrollTop, listScrollLeft)
+  toast.add({
+    title: 'Cópia em lote concluída',
+    description: `${items.length} ${items.length === 1 ? 'item copiado' : 'itens copiados'}. Os originais foram mantidos.`,
+    color: 'success'
+  })
 }
 
 watch(
@@ -6910,8 +7100,14 @@ const listTanstackColumns: TableColumn<RoadmapDemand>[] = [
             class: 'w-full',
             disabled: isPlanningInlineSaving(demand.id) || isSavingAllPlanningInlineEdits.value,
             'onUpdate:modelValue': (value?: string) => {
-              if (value)
-                updatePlanningInlineDraft(demand, { quarterValue: value })
+              if (value) {
+                if (needsDeprioritizationWarning(demand)) {
+                  handleDepriGuardForPlanningQuarter(demand, value)
+                }
+                else {
+                  updatePlanningInlineDraft(demand, { quarterValue: value })
+                }
+              }
             }
           }),
           h(USelectComp, {
@@ -8685,6 +8881,13 @@ watch(activeDemandKpiId, async (value) => {
         </div>
       </template>
     </UModal>
+
+    <!-- Deprioritization warning modal -->
+    <RoadmapDeprioritizationWarningModal
+      :open="depriGuard.isOpen.value"
+      :context="depriGuard.context.value"
+      @action="depriGuard.respond"
+    />
 
     <!-- Confirm delete modal -->
     <UModal

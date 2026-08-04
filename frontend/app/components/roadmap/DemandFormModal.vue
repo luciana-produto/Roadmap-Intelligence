@@ -824,8 +824,8 @@ function populateFormForCopy(source: RoadmapDemand) {
   form.description = source.description ?? ''
   form.projectId = source.projectId ?? ''
   form.projectIds = source.projectIds ?? (source.projectId ? [source.projectId] : [])
-  form.quarterYear = source.quarterYear
-  form.quarterNumber = source.quarterNumber
+  form.quarterYear = props.defaultQuarterYear ?? source.quarterYear
+  form.quarterNumber = props.defaultQuarterNumber ?? source.quarterNumber
   form.type = source.type
   form.classification = source.classification
   form.productIds = source.products.map(p => p.productId)
